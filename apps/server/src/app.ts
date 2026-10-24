@@ -30,6 +30,7 @@ import {
   acceptPreparedSendTask,
   clearOrphanedFlagsMarkers,
   createTaskExecution,
+  replayTaskSettlementObligations,
   sealMigratedTaskPayloads,
   type CommitTaskDeps,
   type MoveTaskDestination,
@@ -385,6 +386,20 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   const recoveredSubmissions = recoverInterruptedSubmissions(context.db, context.masterKey);
   if (recoveredSubmissions) {
     app.log.warn({ recoveredSubmissions }, "Marked interrupted SMTP submissions as unknown delivery");
+  }
+  // A task's terminal status is committed by `settleTask` and its settlement
+  // obligations run one statement later as a hook -- a process that died between
+  // the two (or a hook that threw, which the scheduler only warns about) left a
+  // settled row whose repairs never ran. Re-running them here is safe because
+  // every obligation is idempotent; see `replayTaskSettlementObligations`. This
+  // pass must run BEFORE `clearOrphanedFlagsMarkers` below: that sweep would
+  // remove the very markers the flags rollback restores through. Best effort by
+  // design -- a reconciliation problem must never stop the app from booting.
+  try {
+    const repaired = replayTaskSettlementObligations({ db: context.db, masterKey: context.masterKey });
+    if (repaired) app.log.warn({ repaired }, "Replayed settlement obligations a settled task was still owed");
+  } catch (replayError) {
+    app.log.warn({ error: replayError }, "Could not replay task settlement obligations");
   }
   // Repair `pending_flags_push` markers that no live push is behind, before the
   // resumed work starts: a marker only sync ever clears again is a message whose

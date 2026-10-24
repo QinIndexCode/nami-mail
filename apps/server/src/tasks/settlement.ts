@@ -79,26 +79,33 @@ export function flagsProtectedMessageIds(db: DatabaseHandle, settledTaskId?: str
  * the failure rollback reads (`revertRefusedFlagsTargets`), and a rollback and a
  * clear that disagreed about what "protected" means would leave a message whose
  * target was given back while its marker stayed, or the reverse.
+ *
+ * Returns how many markers were cleared, which is how the startup obligation
+ * replay knows a pass repaired something without logging the no-op ones.
  */
 export function clearConfirmedFlagsMarkers(
   db: DatabaseHandle,
   messageIds: readonly string[],
   settledTaskId?: string,
-): void {
-  if (!messageIds.length) return;
+): number {
+  if (!messageIds.length) return 0;
   const protectedIds = flagsProtectedMessageIds(db, settledTaskId);
   const clearable = [...new Set(messageIds)].filter((id) => !protectedIds.has(id));
   // Chunked so the statement stays well inside SQLite's host-parameter limit
   // regardless of how large the settled batch is -- the legacy limit, kept for
   // the same reason, and it is reachable: a 10k-message batch is one task.
   const chunkSize = 10_000;
+  let cleared = 0;
   for (let start = 0; start < clearable.length; start += chunkSize) {
     const chunk = clearable.slice(start, start + chunkSize);
-    db.prepare(`
-      UPDATE messages SET pending_flags_push = 0
-      WHERE pending_flags_push = 1 AND id IN (${chunk.map(() => "?").join(", ")})
-    `).run(...chunk);
+    cleared += db
+      .prepare(`
+        UPDATE messages SET pending_flags_push = 0
+        WHERE pending_flags_push = 1 AND id IN (${chunk.map(() => "?").join(", ")})
+      `)
+      .run(...chunk).changes;
   }
+  return cleared;
 }
 
 /**

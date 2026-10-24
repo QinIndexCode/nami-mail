@@ -220,6 +220,26 @@ export function taskRow(db: DatabaseHandle, taskId: string): TaskRow | undefined
   return raw ? mapTaskRow(raw) : undefined;
 }
 
+/**
+ * Every terminal row, oldest first.
+ *
+ * The startup obligation replay's input (`wiring.ts`): a row that settled in a
+ * previous process may have outlived the hook that owed it repairs, and the
+ * replay re-runs those repairs idempotently. Bounded by the terminal-row TTL
+ * (`pruneTerminalTasks`), so this is a small set even after a busy day.
+ */
+export function terminalTaskRows(db: DatabaseHandle): TaskRow[] {
+  return (
+    db
+      .prepare(`
+        SELECT * FROM tasks
+        WHERE status IN ('completed', 'failed', 'cancelled', 'unknown_delivery')
+        ORDER BY created_at, rowid
+      `)
+      .all() as Array<Record<string, unknown>>
+  ).map(mapTaskRow);
+}
+
 export function taskItems(db: DatabaseHandle, taskId: string): TaskItemRow[] {
   return db.prepare("SELECT * FROM task_items WHERE task_id = ? ORDER BY rowid").all(taskId) as TaskItemRow[];
 }

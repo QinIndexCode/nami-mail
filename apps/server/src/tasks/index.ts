@@ -204,13 +204,17 @@ export { createTaskRegistry } from "./registry.js";
 // that queue has since been deleted). The other two are exported because they
 // are the halves a test reaches for when it wants to see hook calls it cannot
 // observe through a database effect, and because `createTaskExecution` is
-// nothing but those two plus `startTaskScheduler`.
+// nothing but those two plus `startTaskScheduler`. The replay is the boot-time
+// fourth: `buildApp` runs it before the orphan-marker sweep, so a task whose
+// settlement obligations never ran get them re-run idempotently.
 export {
   createTaskExecution,
   createTaskHooks,
   registerTaskRunners,
+  replayTaskSettlementObligations,
   type TaskExecutionDeps,
   type TaskHookDeps,
+  type TaskObligationReplayDeps,
   type TaskRunnerDeps,
 } from "./wiring.js";
 export {

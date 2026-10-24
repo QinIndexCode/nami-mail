@@ -11,7 +11,7 @@ import { createUndoRunner, failPendingUndoItems } from "./kinds/undo.js";
 import { createTaskRegistry } from "./registry.js";
 import { startTaskScheduler } from "./scheduler.js";
 import { clearConfirmedFlagsMarkers, frozenFlagsMessageIds, revertRefusedFlagsTargets } from "./settlement.js";
-import { reportTaskProgress, taskRow } from "./store.js";
+import { openTaskPayload, reportTaskProgress, taskRow, terminalTaskRows } from "./store.js";
 import type { TaskHooks, TaskRegistry, TaskRow, TaskScheduler, TaskStarter } from "./types.js";
 
 /**
@@ -72,7 +72,9 @@ function unreportedUnits(task: { total: number; updated: number; failed: number 
 
 /**
  * Retires the optimistic Sent row of a send that never left, and closes its books
- * -- one call, one transaction.
+ * -- one call, one transaction. Returns how many repairs landed (the retraction
+ * plus the remainder report), which is how the replay distinguishes a pass that
+ * repaired something from a pass of no-ops.
  *
  * `failed` and `cancelled` both remove the row, and `completed` keeps it. That
  * split is not a preference: the row is a *claim* that the mail is in Sent because
@@ -94,16 +96,18 @@ function unreportedUnits(task: { total: number; updated: number; failed: number 
  * Both writes share a transaction because they are one fact: the row's lifetime is
  * the task's, so half a settlement would leave a Sent row whose task is gone.
  */
-function retirePendingSentRow(db: DatabaseHandle, task: TaskRow, at: number): void {
+function retirePendingSentRow(db: DatabaseHandle, task: TaskRow, at: number): number {
   const submissionId = task.submission_id;
   const owed = unreportedUnits(taskRow(db, task.id) ?? task);
+  let retracted = 0;
   db.transaction(() => {
     // Independently conditional, because they answer to different owners: the
     // retraction needs the ledger id (null only after the ledger row was deleted,
     // which the FK allows), the report needs nothing but the task.
-    if (submissionId) retractPendingSentRow(db, submissionId);
+    if (submissionId) retracted = retractPendingSentRow(db, submissionId);
     if (owed) reportTaskProgress(db, task.id, { failed: owed }, at);
   })();
+  return retracted + owed;
 }
 
 export type TaskHookDeps = {
@@ -173,38 +177,51 @@ export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
       }
     },
     onTaskPermanentFailure(task) {
-      if (task.kind === "move") {
-        const { latched } = revertMoveFailures(db, task, pendingMoveItemIds(db, task));
-        if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
-        return;
-      }
-      if (task.kind === "undo") {
-        // The undo's answer to `revertMoveFailures`: it has nothing to give back
-        // (a restore owns no move goal), only the arithmetic to close. The
-        // runner deliberately counts a retryable refusal as nothing, so a task
-        // the scheduler gives up on still owes `updated + failed < total`; this
-        // latches exactly those rows and reports the number it latched. The
-        // helper's predicate is the same one the runner reads, so a second call
-        // (the settlement hook may have run first) latches 0 and reports 0.
-        const latched = failPendingUndoItems(db, task);
-        if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
-        return;
-      }
-      if (task.kind === "flags") {
-        // Read, not taken from the row the hook was handed: that row is the
-        // *claim-time* snapshot plus a terminal status (`scheduler.ts:107-118`),
-        // and `reportTaskProgress` is an unclamped `failed = failed + ?`, so a
-        // stale `updated` would be written into the ledger for good. The
-        // difference is unreachable today -- the flags runner's one report is
-        // followed immediately by its return, so no path both reports and gives
-        // up -- and this read is a guardrail rather than a fix (contract §10.10
-        // ④). `?? task` because a row that vanished under the hook is not a
-        // reason to skip the arithmetic.
-        const owed = unreportedUnits(taskRow(db, task.id) ?? task);
-        if (owed) reportTaskProgress(db, task.id, { failed: owed }, now());
-      }
+      runPermanentFailureObligations(db, now, task);
     },
   };
+}
+
+/**
+ * What a give-up owes the task's own kind, as a callable rather than a hook body
+ * so the startup replay can reach the same arithmetic without a scheduler.
+ *
+ * Returns how many repairs landed, which is how the replay distinguishes a pass
+ * that repaired something from a pass of no-ops.
+ */
+function runPermanentFailureObligations(db: DatabaseHandle, now: () => number, task: TaskRow): number {
+  if (task.kind === "move") {
+    const { latched } = revertMoveFailures(db, task, pendingMoveItemIds(db, task));
+    if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
+    return latched;
+  }
+  if (task.kind === "undo") {
+    // The undo's answer to `revertMoveFailures`: it has nothing to give back
+    // (a restore owns no move goal), only the arithmetic to close. The
+    // runner deliberately counts a retryable refusal as nothing, so a task
+    // the scheduler gives up on still owes `updated + failed < total`; this
+    // latches exactly those rows and reports the number it latched. The
+    // helper's predicate is the same one the runner reads, so a second call
+    // (the settlement hook may have run first) latches 0 and reports 0.
+    const latched = failPendingUndoItems(db, task);
+    if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
+    return latched;
+  }
+  if (task.kind === "flags") {
+    // Read, not taken from the row the hook was handed: that row is the
+    // *claim-time* snapshot plus a terminal status (`scheduler.ts:107-118`),
+    // and `reportTaskProgress` is an unclamped `failed = failed + ?`, so a
+    // stale `updated` would be written into the ledger for good. The
+    // difference is unreachable today -- the flags runner's one report is
+    // followed immediately by its return, so no path both reports and gives
+    // up -- and this read is a guardrail rather than a fix (contract §10.10
+    // ④). `?? task` because a row that vanished under the hook is not a
+    // reason to skip the arithmetic.
+    const owed = unreportedUnits(taskRow(db, task.id) ?? task);
+    if (owed) reportTaskProgress(db, task.id, { failed: owed }, now());
+    return owed;
+  }
+  return 0;
 }
 
 /**
@@ -215,16 +232,20 @@ export function createTaskHooks(deps: TaskHookDeps): TaskHooks {
  * around it. Its early returns are per kind, so folding the emission into this
  * body would have made it conditional on the kind -- exactly the silent-drop
  * failure G12 exists to prevent.
+ *
+ * Returns how many repairs landed (retractions, rollbacks, markers cleared,
+ * remainders reported), which is what the startup replay counts; the hook itself
+ * ignores the number.
  */
 function settleTaskObligations(
   db: DatabaseHandle,
   now: () => number,
   task: TaskRow,
   payload: unknown,
-): void {
+): number {
   if (task.kind === "send") {
-    if (task.status !== "completed") retirePendingSentRow(db, task, now());
-    return;
+    if (task.status !== "completed") return retirePendingSentRow(db, task, now());
+    return 0;
   }
   if (task.kind === "undo") {
     // A `completed` undo has settled every row it owns (the runner settles
@@ -236,12 +257,68 @@ function settleTaskObligations(
     if (task.status !== "completed") {
       const latched = failPendingUndoItems(db, task);
       if (latched) reportTaskProgress(db, task.id, { failed: latched }, now());
+      return latched;
     }
-    return;
+    return 0;
   }
-  if (task.kind !== "flags") return;
-  if (task.status !== "completed") revertRefusedFlagsTargets(db, payload, task.id);
-  clearConfirmedFlagsMarkers(db, frozenFlagsMessageIds(payload), task.id);
+  if (task.kind !== "flags") return 0;
+  let repaired = 0;
+  if (task.status !== "completed") repaired += revertRefusedFlagsTargets(db, payload, task.id);
+  repaired += clearConfirmedFlagsMarkers(db, frozenFlagsMessageIds(payload), task.id);
+  return repaired;
+}
+
+export type TaskObligationReplayDeps = {
+  db: DatabaseHandle;
+  /** Opens each row's sealed payload; the flags rollback reads the payload's entries. */
+  masterKey: Buffer;
+  /** Injectable clock, for tests that pin timestamps. Defaults to `Date.now`. */
+  now?: () => number;
+};
+
+/**
+ * Re-runs the settlement obligations of every terminal task row, and returns how
+ * many repairs landed.
+ *
+ * This closes the window the settle sequence leaves open: `settleTask` commits the
+ * terminal status and `notifySettled` runs the repairs one statement later
+ * (`scheduler.ts`), so a process that dies between the two -- or a hook that
+ * throws, which the scheduler's catch only warns about -- used to leave the
+ * repairs owed forever: a refused flags target read as confirmed for good,
+ * a Sent placeholder no provider holds, an undo's rows never latched.
+ *
+ * Replaying is safe because every obligation is idempotent by construction: the
+ * rollbacks key on markers (`pending_flags_push`, `pending_send`) their first pass
+ * cleared, the latch predicates find nothing the second time, the remainder
+ * arithmetic recomputes to zero from the row's stored counters once the books are
+ * closed, and a live push protects its markers from another task's clear
+ * (`settlement.ts`). A row whose repairs already ran is therefore a row of
+ * no-ops, which is also why there is no "repaired" marker column to consult: the
+ * replay cannot tell the two apart and does not need to.
+ *
+ * The caller must run this BEFORE `clearOrphanedFlagsMarkers`: that sweep would
+ * remove the very markers the flags rollback restores through, turning a
+ * recoverable missed hook into a permanent optimistic target.
+ */
+export function replayTaskSettlementObligations(deps: TaskObligationReplayDeps): number {
+  const { db, masterKey } = deps;
+  const now = deps.now ?? (() => Date.now());
+  let repaired = 0;
+  for (const task of terminalTaskRows(db)) {
+    let payload: unknown;
+    try {
+      payload = openTaskPayload(masterKey, task);
+    } catch {
+      // An unopenable payload was already settled `failed` with the hooks
+      // receiving `undefined` (`scheduler.ts`), so replay answers the same:
+      // the flags halves name no messages, the send and undo halves need no
+      // payload.
+      payload = undefined;
+    }
+    repaired += settleTaskObligations(db, now, task, payload);
+    if (task.status === "failed") repaired += runPermanentFailureObligations(db, now, task);
+  }
+  return repaired;
 }
 
 export type TaskRunnerDeps = {
