@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Cable,
+  Check,
   CheckCircle2,
   ChevronDown,
   CircleHelp,
@@ -364,9 +365,10 @@ export default function SettingsConnectionsSection({
               <div className="connections-step-pill">
                 <span className="connections-step-num">1</span>
                 <span className="connections-step-text">
-                  <span>{t("settings.connections.mcp.step1Title")}</span>
+                  <span className="connections-step-title">{t("settings.connections.mcp.step1Title")}</span>
                   {activePairingsCount > 0 ? (
-                    <span className="external-pairing-status" aria-label={t("settings.connections.mcp.step1Done")}>
+                    <span className="connections-step-done">
+                      <Check size={10} aria-hidden="true" />
                       {t("settings.connections.mcp.step1Done")}
                     </span>
                   ) : null}
@@ -722,7 +724,7 @@ export default function SettingsConnectionsSection({
             <div className="connections-empty-card">
               <Shield size={28} style={{ color: "var(--text-faint)", marginBottom: 4 }} />
               <strong>{t("settings.connections.pairings.empty")}</strong>
-              <div className="connections-step-cmd" style={{ marginTop: 6 }}>
+              <div className="connections-step-cmd">
                 <code>namimail pair</code>
                 <CopyButton
                   className="secondary-button settings-copy-btn"
@@ -732,7 +734,6 @@ export default function SettingsConnectionsSection({
                   label={t("settings.connections.mcp.copyCommand")}
                   copiedLabel={t("settings.connections.mcp.copiedCommand")}
                   announcement={t("settings.connections.mcp.copiedCommand")}
-                  style={{ minHeight: 24, padding: "2px 8px", fontSize: 11 }}
                   size={11}
                 />
               </div>

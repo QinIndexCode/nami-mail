@@ -46,6 +46,10 @@ describe("styles.css size ratchet", () => {
   // （tokens/, base/, components/, overlays/, features/ 共 29 个模块）。
   // 根 styles.css 保持纯粹的导入索引（≤ 40 行）。
   // 聚合总样式继续保持严格的防膨胀棘轮限制（FROZEN_AGGREGATED_MAX_LINES）。
+  // 2026-10-24 有记录的一次上调（18_168 → 18_173）：外部连接三步引导的
+  // 「已完成」状态_chip——.connections-step-title（标题独占省略）与
+  // .connections-step-done（pill 语境紧凑完成态，配对列表的 status_chip
+  // 色彩挂在行选择器上、在此语境不生效），净 +4 行；下轮 CSS 瘦身时应优先收回。
   // 2026-10-05 有记录的一次上调（17_600 → 17_610）：账户连接状态进行时态——
   // 侧边栏账户行同步中状态点 .status-dot.syncing（脉冲动画 + reduced-motion
   // 降级，共 10 行）；下轮 CSS 瘦身时应优先收回。
@@ -154,7 +158,7 @@ describe("styles.css size ratchet", () => {
   // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
   // 「带边框的面板 + 列表行」外壳。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 18_168;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_173;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
