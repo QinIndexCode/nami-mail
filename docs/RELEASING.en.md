@@ -49,7 +49,16 @@ GitHub Actions provides `GITHUB_TOKEN` temporarily to the release job. Do not cr
 
 ## Local Preflight
 
-Update the [changelog](../CHANGELOG.zh-CN.md) first and verify that user-visible copy, licensing, and the version number are correct. Run checks relevant to the release, then the complete baseline:
+Update the [changelog](../CHANGELOG.zh-CN.md) first and verify that user-visible copy, licensing, and the version number are correct.
+
+`package.json` is the single source of truth for the version; every other copy is either derived from it or checked against it. Make those copies agree before running the checks below:
+
+- `npm.cmd run sync:version` rewrites the copies that carry no release-specific prose: the hero badge in `site/index.html`, and the sample `namimail version` and `meta.version` output in `docs/cli/examples.*.md` and `docs/cli/output-schema.*.md`.
+- The copies it deliberately does not rewrite are the sentences written per release. Each README pins its release section with `<!-- whats-new: v<version> -->` on the line above the heading and links `docs/releases/v<version>.<lang>.md`; `docs/releases/README.<lang>.md` lists the release, and this guide names the current release notes. A script cannot invent that prose without labelling one release with another's notes, so update all of them by hand in the same commit as the version bump.
+- `npm.cmd run sync:version:check` fails instead of writing and runs in both the pull-request and release workflows, so a landing page left on the previous release cannot merge or be tagged. Release notes for the version being tagged must exist in both languages for it to pass. The release workflow additionally runs `node scripts/verify-release-notes.mjs`, which requires the paired `docs/releases/v<version>.md` body used as the GitHub Release text.
+- `npm.cmd run docs:release-review` folds all of the above into one work list. Its **BLOCK** section names what this release is missing (the three release-note files, the `whats-new` marker in each README, the changelog's `[Unreleased]` section, the release index entry); its **EDIT** section lists every document whose `shipped-as` marker still names an older version — that list is exactly what the version cut has to rewrite, and running it again afterwards should leave it empty. `npm.cmd run docs:claims:check` covers the other half, keeping every version and tool count in the documents equal to its source. Both run in the pull-request gate.
+
+Run checks relevant to the release, then the complete baseline:
 
 ```powershell
 npm.cmd ci
@@ -111,7 +120,7 @@ Every stable Release should provide brief user-facing notes instead of copying b
 - Data compatibility, when users need to sign in or authorize again, and any irreversible migration.
 - That users should download only the Windows `.exe` installer listed on this Release page for manual installation. The versioned ZIP and JSON are internal automatic-update assets and must not be manually extracted or run.
 
-This repository keeps publicly reviewable release text in the [Release Notes directory](releases/README.en.md). Git source tags have advanced up through `v0.5.1` (including `v0.1.0`, `v0.1.2`, `v0.2.0`–`v0.2.3`, `v0.3.0`, `v0.4.0`, `v0.4.3`, `v0.5.0`, and `v0.5.1`; `v0.4.1` and `v0.4.2` have no standalone git tags), and the repository's current `package.json` version is `0.5.1`. `releases/v0.5.1.md` and the `[0.5.1]` entry at the top of the CHANGELOG represent the official release notes for this patch release (resolving Windows restart-and-update process exit and in-place upgrade issues). The retained [candidate template](releases/v0.1.1-candidate.en.md) is only a pre-release checklist. Any prepared notes for upcoming releases must deliberately retain safety wording that real online upgrade acceptance has not yet been completed until verified with retained evidence.
+This repository keeps publicly reviewable release text in the [Release Notes directory](releases/README.en.md). The source-tag history lives in `git tag`, and the current version is whatever `package.json` says (`v0.4.1` and `v0.4.2` have no standalone git tags). The official notes for the current version are `releases/v0.5.1.md` and the `[0.5.1]` entry at the top of the CHANGELOG; `sync:version:check` and the release workflow check that both name the version `package.json` carries. The retained [candidate template](releases/v0.1.1-candidate.en.md) is only a pre-release checklist. Any prepared notes for upcoming releases must deliberately retain safety wording that real online upgrade acceptance has not yet been completed until verified with retained evidence.
 
 Release notes must not contain `GH_TOKEN`, certificates, private keys, OAuth credentials, real mail, test-account data, or local absolute paths. If a released asset, signature, version, or update manifest is inconsistent, revoke or mark the Release first instead of silently replacing a file.
 

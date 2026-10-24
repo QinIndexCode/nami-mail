@@ -9,7 +9,7 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { updateMessageFlags, updateMessageFlagsBatch } from "../src/sync-flags.js";
+import { updateMessageFlags } from "../src/sync-flags.js";
 import { acquireAccountWriteSlots } from "../src/sync-locks.js";
 
 const masterKey = Buffer.alloc(32, 7);
@@ -70,8 +70,8 @@ describe("flag updates under the account write lock", () => {
         sent_at, snippet, text_body, html_body, flags_json, has_attachments, size, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("message-1", "account-1", "INBOX", 42, "Subject", "Demo", "demo@example.com", "[]", now, "", "", "", JSON.stringify([]), 0, 0, now);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 1, 1);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
   });
 
   afterEach(() => {
@@ -87,27 +87,14 @@ describe("flag updates under the account write lock", () => {
     await Promise.all([seen, flagged]);
 
     expect(flagsOf("message-1")).toEqual(["\\Flagged", "\\Seen"]);
-    // The unread badge follows the single \\Seen transition, not one per writer.
-    const folder = db.prepare("SELECT unseen FROM folders WHERE account_id = ? AND path = ?")
-      .get("account-1", "INBOX") as { unseen: number };
-    expect(folder.unseen).toBe(0);
-  });
-
-  it("keeps both batches' flags when two batch updates race on the same message", async () => {
-    const seen = updateMessageFlagsBatch(db, masterKey, ["message-1"], { seen: true });
-    const flagged = updateMessageFlagsBatch(db, masterKey, ["message-1"], { flagged: true });
-    await Promise.all([seen, flagged]);
-
-    expect(flagsOf("message-1")).toEqual(["\\Flagged", "\\Seen"]);
-  });
-
-  it("keeps a batch update and a single update racing on the same message", async () => {
-    const batch = updateMessageFlagsBatch(db, masterKey, ["message-1"], { seen: true });
-    const single = updateMessageFlags(db, masterKey, "message-1", { flagged: true });
-    const [result] = await Promise.all([batch, single]);
-
-    expect(result).toEqual({ updated: 1, failed: 0, changedIds: ["message-1"] });
-    expect(flagsOf("message-1")).toEqual(["\\Flagged", "\\Seen"]);
+    // The unread badge is the message's own flags read back (contract §3.6, I4),
+    // so a doubled writer has nothing to double: the observable is that the
+    // single \Seen transition is what the folder shows, and it is the row the
+    // assertion reads rather than a counter that outlived the write.
+    const unread = db.prepare(
+      "SELECT COUNT(*) AS unseen FROM messages WHERE account_id = ? AND effective_mailbox = ? AND flags_json NOT LIKE '%\\Seen%'",
+    ).get("account-1", "INBOX") as { unseen: number };
+    expect(unread.unseen).toBe(0);
   });
 
   it("reads the flags snapshot only after the account write slot is held", async () => {
@@ -130,24 +117,5 @@ describe("flag updates under the account write lock", () => {
     }
   });
 
-  it("reads the batch snapshot only after the account write slot is held", async () => {
-    const recorded = recordingDb(db);
-    const releases = await acquireAccountWriteSlots(["account-1"]);
-    try {
-      const batch = updateMessageFlagsBatch(recorded.db, masterKey, ["message-1"], { seen: true });
-      await Promise.resolve();
-      // Only the id -> account routing may be read out here; it names the lock.
-      expect(flagSnapshotReads(recorded.statements)).toEqual([]);
-
-      for (const release of [...releases].reverse()) release();
-      const result = await batch;
-
-      expect(result).toEqual({ updated: 1, failed: 0, changedIds: ["message-1"] });
-      expect(flagSnapshotReads(recorded.statements)).toHaveLength(1);
-      expect(flagsOf("message-1")).toEqual(["\\Seen"]);
-    } finally {
-      for (const release of [...releases].reverse()) release();
-    }
-  });
 });
 

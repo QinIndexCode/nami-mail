@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ToastKind } from "./mailUi";
 import type { Translate } from "./i18n";
+import { REALTIME_EVENT_NAMES, type RealtimeEventName } from "./realtimeEventNames";
+import { isTaskTerminalStatus, type TaskTerminalStatus } from "./taskStatuses";
 
 // The periodic poll is a fallback, not a co-driver: while the push stream is
 // healthy every inbound event already refreshes the mailbox, so a tick inside
@@ -17,6 +19,35 @@ export type SyncProgressPayload = {
   folder: string;
   processed: number;
   totalEstimate: number;
+};
+
+/**
+ * A durable task's own progress report. The cloud-sync panel patches the row it
+ * already holds with it, and treats one for a task it has never seen as a reason
+ * to re-read the list; receiving it also keeps the stream's stall detector fresh.
+ */
+export type TaskProgressPayload = {
+  accountId: string;
+  taskId: string;
+  total: number;
+  updated: number;
+  failed: number;
+};
+
+/** A task reached a terminal state; the shell reconciles on this frame. */
+export type TaskSettledPayload = {
+  accountId: string;
+  taskId: string;
+  status: TaskTerminalStatus;
+};
+
+/**
+ * A writer other than this renderer changed mail rows (today: an Agent write).
+ * `folders` may be empty when the writer could not name one.
+ */
+export type MailChangedPayload = {
+  accountId: string;
+  folders: string[];
 };
 
 export type RealtimeSyncOptions = {
@@ -36,6 +67,15 @@ export type RealtimeSyncOptions = {
   onSettingsChanged: () => void;
   /** Live initial/full sync progress, for a "syncing history" banner. */
   onSyncProgress: (progress: SyncProgressPayload) => void;
+  /** Optional: a task's progress report. */
+  onTaskProgress?: (progress: TaskProgressPayload) => void;
+  /**
+   * A task settled. The shell reconciles here instead of polling for it; the
+   * status is always terminal (`isTaskTerminalStatus` filtered the frame).
+   */
+  onTaskSettled?: (settled: TaskSettledPayload) => void;
+  /** Mail rows changed outside this renderer (an Agent write). */
+  onMailChanged?: (changed: MailChangedPayload) => void;
 };
 
 /**
@@ -75,17 +115,26 @@ export function useRealtimeSync({
   onRefresh,
   onSettingsChanged,
   onSyncProgress,
+  onTaskProgress,
+  onTaskSettled,
+  onMailChanged,
 }: RealtimeSyncOptions): RealtimeSyncHandle {
   const sseHandlersRef = useRef<{
     mailReceived: (event: MessageEvent<string>) => void;
     mailSynced: () => void;
     settingsChanged: () => void;
     syncProgress: (event: MessageEvent<string>) => void;
+    taskProgress: (event: MessageEvent<string>) => void;
+    taskSettled: (event: MessageEvent<string>) => void;
+    mailChanged: (event: MessageEvent<string>) => void;
   }>({
     mailReceived: () => undefined,
     mailSynced: () => undefined,
     settingsChanged: () => undefined,
     syncProgress: () => undefined,
+    taskProgress: () => undefined,
+    taskSettled: () => undefined,
+    mailChanged: () => undefined,
   });
   // Timestamp of the most recent inbound SSE event; the periodic poll skips
   // its tick while this stays fresh (see shouldPollTick) and resumes once a
@@ -127,13 +176,17 @@ export function useRealtimeSync({
     // banner) and intentionally does NOT trigger onRefresh — a background bulk
     // download would otherwise hammer the mailbox API once per batch. The
     // finished-pass mail.synced event is what reconciles the list at the end.
+    //
+    // Only a frame that parses and validates counts as stream liveness. The
+    // timestamp suppresses the fallback poll, so recording it before the checks
+    // would let a stream of malformed frames postpone recovery indefinitely.
     sseHandlersRef.current.syncProgress = (event: MessageEvent<string>) => {
-      lastSseEventAtRef.current = Date.now();
       try {
         const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; folder?: unknown; processed?: unknown; totalEstimate?: unknown } };
         const payload = parsed.payload;
         if (!payload || typeof payload.accountId !== "string" || typeof payload.folder !== "string"
           || typeof payload.processed !== "number" || typeof payload.totalEstimate !== "number") return;
+        lastSseEventAtRef.current = Date.now();
         onSyncProgress({
           accountId: payload.accountId,
           folder: payload.folder,
@@ -142,6 +195,62 @@ export function useRealtimeSync({
         });
       } catch {
         // Malformed frame — ignore, the next one carries the same state.
+      }
+    };
+    // A runner's own progress: the cloud-sync panel patches the row it already
+    // holds, and a frame for a task no read has returned yet is what makes it
+    // re-read the list. The frame also proves the stream is alive -- lastSseEventAt
+    // is what suppresses a redundant poll tick.
+    sseHandlersRef.current.taskProgress = (event: MessageEvent<string>) => {
+      try {
+        const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; taskId?: unknown; total?: unknown; updated?: unknown; failed?: unknown } };
+        const payload = parsed.payload;
+        if (!payload || typeof payload.accountId !== "string" || typeof payload.taskId !== "string"
+          || typeof payload.total !== "number" || typeof payload.updated !== "number" || typeof payload.failed !== "number") return;
+        lastSseEventAtRef.current = Date.now();
+        onTaskProgress?.({
+          accountId: payload.accountId,
+          taskId: payload.taskId,
+          total: payload.total,
+          updated: payload.updated,
+          failed: payload.failed,
+        });
+      } catch {
+        // Malformed frame — the eventual task-settled or the poll recovers.
+      }
+    };
+    // A terminal task. The status is filtered against the same vocabulary the
+    // server settles with; a frame outside it is a protocol mismatch, and
+    // reconciling on it would only hide the mismatch behind a refresh.
+    sseHandlersRef.current.taskSettled = (event: MessageEvent<string>) => {
+      try {
+        const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; taskId?: unknown; status?: unknown } };
+        const payload = parsed.payload;
+        if (!payload || typeof payload.accountId !== "string" || typeof payload.taskId !== "string"
+          || !isTaskTerminalStatus(payload.status)) return;
+        lastSseEventAtRef.current = Date.now();
+        onTaskSettled?.({ accountId: payload.accountId, taskId: payload.taskId, status: payload.status });
+      } catch {
+        // Malformed frame — ignored like the others; the poll stays the fallback.
+      }
+    };
+    // Mail rows changed where this renderer cannot see them: an Agent tool call
+    // or an Agent-triggered sync. Unlike sync.progress this DOES refresh, and
+    // unlike mail.synced it names the folders so a future view can narrow the
+    // read; today the shell's refresh is view-scoped, so all it needs is the
+    // signal.
+    sseHandlersRef.current.mailChanged = (event: MessageEvent<string>) => {
+      try {
+        const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; folders?: unknown } };
+        const payload = parsed.payload;
+        if (!payload || typeof payload.accountId !== "string") return;
+        const folders = Array.isArray(payload.folders)
+          ? payload.folders.filter((folder): folder is string => typeof folder === "string")
+          : [];
+        lastSseEventAtRef.current = Date.now();
+        onMailChanged?.({ accountId: payload.accountId, folders });
+      } catch {
+        // Malformed frame — ignored like the others; the poll stays the fallback.
       }
     };
   });
@@ -175,20 +284,26 @@ export function useRealtimeSync({
     // to the periodic poll instead of hammering a dead endpoint forever.
     const maxReconnectAttempts = 10;
 
-    const handleMailReceived = (event: MessageEvent<string>) => sseHandlersRef.current.mailReceived(event);
-    const handleMailSynced = () => sseHandlersRef.current.mailSynced();
-    const handleSettingsChanged = () => sseHandlersRef.current.settingsChanged();
-    const handleSyncProgress = (event: MessageEvent<string>) => sseHandlersRef.current.syncProgress(event);
+    // One listener per name in the wire manifest, looked up in this typed map.
+    // The map is what makes "a server event with no listener" impossible: a name
+    // added to `REALTIME_EVENT_NAMES` without a handler here fails to compile,
+    // and `sse-contract.test.ts` pins the manifest against the server's.
+    const handlers: Record<RealtimeEventName, (event: MessageEvent<string>) => void> = {
+      "mail.received": (event) => sseHandlersRef.current.mailReceived(event),
+      "mail.synced": () => sseHandlersRef.current.mailSynced(),
+      "settings.changed": () => sseHandlersRef.current.settingsChanged(),
+      "sync.progress": (event) => sseHandlersRef.current.syncProgress(event),
+      "task-progress": (event) => sseHandlersRef.current.taskProgress(event),
+      "task-settled": (event) => sseHandlersRef.current.taskSettled(event),
+      "mail-changed": (event) => sseHandlersRef.current.mailChanged(event),
+    };
 
     const connect = (isRetry: boolean) => {
       source?.close();
       if (!closed) setConnectionState(isRetry ? "reconnecting" : "connecting");
       const next = new EventSource("/api/events");
       source = next;
-      next.addEventListener("mail.received", handleMailReceived);
-      next.addEventListener("mail.synced", handleMailSynced);
-      next.addEventListener("settings.changed", handleSettingsChanged);
-      next.addEventListener("sync.progress", handleSyncProgress);
+      for (const name of REALTIME_EVENT_NAMES) next.addEventListener(name, handlers[name]);
       next.onopen = () => {
         if (closed || next !== source) return;
         attempt = 0;

@@ -38,6 +38,7 @@ vi.mock("../src/attachments.js", async (importOriginal) => {
 
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { waitForSendTask } from "./helpers/send-settlement.js";
 
 function insertAccount(db: DatabaseHandle): void {
   db.prepare(`
@@ -110,11 +111,11 @@ describe("outbound attachment API", () => {
     expect(unsafe.json()).toEqual({ ok: false, code: "invalid_argument", message: "不允许添加可执行或脚本文件。" });
   });
 
-  it("hands resolved content to SMTP, cleans a successful unsaved send, and rejects hidden BCC input", async () => {
+  it("hands resolved content to SMTP through the dispatch task, cleans a successful unsaved send, and rejects hidden BCC input", async () => {
     const attachment = await upload();
     sendMail.mockResolvedValue({ messageId: "<sent@nami.local>" });
 
-    const sent = await app.inject({
+    const accepted = await app.inject({
       method: "POST",
       url: "/api/messages/send",
       payload: {
@@ -126,7 +127,16 @@ describe("outbound attachment API", () => {
       },
     });
 
-    expect(sent.statusCode).toBe(200);
+    // The acceptance reads no attachment file at all -- measuring the set is all
+    // it does -- so it answers before anything has been resolved or transferred.
+    expect(accepted.statusCode).toBe(202);
+    const acceptedBody = accepted.json() as { deliveryStatus: string; taskId?: string };
+    expect(acceptedBody).toMatchObject({ deliveryStatus: "pending", status: "pending" });
+    expect(acceptedBody.taskId).toBeTruthy();
+
+    // The task is what resolves the upload into the mail: this call is the
+    // witness that the file's bytes reached SMTP rather than a path or a token.
+    await expect(waitForSendTask(db, acceptedBody.taskId!)).resolves.toEqual({ status: "completed", errorCode: null });
     expect(sendMail).toHaveBeenCalledWith(
       expect.objectContaining({ id: "account-1" }),
       expect.any(Buffer),
@@ -180,8 +190,8 @@ describe("outbound attachment API", () => {
     );
 
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Drafts", "Drafts", "\\Drafts", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,
@@ -210,8 +220,8 @@ describe("outbound attachment API", () => {
       related: false,
       disposition: "attachment",
     } as const;
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Drafts", "Drafts", "\\Drafts", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,

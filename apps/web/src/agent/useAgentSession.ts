@@ -43,13 +43,12 @@ import type {
 } from "../agentTypes";
 import type { Translate } from "../i18n";
 import {
-  applyRevokedMarks,
+  conversationView,
   currentTime,
   interruptAssistantMessage,
   lastMessageIsStreaming,
   lastMessageIsUnanswered,
   messageWithEvent,
-  purgeStaleErrors,
 } from "./agent-utils";
 
 /**
@@ -150,7 +149,7 @@ export type UseAgentSessionResult = {
   /** Detaches and returns a conversation's session buffer, aborting it. */
   terminateSession: (conversationId: string) => SessionStream | undefined;
   /** Replays a background session's buffered events when re-entering its conversation. */
-  replayBackgroundSession: (session: SessionStream, conversationView: AgentConversation) => void;
+  replayBackgroundSession: (session: SessionStream, view: AgentConversation) => void;
   /** Stops the on-screen conversation's live run. */
   stopStreaming: () => void;
   /** Stops a pickup run (no local controller) after the panel reopened. */
@@ -222,7 +221,6 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   // Run bookkeeping refs
   // ---------------------------------------------------------------------------
-  const abortRef = useRef<AbortController | null>(null);
   // Failures of background runs (the user left the conversation while it ran).
   // The server persists most failure turns itself, but requests rejected before
   // any record is written leave the conversation with neither a row nor an
@@ -565,7 +563,7 @@ export function useAgentSession({
         // completed, or the server ended it with a persisted error row (which
         // no longer has anything to wait for).
         if (freshLast && freshLast.role === "assistant" && (freshLast.state === "complete" || freshLast.state === "error")) {
-          const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          const next = conversationView(fresh);
           const pending = sessionStreamsRef.current.get(targetId);
           const live = Boolean(pending && !pending.done);
           setActive((current) => current && current.id === targetId
@@ -579,7 +577,7 @@ export function useAgentSession({
         if (freshLast && freshLast.role === "assistant" && freshLast.state === "streaming") {
           // The in-flight reply gained content since the last read; refresh the
           // live snapshot while continuing to poll for its completion.
-          const next = applyRevokedMarks(purgeStaleErrors(fresh));
+          const next = conversationView(fresh);
           const pending = sessionStreamsRef.current.get(targetId);
           const live = Boolean(pending && !pending.done);
           setActive((current) => current && current.id === targetId
@@ -623,9 +621,9 @@ export function useAgentSession({
   // ---------------------------------------------------------------------------
   // Replay a background session on re-entry
   // ---------------------------------------------------------------------------
-  const replayBackgroundSession = useCallback((session: SessionStream, conversationView: AgentConversation) => {
+  const replayBackgroundSession = useCallback((session: SessionStream, view: AgentConversation) => {
     if (session.done) return;
-    const messages = conversationView.messages;
+    const messages = view.messages;
     // Only a streaming assistant row *after the last user message* can belong to
     // the current run: an interrupted run's inFlight row sits before that user
     // message and must never be adopted, or the new deltas graft onto it.
@@ -678,7 +676,7 @@ export function useAgentSession({
           ? messages
           : [...messages, rebuilt];
     }
-    setActive({ ...conversationView, messages: next });
+    setActive({ ...view, messages: next });
     // Only a replay that ended up with an actual streaming target is a live
     // run; a sealed reply must not arm affordances readers can't act on (spinner,
     // stop, blocks), and its last status is stale by definition — memory
@@ -736,8 +734,8 @@ export function useAgentSession({
   }, [ghostConversationId, active?.id, pollLastMessageId]);
 
   // Interrupt-to-send: sending a new message folds a live reply to
-  // "interrupted" and cancels that run (via its own controller, not the shared
-  // abortRef) first. Only the on-screen conversation is affected.
+  // "interrupted" and cancels that run (via its own per-conversation
+  // controller) first. Only the on-screen conversation is affected.
   const prepareInterruptToSend = useCallback(() => {
     const activeSession = sessionStreamsRef.current.get(active?.id ?? "");
     if (activeSession && !activeSession.done) {
@@ -977,7 +975,6 @@ export function useAgentSession({
       // Only the latest run may clear shared run state, and a background-
       // completed run clears nothing: the flag belongs to whatever is on screen.
       if (isCurrentRun()) {
-        if (abortRef.current === controller) abortRef.current = null;
         if (activeIdRef.current === conversation.id) {
           setStreaming(false);
           setStreamStatus(null);

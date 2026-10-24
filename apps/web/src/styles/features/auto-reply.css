@@ -860,26 +860,15 @@ animation:.16s both backdrop-out
 pointer-events:none;
 animation:.17s cubic-bezier(.2,.8,.2,1) both modal-out
 }
-.attachment-preview-drawer.closing
-{
-pointer-events:none;
-animation:.26s cubic-bezier(.2,.8,.2,1) both drawer-squeeze-out
-}
 @media (width<=760px)
 {
-.attachment-preview-drawer
+.attachment-grid
 {
-border-left:none;
-position:fixed;
-inset:0;
-width:100%;
-flex:none;
-z-index:30;
-animation:.3s cubic-bezier(.2,.8,.2,1) both drawer-mobile-in
+grid-template-columns:1fr
 }
-.attachment-preview-drawer.closing
+.attachment-card
 {
-animation:.26s cubic-bezier(.2,.8,.2,1) both drawer-mobile-out
+width:auto
 }
 }
 .confirmation-backdrop.closing

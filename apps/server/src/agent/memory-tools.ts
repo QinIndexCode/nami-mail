@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { createAgentError } from "@nami/agent-contracts";
 import type { AgentTool } from "@nami/agent-core";
-import type { EncryptedAgentMemoryStore } from "./memory.js";
+import { autoReplyLedgerKinds, type EncryptedAgentMemoryStore } from "./memory.js";
 import { autoReplyDecisionReasons, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
+import { scopedAccountIds } from "./tool-scope.js";
 
 /**
  * Long-term memory tools exposed to the Agent conversation. Memory records are
@@ -84,7 +85,7 @@ export function createMemoryTools(store: EncryptedAgentMemoryStore): AgentTool[]
       descriptor: {
         name: "memory.list",
         title: "List long-term memory",
-        description: "Lists stored long-term memory notes about the user (preferences, facts, decisions). Input: { query?: string, limit?: number }. Use when the user references something from an earlier conversation or asks what you remember.",
+        description: "Lists stored long-term memory notes about the user (preferences, facts, decisions). Auto-reply bookkeeping is never included. Input: { query?: string, limit?: number }. Use when the user references something from an earlier conversation or asks what you remember.",
         category: "system",
         executionMode: "read",
         requiredScopes: ["manage:memory"],
@@ -99,6 +100,12 @@ export function createMemoryTools(store: EncryptedAgentMemoryStore): AgentTool[]
         if (context.signal?.aborted) return { ok: false, error: memoryFailure(undefined) };
         try {
           const records = store.list({
+            // The store also holds the auto-reply ledger, whose detail is the
+            // full reply text and sender/subject. Those rows are mail-derived
+            // content and must not reach a cloud provider through a tool call;
+            // the system prompt's memory context excludes them for the same
+            // reason.
+            excludeKinds: autoReplyLedgerKinds,
             ...(input.query ? { query: input.query } : {}),
             ...(input.limit !== undefined ? { limit: input.limit } : {}),
           });
@@ -252,7 +259,10 @@ export function createAutoReplyDecisionTools(store: EncryptedAutoReplyDecisionSt
         category: "system",
         executionMode: "read",
         requiredScopes: ["manage:memory"],
-        accountAccess: "none",
+        // Mail-derived: rows carry senders, subjects and reply text. "optional"
+        // makes the run engine hide the tool while cloud mail-content consent
+        // is absent, and scopes the store query to the conversation's accounts.
+        accountAccess: "optional",
         confirmationPolicy: "never",
         availableToExternal: false,
         timeoutMs: 10_000,
@@ -262,7 +272,9 @@ export function createAutoReplyDecisionTools(store: EncryptedAutoReplyDecisionSt
       execute: async (context, input: AutoReplyDeclinedSearchInput) => {
         if (context.signal?.aborted) return { ok: false, error: memoryFailure(undefined) };
         try {
+          const accountIds = scopedAccountIds(context);
           const records = store.list({
+            ...(accountIds.length ? { accountIds } : {}),
             ...(input.query ? { query: input.query } : {}),
             ...(input.reason ? { reason: input.reason } : {}),
             ...(input.fromAddress ? { fromAddress: input.fromAddress } : {}),

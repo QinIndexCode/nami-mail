@@ -1,12 +1,12 @@
 /**
  * Account sync/move concurrency state plus the per-account FIFO write lock.
  *
- * This module is a leaf: apart from two type-only imports it has no
- * dependencies, so every sync-family module (sync.ts, sync-moves.ts,
- * sync-flags.ts, sync-sent-verify.ts, flags-outbox.ts, operation-queue.ts)
- * can depend on it without any of them depending on each other. These
- * primitives used to live in sync.ts, which made sync.ts the parent of its own
- * children and produced an import cycle.
+ * This module is a leaf: its only import is `node:async_hooks`, so the sync
+ * family (sync.ts, sync-moves.ts, sync-flags.ts), the account routes and
+ * `tasks/scheduler.ts` (which holds an account's write slot for the whole of a
+ * task runner) can all depend on it without any of them depending on each
+ * other. These primitives used to live in sync.ts, which made sync.ts the
+ * parent of its own children and produced an import cycle.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -58,17 +58,17 @@ export function unmarkAccountSyncing(accountId: string): void {
 const accountWriteChains = new Map<string, Promise<void>>();
 
 // Tracks which accounts the current async execution context already holds a
-// write slot for. Nested acquisitions — the operation queue takes the slot
-// before invoking an executor that also takes it, and batch moves fall back to
-// single-message moves that take it again — must be no-ops instead of waiting
-// on their own gate forever (a self-deadlock).
+// write slot for. Nested acquisitions — a task drain takes the slot before
+// invoking a runner that also takes it (`tasks/scheduler.ts`), and batch moves
+// fall back to single-message moves that take it again — must be no-ops instead
+// of waiting on their own gate forever (a self-deadlock).
 const heldWriteSlots = new AsyncLocalStorage<Set<string>>();
 
 /** Longest an operation may wait for the account write slot it is queued
- * behind. A predecessor whose provider command hangs (and whose executor is
- * later abandoned) must not block this operation forever; on timeout the
- * operation fails and its place in the chain is released so operations behind
- * it still proceed.
+ * behind. A predecessor whose provider command hangs (and whose run is later
+ * abandoned at `TASK_RUN_TIMEOUT_MS`) must not block this operation forever; on
+ * timeout the operation fails and its place in the chain is released so
+ * operations behind it still proceed.
  *
  * Tiered *below* the renderer's 30s request budget (`REQUEST_TIMEOUT_MS` in
  * apps/web/src/api.ts) on purpose. The wait is only the first leg of a request:
@@ -78,8 +78,9 @@ const heldWriteSlots = new AsyncLocalStorage<Set<string>>();
  * slot") never reached the UI — every user saw a bare network failure. At 12s
  * the server abandons the wait with ~18s of budget left to get the real error
  * home, and a write that has not been served by then is not going to be served
- * before the client hangs up anyway. Still far shorter than the queue's
- * executor run timeout, and well above the seconds a normal operation needs. */
+ * before the client hangs up anyway. Still far shorter than the task run
+ * timeout (`TASK_RUN_TIMEOUT_MS`), and well above the seconds a normal
+ * operation needs. */
 export const ACCOUNT_WRITE_SLOT_TIMEOUT_MS = 12_000;
 
 /** Slack, as a fraction of {@link ACCOUNT_WRITE_SLOT_TIMEOUT_MS}, spread over
@@ -116,7 +117,7 @@ function slotWaitTimeoutMs(): number {
 }
 
 /** Stable marker so a write-slot timeout stays recognizable after it has
- * crossed a module boundary (the operation queue decides on it). */
+ * crossed a module boundary (the task drain decides on it, `tasks/scheduler.ts`). */
 export const ACCOUNT_WRITE_SLOT_TIMEOUT_CODE = "account_write_slot_timeout";
 
 /**
@@ -256,10 +257,10 @@ export async function withAccountWriteLocks<T>(accountIds: readonly string[], fn
 
 /**
  * Runs `fn` in a context that considers every named account's write slot as
- * already held, so the executor's own nested `withAccountWriteLocks` calls are
- * reentrant no-ops. Used by the operation queue, which acquires the slot
- * itself (to release it on timeout) before invoking an executor that would
- * otherwise acquire it again and deadlock.
+ * already held, so the runner's own nested `withAccountWriteLocks` calls are
+ * reentrant no-ops. Used by the task drain (`tasks/scheduler.ts`), which
+ * acquires the slot itself (to release it on timeout) before invoking a runner
+ * that would otherwise acquire it again and deadlock.
  */
 export function withHeldWriteSlots<T>(accountIds: readonly string[], fn: () => Promise<T>): Promise<T> {
   const parent = heldWriteSlots.getStore();

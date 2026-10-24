@@ -24,7 +24,8 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 });
 
 import { backupEntryName, BACKUP_PAGE_SIZE, backupPageSql, collectMailBackup } from "../src/backup.js";
-import { SORT_KEY_SQL, openDatabase, type DatabaseHandle } from "../src/db.js";
+import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { SORT_KEY_SQL } from "../src/db-schema.js";
 import { friendlyMailError, mailErrorCode } from "../src/mail.js";
 import { moveActionBlockedError, type MessageStorageRow } from "../src/message-storage.js";
 import type { AccountRecord } from "../src/types.js";

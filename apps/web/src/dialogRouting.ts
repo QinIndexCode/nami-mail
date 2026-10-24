@@ -178,10 +178,10 @@ export function dialogKeydownDecision(event: KeyboardEvent, snapshot: DialogKeyd
     // article), so it closes BEFORE close_reader: one Escape peels one layer,
     // preview first, reader second. Everything above (settings…sidebar) keeps
     // its earlier branch because those are full-screen overlays stacked over
-    // the preview. In practice AttachmentPreviewModal's own capture listener
+    // the preview. In practice AttachmentPreviewDrawer's own capture listener
     // consumes this Escape first (capture beats App's window-bubble listener);
-    // this branch is the shell-level fallback (e.g. while the lazy modal is
-    // still mounting) and keeps the chain exhaustive over MODAL_KEYS (WEB-1).
+    // this branch is the shell-level fallback (e.g. while the lazy drawer chunk
+    // is still loading) and keeps the chain exhaustive over MODAL_KEYS (WEB-1).
     if (snapshot.attachmentPreviewOpen) return { action: { kind: "close_attachment_preview" }, preventDefault: false };
     // batchDeleteOpen and agentOpen have no branch here on purpose: both
     // install their own capture-phase Escape listener (App's alertdialog and

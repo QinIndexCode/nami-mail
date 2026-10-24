@@ -23,6 +23,7 @@ import {
   updateAccountDisplayName,
   updateAccountSignature,
 } from "../account-store.js";
+import { folderCounts } from "../folder-counts.js";
 import { isAccountSyncing } from "../sync-locks.js";
 import {
   accountDiscoverySchema,
@@ -244,23 +245,30 @@ export function registerAccountRoutes(
   app.get("/api/accounts", async () => {
     const rows = listAccountRows(context.db);
     const folderRows = listFolderRows(context.db);
-    return rows.map((row) => ({
-      ...publicAccount(row, isAccountSyncing(row.id)),
-      folders: folderRows
-        .filter((folder) => folder.account_id === row.id)
-        .sort(
-          (a, b) =>
-            folderRank(a) - folderRank(b) ||
-            String(a.name).localeCompare(String(b.name)),
-        )
-        .map((folder) => ({
-          path: folder.path,
-          name: folder.name,
-          specialUse: folder.special_use,
-          total: folder.total,
-          unseen: folder.unseen,
-        })),
-    }));
+    return rows.map((row) => {
+      // Metadata and ordering still come from `folders`; only the two numbers
+      // come from `messages`, derived per account (contract §4.5, I4). Every
+      // folder the sidebar lists is in `folderCounts` -- it is keyed on that same
+      // table -- so the zero fallback below is defensive, not a real case.
+      const counts = new Map(folderCounts(context.db, row.id).map((count) => [count.path, count]));
+      return {
+        ...publicAccount(row, isAccountSyncing(row.id)),
+        folders: folderRows
+          .filter((folder) => folder.account_id === row.id)
+          .sort(
+            (a, b) =>
+              folderRank(a) - folderRank(b) ||
+              String(a.name).localeCompare(String(b.name)),
+          )
+          .map((folder) => ({
+            path: folder.path,
+            name: folder.name,
+            specialUse: folder.special_use,
+            total: counts.get(folder.path)?.total ?? 0,
+            unseen: counts.get(folder.path)?.unseen ?? 0,
+          })),
+      };
+    });
   });
 
   app.post("/api/accounts", async (request, reply) => {

@@ -1,4 +1,5 @@
 # Architecture and Trust Boundaries
+<!-- shipped-as: v0.5.1 -->
 
 [简体中文](ARCHITECTURE.zh-CN.md) | [English](ARCHITECTURE.en.md)
 
@@ -33,19 +34,30 @@ The desktop window enables `contextIsolation`, disables `nodeIntegration`, and u
 | Location | Responsibility |
 | --- | --- |
 | `apps/web` | React UI, themes, mail reading/composition, account guidance, and local API client. |
+| `apps/web/src/app/mailStore.ts` † | The single client-side store for the mail list's state: row-level state (read/flagged/moved/removed/restored) is owned here; the total is a server snapshot baseline plus small local adjustments (`nextMessageTotalForSnapshot`), and sidebar badges read the `stats` returned by `/api/stats`. Writers only say what changed about a mail instead of maintaining row state. |
 | `apps/server` | Fastify routes, IMAP/SMTP, OAuth, provider discovery, sync, drafts/send queue, SQLite, and application-layer encryption; Agent service, tool execution, and permissions. |
+| `apps/server/src/tasks/` † | The durable task layer: one `tasks` table, a per-account serial scheduler, and per-kind runners (`move`, `flags`, `undo`, `send`, `snooze`) that converge the locally committed target state to IMAP/SMTP, replacing the deleted `operation_queue`/`batch_jobs`; read-only progress is exposed as `/api/tasks` (`routes/tasks.ts`) and the `/api/batch-jobs` compatibility alias. |
+| `apps/server/src/provider/` † | The only seam for IMAP/SMTP transport construction: every ImapFlow and Nodemailer instance is created through one factory, so tests and the desktop host can replace the network implementation without touching call sites. |
+| `apps/server/src/folder-counts.ts` † | The single source of sidebar counts: per-folder and unified-inbox numbers derive from the current `messages` rows, replacing the deleted `folders.total`/`folders.unseen` columns. |
+| `apps/server/src/db-schema.ts`, `apps/server/src/schema-migrations.ts` † | The two halves of the database shape: `db-schema.ts` is the complete DDL for a fresh database (including generated columns and the FTS/task SQL it composes), while `schema-migrations.ts` holds the old-database migrations that run idempotently in one transaction on every open. |
+| `apps/server/src/database-encryption.ts` † | Whole-database encryption at rest: a copy of a plaintext database is converted with `PRAGMA rekey`, verified, then swapped in, covering the FTS shadow tables and the WAL; the image cache and custom background outside the database are sealed per file by `local-file-encryption.ts`, and `native-sqlite.ts` pins the driver to `better-sqlite3-multiple-ciphers`. |
+| `apps/server/src/pending-sent.ts` † | The optimistic Sent row: an accepted send writes a local Sent placeholder first, sync claims that row by RFC Message-ID instead of inserting a duplicate, and an unsettled send retracts it. |
+| Turn helpers under `apps/server/src/agent/` † | Helpers extracted from the run engine: `conversation-title.ts` (title derivation and the model `TITLE:` output protocol), `turn-payloads.ts` (per-turn outward payload projection), `tool-scope.ts` (tool account-scope normalization), and `openai-compatible-content.ts` (OpenAI-compatible content format). |
 | `apps/desktop` | Electron lifecycle, single instance, tray, Windows notifications, DPAPI main key, preload IPC, update checks, and installer helper; Agent Broker, pairing, and the secure pipe. |
 | `packages/agent-contracts` | Interface contracts shared by the Agent, CLI, and MCP (External Mail v1 tools, Broker protocol, error codes). |
 | `packages/agent-core` | Agent session orchestration and tool-execution core. |
 | `build` | Version-controlled brand resources, Windows installer resources, and default empty update-trust configuration. |
 | `scripts` | Native SQLite loading verification, builds, installer smoke tests, and Release assets/release-policy validation. |
 
+Entries marked † were added on the 2026-10 trunk and are not part of any release yet; the rest of this page describes released v0.5.1 behavior.
+
 ## Data and Process Boundaries
 
 - The desktop local service binds only to the loopback address and a system-assigned port. The development service defaults to `127.0.0.1:3187`.
 - The Windows desktop main key is protected for the current Windows user by Electron `safeStorage` using DPAPI. The main process passes the unwrapped key to the server only in memory while starting the local runtime.
-- The server uses application-layer AES-256-GCM encryption for credentials, OAuth refresh tokens, sensitive mail payloads, the send queue, and outbound attachments. This is not whole-database SQLite encryption; see [Privacy and Local Data](PRIVACY.en.md) for plaintext metadata and threat boundaries.
+- The server uses application-layer AES-256-GCM encryption for credentials, OAuth refresh tokens, sensitive mail payloads, the send queue, and outbound attachments. This is not whole-database SQLite encryption; see [Privacy and Local Data](PRIVACY.en.md) for plaintext metadata and threat boundaries. Whole-database encryption at rest is a trunk-only capability (the † rows above) that has not shipped yet; the rest of this section still describes v0.5.1's released behaviour.
 - Mail content, attachment names, server responses, and OAuth callbacks are untrusted input. Changes to parsing, HTML display, attachment downloads, or callbacks must retain existing validation, sanitization, and size limits.
+- † **Attachment visibility has exactly one definition (added on the 2026-10 trunk, not shipped with v0.5.1; the one-time metadata backfill for existing mail landed with the same change)**: a `multipart/related` inline part (`related: true` — an embedded body image, signature logo, or tracking pixel) is a body resource, not an attachment. `messages.has_attachments`, `attachment_kinds_json`, the Attachments view and sidebar count, filter rules, and the list paperclip must all derive from the same non-related metadata; the reader's attachment list is the reference implementation. The view and its count additionally collapse a message's per-folder copies into one row by the provider's stable message identity (`remote_id_lookup`), while an explicitly selected folder still shows that folder's own row; this folding rule does not change what counts as an attachment above.
 - Electron uses a single-instance lock. Opening the application again restores and focuses the existing window instead of starting another local service, database, or sync task.
 
 ## Updates and Closing

@@ -15,7 +15,7 @@ function setHidden(next: boolean) {
 // A host that owns exactly one coalesced-refresh gate, so the test can drive
 // the returned request function and observe how often the underlying refresh
 // actually fires.
-let refreshFn: ReturnType<typeof vi.fn<() => void>>;
+let refreshFn: ReturnType<typeof vi.fn<() => Promise<void> | void>>;
 let requestRefresh: () => void;
 
 function RefreshGateHost() {
@@ -90,6 +90,49 @@ describe("useCoalescedRefresh", () => {
     act(() => { requestRefresh(); requestRefresh(); requestRefresh(); });
     expect(refreshFn).toHaveBeenCalledTimes(1);
     await act(async () => { vi.advanceTimersByTime(2_010); });
+    expect(refreshFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start a foreground trailing pass after the window hides", async () => {
+    refreshFn = vi.fn<() => void>();
+    vi.useFakeTimers();
+    mount();
+    await request();
+    expect(refreshFn).toHaveBeenCalledTimes(1);
+
+    // Arm a trailing timer while visible, then hide before it fires: the timer
+    // must not reopen work the request path would have deferred.
+    act(() => { requestRefresh(); });
+    setHidden(true);
+    await act(async () => { vi.advanceTimersByTime(2_010); });
+    expect(refreshFn).toHaveBeenCalledTimes(1);
+
+    // The dirty flag survives, so returning to the foreground runs exactly one
+    // catch-up instead of losing the request.
+    setHidden(false);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    expect(refreshFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start a trailing pass when an in-flight refresh finishes after hiding", async () => {
+    let finishRefresh!: () => void;
+    refreshFn = vi.fn<() => Promise<void>>(() => new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    }));
+    mount();
+    // The first pass is in flight and a second request marks the gate dirty.
+    await request();
+    expect(refreshFn).toHaveBeenCalledTimes(1);
+    act(() => { requestRefresh(); });
+    setHidden(true);
+
+    // The in-flight pass completing must not start the queued pass while the
+    // window is hidden.
+    await act(async () => { finishRefresh(); });
+    expect(refreshFn).toHaveBeenCalledTimes(1);
+
+    setHidden(false);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
     expect(refreshFn).toHaveBeenCalledTimes(2);
   });
 });

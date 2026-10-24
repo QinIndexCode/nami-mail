@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase, SCHEMA_VERSION } from "../src/db.js";
 
@@ -158,7 +158,12 @@ describe("database schema versioning", () => {
     `);
     newer.close();
 
-    expect(() => openDatabase(databasePath)).toThrow(/created by a newer application build \(schema v999 > v1\)/);
+    // The boundary is derived from SCHEMA_VERSION rather than spelled out: the
+    // bump to v2 is exactly the change this pin has to survive, and a literal
+    // would have made it fail for the right reason on the wrong day.
+    expect(() => openDatabase(databasePath)).toThrow(
+      new RegExp(`created by a newer application build \\(schema v999 > v${SCHEMA_VERSION}\\)`),
+    );
   });
 
   it("opens a pre-uid calendar database and backfills the column before indexing it", () => {
@@ -208,25 +213,31 @@ describe("database schema versioning", () => {
   });
 
   it("keeps schema-constant indexes off columns that only migrateDatabase adds", () => {
-    // Guards the whole class of defect above. db.exec(schema) runs before
-    // migrateDatabase, so every statement in the schema constant must survive
-    // being executed against a database whose tables predate the newest columns.
-    // IF NOT EXISTS does not help: an unknown column is a hard error, not a
-    // skipped statement. The audit cross-checks every index in the constant
-    // against the columns migrateDatabase adds, since those are exactly the
-    // ones a pre-migration database does not have yet.
-    const source = fs.readFileSync(new URL("../src/db.ts", import.meta.url), "utf8");
-    const schemaStart = source.indexOf("const schema = `");
+    // Guards the whole class of defect above. The fresh-database DDL lives in
+    // db-schema.ts and runs before migrateDatabase, so every statement in it must
+    // survive being executed against a database whose tables predate the newest
+    // columns. IF NOT EXISTS does not help: an unknown column is a hard error, not
+    // a skipped statement. The audit cross-checks every index in that DDL against
+    // the columns migrateDatabase adds, since those are exactly the ones a
+    // pre-migration database does not have yet — so it reads both files.
+    const schemaSource = fs.readFileSync(new URL("../src/db-schema.ts", import.meta.url), "utf8");
+    const schemaStart = schemaSource.indexOf("export const NAMI_MAIL_SCHEMA_SQL = `");
     expect(schemaStart).toBeGreaterThan(-1);
-    const schemaEnd = source.indexOf("\n`;", schemaStart);
+    const schemaEnd = schemaSource.indexOf("\n`;", schemaStart);
     expect(schemaEnd).toBeGreaterThan(schemaStart);
-    const schemaSql = source.slice(schemaStart, schemaEnd);
+    const schemaSql = schemaSource.slice(schemaStart, schemaEnd);
+    // The migration list moved out of db.ts into schema-migrations.ts (db.ts is
+    // at its max-lines ratchet). Read both, so the audit keeps tracking wherever
+    // the ALTERs actually are rather than a particular file's spelling.
+    const migrationSource = ["../src/db.ts", "../src/schema-migrations.ts"]
+      .map((relative) => fs.readFileSync(new URL(relative, import.meta.url), "utf8"))
+      .join("\n");
 
     // Columns each table gained after its original CREATE TABLE, i.e. the ones
     // only migrateDatabase can supply. Derived from migrateDatabase's ALTERs so
     // the audit tracks the real migration list instead of a hand-kept duplicate.
     const migratedColumns = new Map<string, Set<string>>();
-    for (const match of source.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+"?(\w+)"?/g)) {
+    for (const match of migrationSource.matchAll(/ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+"?(\w+)"?/g)) {
       const [, table, column] = match;
       // Both groups are guaranteed by the regex itself (\w+ cannot be empty).
       const known = migratedColumns.get(table!) ?? new Set<string>();
@@ -259,6 +270,28 @@ describe("database schema versioning", () => {
     try {
       const plan = db.prepare("EXPLAIN QUERY PLAN SELECT id FROM calendar_events WHERE uid IS NOT NULL").all() as Array<{ detail: string }>;
       expect(plan.map((entry) => entry.detail).join(" ")).toContain("idx_calendar_events_uid");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("declares none of the legacy task stores in a fresh database", () => {
+    // Batch 4's schema half: the three legacy tables are no longer created, so a
+    // database this build makes from scratch has never held them. The other half
+    // -- dropping them from a database an older build wrote -- belongs to the 4b
+    // migration, and only there: this DDL runs on every open, *before* that
+    // migration reads the rows, so a DROP placed here would delete them unread.
+    const databasePath = blankDatabasePath("no-legacy-stores");
+    const db = openDatabase(databasePath);
+    try {
+      const names = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        + "AND name IN ('operation_queue', 'batch_jobs', 'batch_job_messages')",
+      ).pluck().all() as string[];
+      expect(names).toEqual([]);
+      // The replacement is present, so this is absence by deletion rather than a
+      // schema that failed to build half of itself.
+      expect(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()).toBeTruthy();
     } finally {
       db.close();
     }

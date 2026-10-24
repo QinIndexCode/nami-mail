@@ -8,8 +8,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ComposeModal } from "./ComposeModal";
-import { I18nProvider } from "./i18n";
-import type { Account } from "./types";
+import { I18nProvider, translate } from "./i18n";
+import type { ComposeDraft } from "./mailUi";
+import type { Account, OutboundSubmission } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,6 +19,9 @@ const h = vi.hoisted(() => ({
   templates: vi.fn(),
   agentProviders: vi.fn(),
   fetch: vi.fn(),
+  send: vi.fn(),
+  submission: vi.fn(),
+  discardDraft: vi.fn(),
 }));
 
 // `ApiError` is re-exported from ./api and `errorPresentation` matches on it
@@ -33,15 +37,15 @@ vi.mock("./api", async () => {
       templates: h.templates,
       agentProviders: h.agentProviders,
       discardOutboundAttachments: vi.fn(async () => ({ ok: true })),
-      discardDraft: vi.fn(async () => ({ ok: true })),
+      discardDraft: h.discardDraft,
       uploadOutboundAttachment: vi.fn(async (_accountId: string, file: File) => ({
         token: "mock-token-1",
         filename: file.name,
         contentType: file.type || "application/octet-stream",
         size: file.size,
       })),
-      send: vi.fn(async () => ({ ok: true })),
-      submission: vi.fn(async () => ({ submission: { status: "running" } })),
+      send: h.send,
+      submission: h.submission,
       saveDraft: vi.fn(async () => ({ ok: true })),
     },
   };
@@ -64,27 +68,30 @@ const account: Account = {
 let container: HTMLDivElement;
 let root: Root;
 
-function renderCompose(draftText = "") {
+function renderCompose(draftText = "", draft: Partial<ComposeDraft> = {}) {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   const onSent = vi.fn();
+  const onClose = vi.fn();
+  const onDraftDiscarded = vi.fn();
+  const onSubmissionChanged = vi.fn();
   act(() => {
     root.render(
       <I18nProvider>
         <ComposeModal
           accounts={[account]}
-          draft={{ to: "", subject: "", text: draftText }}
-          onClose={() => undefined}
+          draft={{ to: "", subject: "", text: draftText, ...draft }}
+          onClose={onClose}
           onSent={onSent}
           onDraftSaved={() => undefined}
-          onDraftDiscarded={() => undefined}
-          onSubmissionChanged={() => undefined}
+          onDraftDiscarded={onDraftDiscarded}
+          onSubmissionChanged={onSubmissionChanged}
         />
       </I18nProvider>,
     );
   });
-  return { onSent };
+  return { onSent, onClose, onDraftDiscarded, onSubmissionChanged };
 }
 
 const toInput = (): HTMLInputElement => {
@@ -147,6 +154,10 @@ beforeEach(() => {
   h.templates.mockReset();
   h.agentProviders.mockReset();
   h.fetch.mockReset();
+  h.send.mockReset();
+  h.submission.mockReset();
+  h.discardDraft.mockReset();
+  h.discardDraft.mockResolvedValue({ ok: true });
   // Configured by default so the pre-existing cases keep a live toolbar; the
   // polish cases below override this to drive each state.
   h.agentProviders.mockResolvedValue({ items: [{ id: "provider-1", configured: true }], defaultProviderId: "provider-1" });
@@ -436,5 +447,112 @@ describe("compose body polish", () => {
     expect(bodyInput().value).toBe(ORIGINAL);
     expect(polishButtons()[0]!.getAttribute("aria-disabled")).toBe("true");
     expect(polishButtons()[0]!.getAttribute("data-tooltip")).toBe("该功能需要配置模型。");
+  });
+});
+
+/**
+ * The send route commits the ledger row and its dispatch task and answers
+ * `pending`: the SMTP conversation happens afterwards, on the scheduler. These
+ * cases pin what the composer does with that answer, because the old statuses it
+ * was written against (`submitting`/`submitted`) can no longer arrive first.
+ */
+describe("compose send against the durable acceptance", () => {
+  const zh = (key: string) => translate("zh-CN", key);
+
+  const queuedSubmission: OutboundSubmission = {
+    id: "submission-1",
+    accountId: "account-1",
+    messageId: "<4d36290a-1af2-40d3-a0de-41b4218dbe1c@example.com>",
+    subject: "Quarterly numbers",
+    recipients: ["alice@example.com"],
+    deliveryStatus: "pending",
+    sendAt: null,
+    errorCode: null,
+    errorMessage: null,
+    postSubmitWarning: null,
+    submittedAt: null,
+    confirmedAt: null,
+    createdAt: "2026-08-10T09:00:00.000Z",
+    updatedAt: "2026-08-10T09:00:00.000Z",
+  };
+
+  const sendButton = (): HTMLButtonElement => {
+    const button = container.querySelector<HTMLButtonElement>(".compose-send-main");
+    if (!button) throw new Error("compose-send-main button not found");
+    return button;
+  };
+
+  /** Lets the poll's own 750ms interval elapse, then drains what it resolved. */
+  const settlePoll = async () => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    });
+    await flush();
+  };
+
+  beforeEach(() => {
+    h.send.mockResolvedValue({
+      ok: true,
+      messageId: queuedSubmission.messageId,
+      deliveryStatus: "pending",
+      submission: queuedSubmission,
+      status: "pending",
+      taskId: "task-1",
+    });
+  });
+
+  it("waits for the first attempt before reporting the send and dropping the draft", async () => {
+    h.submission.mockResolvedValue({
+      ok: true,
+      submission: { ...queuedSubmission, deliveryStatus: "submitted", updatedAt: "2026-08-10T09:00:01.000Z" },
+    });
+    const { onSent, onClose, onDraftDiscarded } = renderCompose("正文", {
+      accountId: "account-1",
+      to: "alice@example.com",
+      sourceDraftId: "draft-1",
+    });
+    await flush();
+
+    act(() => sendButton().click());
+    await flush();
+
+    // The acceptance only queued the send. The server still holds the draft and
+    // no attempt has finished, so reporting "sent" (or discarding the draft for
+    // the user) here would both lie and lose the mail's only other copy.
+    expect(onSent).not.toHaveBeenCalled();
+    expect(onDraftDiscarded).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    await settlePoll();
+
+    expect(h.submission).toHaveBeenCalledWith("submission-1");
+    expect(onDraftDiscarded).toHaveBeenCalledWith("draft-1");
+    expect(onSent).toHaveBeenCalledWith(zh("compose.delivery.submitted"), undefined, undefined, "account-1");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps the window and the draft when the send is still queued, and says so", async () => {
+    // The local API can fail between acceptance and the first status read (the
+    // record survives it, `pending` is exactly what it holds), and the scheduler
+    // can simply not have reached the task yet. Either way the composer must not
+    // take the optimistic `pending` for a finished send.
+    h.submission.mockRejectedValue(new Error("local service unavailable"));
+    const { onSent, onClose, onDraftDiscarded } = renderCompose("正文", {
+      accountId: "account-1",
+      to: "alice@example.com",
+      sourceDraftId: "draft-1",
+    });
+    await flush();
+
+    act(() => sendButton().click());
+    await settlePoll();
+
+    expect(onSent).toHaveBeenCalledWith(zh("compose.delivery.waitingToast"), "info");
+    expect(container.querySelector(".form-status.warning")?.textContent).toContain(zh("compose.delivery.waitingNotice"));
+    // The draft is the server's to clear once the send actually goes out, and the
+    // window stays open so the user can watch it settle.
+    expect(onDraftDiscarded).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(sendButton().disabled).toBe(false);
   });
 });

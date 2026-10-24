@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACHMENT_KINDS as CONTRACT_ATTACHMENT_KINDS,
+  attachmentKindsJson as contractAttachmentKindsJson,
+  classifyAttachmentKind as contractClassifyAttachmentKind,
+  codeTextExtensions as contractCodeTextExtensions,
+  extensionKinds as contractExtensionKinds,
+} from "@nami/agent-contracts";
+import {
   ATTACHMENT_KINDS,
   attachmentKindsJson,
   classifyAttachmentKind,
+  codeTextExtensions,
 } from "../src/attachment-kind.js";
 
 describe("classifyAttachmentKind", () => {
@@ -86,6 +94,42 @@ describe("ATTACHMENT_KINDS", () => {
     ];
     for (const filename of sample) {
       expect(ATTACHMENT_KINDS).toContain(classifyAttachmentKind(filename, "application/octet-stream"));
+    }
+  });
+});
+
+describe("forwarding to @nami/agent-contracts", () => {
+  it("returns the contract's objects instead of server-local copies", () => {
+    // Identity, not deep equality: a future edit that re-adds a local table
+    // here would pass a deep-equality check today and drift tomorrow.
+    expect(ATTACHMENT_KINDS).toBe(CONTRACT_ATTACHMENT_KINDS);
+    expect(codeTextExtensions).toBe(contractCodeTextExtensions);
+    expect(ATTACHMENT_KINDS).toEqual([...CONTRACT_ATTACHMENT_KINDS]);
+  });
+
+  it("classifies the sampled 30 extensions exactly like the contract", () => {
+    const sampled = Object.keys(contractExtensionKinds).slice(0, 30);
+    expect(sampled).toHaveLength(30);
+    for (const extension of sampled) {
+      const filename = `file.${extension}`;
+      expect(classifyAttachmentKind(filename, ""), extension).toBe(contractClassifyAttachmentKind(filename, ""));
+    }
+    // The three media extensions this slice added must classify as media here,
+    // since the server filters on the resulting kind.
+    for (const extension of ["mpeg", "mpg", "ogv"]) {
+      expect(classifyAttachmentKind(`movie.${extension}`, "")).toBe("media");
+      expect(contractExtensionKinds[extension]).toBe("media");
+    }
+  });
+
+  it("serializes the attachment-kind column exactly like the contract", () => {
+    const samples = [
+      [{ filename: "report.pdf", contentType: "application/pdf" }, { filename: "photo.png", contentType: "image/png" }],
+      [{ filename: "snippet.ts", contentType: "application/octet-stream" }],
+      [],
+    ];
+    for (const sample of samples) {
+      expect(attachmentKindsJson(sample)).toBe(contractAttachmentKindsJson(sample));
     }
   });
 });

@@ -2,30 +2,27 @@ import type { Citation } from "@nami/agent-contracts";
 import { discardDraft, saveDraft } from "../drafts.js";
 import type { DatabaseHandle } from "../db.js";
 import { deleteAccountRowWithOptimizedCascade } from "../account-store.js";
+import { folderCounts } from "../folder-counts.js";
 import { messagePayloadForRow, type MessageStorageRow } from "../message-storage.js";
 import type { AccountAccessTokenProvider } from "../mail.js";
-import { sendMail } from "../mail.js";
 import {
   discardDraftOutboundAttachments,
   discardOutboundAttachmentsForAccount,
   linkOutboundAttachmentsToDraft,
   linkOutboundAttachmentsToSubmission,
-  releaseSubmissionOutboundAttachments,
   resolveOutboundAttachments,
 } from "../outbound-attachments.js";
 import {
   SubmissionConflictError,
-  markSubmissionSubmitted,
   prepareSubmission as persistPrepareSubmission,
-  startSubmission,
   submissionForId,
-  submissionRequestForId,
   type OutboundSubmissionRequest,
 } from "../outbox.js";
 import { syncAccount } from "../sync.js";
-import { updateMessageFlags } from "../sync-flags.js";
-import { moveMessage, moveMessageToFolder } from "../sync-moves.js";
-import { ftsLikeEscape, MESSAGE_FTS_TABLE } from "../message-search.js";
+import { moveActionBlockedError } from "../message-storage.js";
+import { moveRefusalMessage } from "../move-refusals.js";
+import { ftsLikeEscape, MESSAGE_FTS_CROSS_JOIN, MESSAGE_FTS_TABLE } from "../message-search.js";
+import type { MessageFlagsPatch } from "../message-flags.js";
 import {
   FLAGGED_PREDICATE_SQL,
   SEEN_PREDICATE_SQL,
@@ -34,7 +31,9 @@ import {
 } from "../message-flag-indexes.js";
 import { redactUrls } from "../message-links.js";
 import type { AccountRecord } from "../types.js";
-import type { AgentMailStateEvents } from "./mail-state-events.js";
+import type { MoveTaskDestination } from "../tasks/index.js";
+import type { MailWriteTaskSeams } from "./mail-write-seams.js";
+import type { AgentMailStateEventSink } from "./mail-state-events.js";
 import type {
   DraftMutation,
   DraftView,
@@ -64,11 +63,11 @@ export type SqliteMailApplicationServiceOptions = {
   db: DatabaseHandle;
   masterKey: Buffer;
   oauthService?: AccountAccessTokenProvider;
-  agentMailEvents?: AgentMailStateEvents;
+  agentMailEvents?: AgentMailStateEventSink;
   syncMessageLimit: number;
   /** Directory where uploaded outbound attachment files are stored. */
   outboundAttachmentDirectory: string;
-};
+} & MailWriteTaskSeams;
 
 type MessageRowWithAccount = MessageStorageRow & {
   account_email: string;
@@ -282,23 +281,20 @@ export class SqliteMailApplicationService implements MailApplicationService {
   async listFolders(context: MailApplicationContext, accountId: string): Promise<readonly MailFolderView[]> {
     this.assertAccount(context, accountId);
     const rows = this.options.db.prepare(`
-      SELECT account_id, path, name, special_use, total, unseen
+      SELECT account_id, path, name, special_use
       FROM folders WHERE account_id = ? ORDER BY name, path
-    `).all(accountId) as Array<{
-      account_id: string;
-      path: string;
-      name: string;
-      special_use: string | null;
-      total: number;
-      unseen: number;
-    }>;
+    `).all(accountId) as Array<{ account_id: string; path: string; name: string; special_use: string | null }>;
+    // The counts are derived from `messages` rather than stored on the folder
+    // (contract §3.6), and derived through the very helper the sidebar uses, so
+    // the Agent and the UI cannot report two different numbers for one folder.
+    const counts = new Map(folderCounts(this.options.db, accountId).map((count) => [count.path, count]));
     return rows.map((row) => ({
       accountId: row.account_id,
       path: row.path,
       name: row.name,
       specialUse: row.special_use,
-      total: row.total,
-      unseen: row.unseen,
+      total: counts.get(row.path)?.total ?? 0,
+      unseen: counts.get(row.path)?.unseen ?? 0,
     }));
   }
 
@@ -346,21 +342,20 @@ export class SqliteMailApplicationService implements MailApplicationService {
       // candidate row on the main process. LIKE keeps the historical
       // substring semantics for any query length (a MATCH phrase would
       // silently drop 1-2 character filters below the trigram floor) and
-      // stays ASCII-case-insensitive like the rest of the search paths. This
-      // assumes the FTS row always exists for a message row — the same
-      // invariant the user search already relies on (message-fts-v2 rebuild).
+      // stays ASCII-case-insensitive like the rest of the search paths. The
+      // CROSS JOIN below keeps this single-pass (a correlated EXISTS re-scans
+      // the index per message). This assumes the FTS row always exists for a
+      // message row — the same invariant the user search relies on.
       const pattern = `%${ftsLikeEscape(senderQuery)}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id
-          AND (fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')
-      )`);
+      where.push(`(fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')`);
       params.push(pattern, pattern);
     }
 
+    const fromClause = senderQuery ? MESSAGE_FTS_CROSS_JOIN : "FROM messages m";
     const rows = this.options.db.prepare(`
       SELECT m.*, a.email AS account_email, a.provider_name
-      FROM messages m JOIN accounts a ON a.id = m.account_id
+      ${fromClause}
+      JOIN accounts a ON a.id = m.account_id
       WHERE ${where.join(" AND ")}
       ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
       LIMIT ? OFFSET ?
@@ -384,19 +379,18 @@ export class SqliteMailApplicationService implements MailApplicationService {
     // 报销, 账单). Those fall back to a LIKE scan over the same indexed columns,
     // which keeps the substring semantics the tokenizer gives longer queries.
     if ([...keyword].length < 3) {
+      // Below the trigram floor, so MATCH cannot see it; LIKE on the outer FTS
+      // alias keeps substring semantics. The CROSS JOIN below pins the scan to
+      // one pass over the index instead of a correlated re-scan per message.
       const pattern = `%${ftsLikeEscape(keyword)}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id
-          AND (fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
-            OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')
-      )`);
+      where.push(`(fts.subject LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\' OR fts.from_address LIKE ? ESCAPE '\\'
+        OR fts."to" LIKE ? ESCAPE '\\' OR fts."cc" LIKE ? ESCAPE '\\' OR fts.attachment LIKE ? ESCAPE '\\' OR fts.body LIKE ? ESCAPE '\\')`);
       params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
     } else {
-      // The alias is required, not cosmetic: the optional filters below add
-      // EXISTS subqueries over the same FTS table, and a bare table name in
-      // MATCH would become ambiguous once another reference is in scope.
-      where.push("f MATCH ?");
+      // MATCH's left operand is the FTS table itself; an alias (`f MATCH ?`)
+      // is a syntax error in SQLite ("no such column: f"). The name is
+      // unambiguous while the table appears once in FROM.
+      where.push(`${MESSAGE_FTS_TABLE} MATCH ?`);
       params.push(ftsPhraseQuery(keyword));
     }
     if (messageIds !== undefined) {
@@ -412,12 +406,9 @@ export class SqliteMailApplicationService implements MailApplicationService {
     if (subject) {
       // subject is encrypted at rest but mirrored into the FTS index, so the
       // filter runs on the index instead of decrypting candidate rows. LIKE
-      // keeps substring semantics for any query length.
+      // keeps substring semantics; on the outer alias it stays single-pass.
       const pattern = `%${ftsLikeEscape(subject.toLocaleLowerCase())}%`;
-      where.push(`EXISTS (
-        SELECT 1 FROM ${MESSAGE_FTS_TABLE} fts
-        WHERE fts.message_id = m.id AND fts.subject LIKE ? ESCAPE '\\'
-      )`);
+      where.push(`fts.subject LIKE ? ESCAPE '\\'`);
       params.push(pattern);
     }
     if (query.hasAttachments !== undefined) {
@@ -449,16 +440,17 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const offset = Number.parseInt(query.cursor ?? "0", 10);
     const safeOffset = Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
     const whereSql = where.join(" AND ");
+    // The shared join pins the FTS scan as the driving side; see
+    // MESSAGE_FTS_CROSS_JOIN for the plan and measurements.
+    const fromClause = MESSAGE_FTS_CROSS_JOIN;
     const total = Number((this.options.db.prepare(`
       SELECT COUNT(*) AS count
-      FROM ${MESSAGE_FTS_TABLE} f
-      JOIN messages m ON m.id = f.message_id
+      ${fromClause}
       WHERE ${whereSql}
     `).get(...params) as { count: number }).count);
     const rows = this.options.db.prepare(`
       SELECT m.*, a.email AS account_email, a.provider_name
-      FROM ${MESSAGE_FTS_TABLE} f
-      JOIN messages m ON m.id = f.message_id
+      ${fromClause}
       JOIN accounts a ON a.id = m.account_id
       WHERE ${whereSql}
       ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id
@@ -630,22 +622,49 @@ export class SqliteMailApplicationService implements MailApplicationService {
     await discardDraft(this.options.db, this.options.masterKey, account, draftId, this.options.oauthService, this.options.agentMailEvents, context.signal);
   }
 
-  async updateMessageFlags(context: MailApplicationContext, messageId: string, patch: { seen?: boolean; flagged?: boolean }): Promise<void> {
+  async updateMessageFlags(context: MailApplicationContext, messageId: string, patch: MessageFlagsPatch): Promise<void> {
     const row = this.row(context, messageId);
     if (!row) throw new AgentMailApplicationError("not_found", "The requested message is no longer available.");
-    await updateMessageFlags(this.options.db, this.options.masterKey, messageId, patch, this.options.oauthService, this.options.agentMailEvents);
+    const acceptFlags = this.options.acceptFlags;
+    if (!acceptFlags) {
+      throw new AgentMailApplicationError("not_supported", "This host cannot update message flags: no task scheduler is attached.");
+    }
+    // The acceptance commits the requested state locally and the push task in
+    // one transaction, then returns; the provider STORE happens in the runner.
+    // That is the whole point of the seam: an Agent flag write is answered from
+    // the same local target state every other writer commits.
+    const accepted = acceptFlags({ messageIds: [messageId], patch });
+    if (accepted.failed > 0) {
+      // The row was readable a moment ago, so the acceptance's only reasons are
+      // "gone" and the move-reconciliation guards -- the same pair the direct
+      // path answered with, and the same words.
+      throw new Error(moveActionBlockedError(row) ?? "Message not found.");
+    }
   }
 
   async moveMessage(context: MailApplicationContext, messageId: string, destination: MailMessageDestination): Promise<void> {
     const row = this.row(context, messageId);
     if (!row) throw new AgentMailApplicationError("not_found", "The requested message is no longer available.");
-    if ("folder" in destination) {
-      // An explicit folder goes through the same path filter rules already use,
-      // which checks the folder belongs to the message's own account.
-      await moveMessageToFolder(this.options.db, this.options.masterKey, messageId, destination.folder, this.options.oauthService, this.options.agentMailEvents);
-      return;
+    const acceptMove = this.options.acceptMove;
+    if (!acceptMove) {
+      throw new AgentMailApplicationError("not_supported", "This host cannot move messages: no task scheduler is attached.");
     }
-    await moveMessage(this.options.db, this.options.masterKey, messageId, destination.target, this.options.oauthService, this.options.agentMailEvents);
+    // Both shapes are accepted locally before any provider call: the goal moves
+    // the row out of its source view now, and the runner delivers the IMAP MOVE
+    // and reconciles the account. A folder path is validated inside each
+    // message's own account by the acceptance, which is the check the direct
+    // `moveMessageToFolder` path made too.
+    const selection: MoveTaskDestination = "folder" in destination
+      ? { folderPath: destination.folder }
+      : { target: destination.target };
+    const accepted = acceptMove({ messageIds: [messageId], destination: selection });
+    const refusal = accepted.refusals[0];
+    if (refusal) {
+      throw new Error(moveRefusalMessage(
+        refusal.reason,
+        "folderPath" in selection ? selection : selection.target,
+      ));
+    }
   }
 
   async deleteAccount(context: MailApplicationContext, accountId: string): Promise<void> {
@@ -720,45 +739,20 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const submission = submissionForId(this.options.db, this.options.masterKey, submissionId);
     if (!submission) throw new AgentMailApplicationError("not_found", "The prepared mail submission is no longer available.");
     const account = this.account(context, submission.accountId);
-    const attempt = startSubmission(this.options.db, this.options.masterKey, submissionId);
-    if (!attempt.shouldAttempt) {
-      // Another attempt already owns this submission; report its durable state
-      // so the Agent never double-sends a message that SMTP may have accepted.
-      return {
-        submissionId: attempt.submission.id,
-        accountId: attempt.submission.accountId,
-        status: attempt.submission.deliveryStatus,
-      };
+    const accept = this.options.acceptPreparedSend;
+    if (!accept) {
+      throw new AgentMailApplicationError("not_supported", "This host cannot dispatch mail: no task scheduler is attached.");
     }
-    const request = submissionRequestForId(this.options.db, this.options.masterKey, submissionId);
-    if (!request) throw new AgentMailApplicationError("not_found", "The prepared mail submission is no longer available.");
-    const directory = this.options.outboundAttachmentDirectory;
-    const attachments = request.attachmentTokens.length
-      ? resolveOutboundAttachments(this.options.db, directory, this.options.masterKey, account.id, request.attachmentTokens)
-      : [];
-    const result = await sendMail(account, this.options.masterKey, {
-      to: request.to,
-      ...(request.cc?.length ? { cc: request.cc } : {}),
-      messageId: attempt.submission.messageId,
-      ...(request.inReplyTo ? { inReplyTo: request.inReplyTo } : {}),
-      ...(request.references?.length ? { references: request.references } : {}),
-      subject: request.subject,
-      text: request.text,
-      ...(request.html ? { html: request.html } : {}),
-      ...(attachments.length ? { attachments } : {}),
-    }, this.options.oauthService);
-    const submitted = markSubmissionSubmitted(this.options.db, this.options.masterKey, submissionId, result.messageId);
-    try {
-      // SMTP accepted the message; release the temporary files now that the
-      // submission is terminal. Failures can be retried without affecting send.
-      releaseSubmissionOutboundAttachments(this.options.db, directory, account.id, submissionId);
-    } catch {
-      // Best effort: stale-file cleanup can retry this later.
-    }
+    // Acceptance is the whole user-visible write: the ledger row already exists,
+    // so this commits the optimistic Sent row and the durable `send` task in one
+    // transaction and answers with the state that was persisted. The SMTP
+    // conversation belongs to the scheduler's runner from here on -- awaiting it
+    // here is the inline send this port exists to remove (contract I1/I2).
+    const accepted = accept({ account, submissionId });
     return {
-      submissionId: submitted.id,
-      accountId: submitted.accountId,
-      status: submitted.deliveryStatus,
+      submissionId: accepted.submission.id,
+      accountId: accepted.submission.accountId,
+      status: accepted.submission.deliveryStatus,
     };
   }
 }

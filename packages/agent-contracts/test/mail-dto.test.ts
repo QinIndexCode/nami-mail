@@ -4,11 +4,14 @@ import {
   accountWireSchema,
   contactSchema,
   folderSchema,
+  hasVisibleAttachments,
+  isVisibleAttachment,
   mailAddressSchema,
   messageAttachmentSchema,
   messageDetailSchema,
   messageSchema,
   statsSchema,
+  visibleAttachments,
 } from "../src/mail-dto.js";
 
 test("mail DTO schemas accept representative wire payloads", () => {
@@ -99,6 +102,22 @@ test("mail DTO schemas reject malformed payloads", () => {
   );
   assert.equal(folderSchema.safeParse({ path: 1 }).success, false);
   assert.equal(contactSchema.safeParse({ id: "c1" }).success, false);
+});
+
+test("attachment visibility treats multipart/related parts as body resources", () => {
+  const inlineImage = { partId: "2.2", related: true, disposition: "inline" as const };
+  const file = { partId: "3", related: false, disposition: "attachment" as const };
+
+  assert.equal(isVisibleAttachment(inlineImage), false);
+  assert.equal(isVisibleAttachment(file), true);
+  // An outgoing attachment has no `related` field yet; it is user-visible.
+  assert.equal(isVisibleAttachment({ partId: "token" }), true);
+
+  assert.deepEqual(visibleAttachments([inlineImage, file]), [file]);
+  assert.equal(hasVisibleAttachments([inlineImage]), false);
+  assert.equal(hasVisibleAttachments([inlineImage, file]), true);
+  assert.equal(hasVisibleAttachments([]), false);
+  assert.equal(hasVisibleAttachments(null), false);
 });
 
 test("a list row carries no body while a detail always does", () => {

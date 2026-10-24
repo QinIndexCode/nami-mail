@@ -68,7 +68,7 @@ export interface MailTranslation {
   cancelTranslation: () => void;
   acceptTranslationTerms: () => void;
   declineTranslationTerms: () => void;
-  copyDetectedVerificationCode: (code: string) => Promise<void>;
+  copyDetectedVerificationCode: (code: string) => Promise<boolean>;
 }
 
 export function useMailTranslation({
@@ -401,6 +401,7 @@ export function useMailTranslation({
   const copyDetectedVerificationCode = useCallback(async (code: string) => {
     const copied = await copyVerificationCodeToClipboard(code);
     showToast(copied ? t("mail.verification.copied", { code }) : t("mail.verification.copyFailed"), copied ? "success" : "error");
+    return copied;
   }, [showToast, t]);
 
   return {

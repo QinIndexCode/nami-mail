@@ -89,10 +89,30 @@ const submissionStatusesNeedingRefresh = new Set<OutboundSubmission["deliverySta
   "unknown_delivery",
 ]);
 
-// While Sent-folder verification can still change the record, the UI keeps
-// polling those statuses instead of freezing the row on a transient state.
+/**
+ * While Sent-folder verification can still change the record, the UI keeps
+ * polling those statuses instead of freezing the row on a transient state.
+ *
+ * `pending` is deliberately absent, and not because it is settled: it is the
+ * column value for "no attempt has happened yet", which a send parked on a
+ * future `sendAt` also holds -- for hours. Polling it here would have the
+ * sending-status view re-arm its bounded poll over every parked scheduled mail.
+ * The wait for an *immediate* send's first attempt is the composer's own poll
+ * (`pollSubmittingSubmission`, entered on `submissionInFlight`), not this one.
+ */
 export function submissionStatusNeedsRefresh(status: OutboundSubmission["deliveryStatus"]): boolean {
   return submissionStatusesNeedingRefresh.has(status);
+}
+
+/**
+ * True while a send has not been given up on but no attempt has finished:
+ * `pending` (accepted, queued, not yet claimed) and `submitting` (an attempt is
+ * running). The single definition behind every "keep waiting" question -- the
+ * composer's poll entry, its timeout branch, and the poll's own loop condition --
+ * so the three cannot drift apart.
+ */
+export function submissionInFlight(status: OutboundSubmission["deliveryStatus"]): boolean {
+  return status === "pending" || status === "submitting";
 }
 
 export function submissionMessageIdSuffix(messageId: string): string {
@@ -127,6 +147,16 @@ export function newMessageDraftFromSubmission(submission: OutboundSubmission): {
   };
 }
 
+/**
+ * Follows a send the acceptance only queued until an attempt gives it a real
+ * outcome, then returns whatever the ledger holds.
+ *
+ * It starts on `pending` too: the route commits the ledger row and its dispatch
+ * task and returns before any attempt exists, so the first lookup a few hundred
+ * milliseconds later is normally what turns `pending` into `submitting`. A run
+ * that exhausts its attempts returns the last record -- still in flight, and the
+ * caller decides what to say about that.
+ */
 export async function pollSubmittingSubmission(
   initial: OutboundSubmission,
   lookup: (id: string) => Promise<OutboundSubmission>,
@@ -141,7 +171,7 @@ export async function pollSubmittingSubmission(
   } = {},
 ): Promise<OutboundSubmission> {
   let current = initial;
-  for (let attempt = 0; attempt < attempts && current.deliveryStatus === "submitting"; attempt += 1) {
+  for (let attempt = 0; attempt < attempts && submissionInFlight(current.deliveryStatus); attempt += 1) {
     await wait(intervalMs);
     current = await lookup(current.id);
   }

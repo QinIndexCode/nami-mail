@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import fs from "node:fs";
 import type { Readable } from "node:stream";
 import { z } from "zod";
 import type { RuntimeContext } from "../types.js";
@@ -22,10 +21,6 @@ import {
 import {
   messagePayloadById,
   messagePayloadForRow,
-  MAILBOX_SYNCING_ERROR,
-  MAIL_MOVE_IN_FLIGHT_ERROR,
-  MOVE_LOCATION_UNVERIFIED_ERROR,
-  PENDING_MOVE_RECONCILIATION_ERROR,
   type MessageStorageRow,
 } from "../message-storage.js";
 import { buildMessageListSql } from "../message-filters.js";
@@ -42,44 +37,38 @@ import {
   linkOutboundAttachmentsToSubmission,
   listDraftOutboundAttachments,
   outboundAttachmentDirectory,
-  releaseSubmissionOutboundAttachments,
   resolveOutboundAttachments,
 } from "../outbound-attachments.js";
-import { friendlyMailError, sendMail } from "../mail.js";
-import { downloadMessageAttachment } from "../attachments.js";
+import {
+  attachmentActionErrorMessage,
+  attachmentErrorStatus,
+  draftActionErrorMessage,
+  draftDiscardErrorStatus,
+  messageFlagActionErrorMessage,
+  moveActionErrorMessage,
+  moveRefusalError,
+  moveRefusalMessage,
+} from "./message-write-errors.js";
+import { downloadMessageAttachment, inlineImageType } from "../attachments.js";
+import { messageIdSchema } from "../message-id.js";
 import { downloadMessageSource } from "../mail-source.js";
 import { proxyImage } from "../image-proxy.js";
 import { detectProvider } from "../providers.js";
 import { discardDraft, saveDraft } from "../drafts.js";
 import {
   SubmissionConflictError,
-  deletePendingScheduledSubmission,
-  deliveryFailureStatus,
   markSubmissionFailed,
-  markSubmissionSubmitted,
-  markSubmissionUnknownDelivery,
-  prepareSubmission,
-  setSubmissionPostSubmitWarning,
-  startSubmission,
   submissionForId,
   submissionForIdempotencyKey,
   submissionRequestForId,
   type OutboundSubmission,
 } from "../outbox.js";
-import { clearMessageSnooze, setMessageSnoozed } from "../snooze.js";
-import { syncAccount } from "../sync.js";
-import { scheduleSentSubmissionVerification } from "../sync-sent-verify.js";
-import type { BatchMessageMoveOutcome, MessageMoveResult } from "../sync-moves.js";
-import { getSyncMessageLimit } from "../settings.js";
-import { emitAccountSynced } from "../events.js";
-import type { createOperationQueue } from "../operation-queue.js";
-import { commitLocalFlags } from "../flags-outbox.js";
+import { acceptMoveTask, acceptFlagsTask, acceptSendTask, acceptSnoozeTask, cancelSnoozeTask, cancelScheduledSend, type CommitTaskDeps, type FlagsTaskDeps, type TaskStarter } from "../tasks/index.js";
 import { accountById } from "../account-store.js";
 import {
   accountRowForMessage,
   messageAccountAndFolder,
   messageAccountId,
-  messageAccountIds,
   messageExists,
   messageFolderSpecialUse,
   messageRowById,
@@ -98,7 +87,26 @@ import { ROUTE_ERROR_CODES, routeErrorCodeForStatus, withErrorCode } from "./err
 export type MessageRouteDeps = {
   context: RuntimeContext;
   log: FastifyInstance["log"];
-  operationQueue: ReturnType<typeof createOperationQueue>;
+  /**
+   * The task layer these routes commit through, as the batch-jobs routes take it
+   * too: the writes here commit their target state and one durable task, then
+   * hand the task to the scheduler.
+   *
+   * Only the starter half is needed -- these routes never resume, drain or stop
+   * it -- so the narrow type keeps the dependency honest about that.
+   */
+  scheduler: TaskStarter;
+  /**
+   * The app's Sent-folder verification pass, built in `buildApp`.
+   *
+   * It used to be a closure here with its own abort controller. Once the
+   * scheduler's `send` runner needed the same pass, a single owner became
+   * necessary: `scheduleSentSubmissionVerification` de-duplicates by submission
+   * id in module state, so both callers would still drive one job -- but each
+   * would hold a different abort signal, and the one the instance aborts on
+   * close has to be the one the running job was started with.
+   */
+  scheduleSentVerification: (submissionId: string) => void;
 };
 
 function completedThreadingHeaders(message: { inReplyTo?: string; references?: string[] }) {
@@ -151,73 +159,6 @@ function isValidAttachmentKind(value: string | undefined): value is AttachmentKi
   return value !== undefined && (ATTACHMENT_KINDS as readonly string[]).includes(value);
 }
 
-function moveActionErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  const knownLocalErrors = new Set([
-    "Message not found.",
-    "Account not found.",
-    "邮件服务器未确认移动操作，请稍后重试。",
-    "这个邮箱没有提供可用的归档文件夹。",
-    "这个邮箱没有提供可用的废纸篓文件夹。",
-    MAILBOX_SYNCING_ERROR,
-    MAIL_MOVE_IN_FLIGHT_ERROR,
-    PENDING_MOVE_RECONCILIATION_ERROR,
-    MOVE_LOCATION_UNVERIFIED_ERROR,
-  ]);
-  return knownLocalErrors.has(message) ? message : friendlyMailError(error);
-}
-
-function messageFlagActionErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  const knownLocalErrors = new Set(["Message not found.", "Account not found.", PENDING_MOVE_RECONCILIATION_ERROR, MOVE_LOCATION_UNVERIFIED_ERROR]);
-  return knownLocalErrors.has(message) ? message : friendlyMailError(error);
-}
-
-function draftActionErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  const knownLocalErrors = new Set([
-    "Account not found.",
-    "这个邮箱没有提供可用的草稿文件夹。",
-    "邮件服务器未确认草稿保存，请稍后重试。",
-    "邮件服务器未确认草稿删除，请稍后重试。",
-    "无法生成草稿内容，请重试。",
-    "Draft not found.",
-    "Message is not a draft.",
-  ]);
-  return knownLocalErrors.has(message) ? message : friendlyMailError(error);
-}
-
-function draftDiscardErrorStatus(error: unknown): number {
-  const message = error instanceof Error ? error.message : "";
-  if (message === "Draft not found.") return 404;
-  if (message === "Message is not a draft.") return 409;
-  return 422;
-}
-
-function attachmentActionErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  const knownLocalErrors = new Set([
-    "Message not found.",
-    "Attachment not found. Sync this message again.",
-    "Attachment part is invalid.",
-    "Attachment is no longer available in this mailbox. Sync this message again.",
-    "Message is no longer available in this mailbox. Sync this message again.",
-    "Account not found.",
-    "Attachment download did not return a readable stream.",
-    PENDING_MOVE_RECONCILIATION_ERROR,
-    MOVE_LOCATION_UNVERIFIED_ERROR,
-  ]);
-  return knownLocalErrors.has(message) ? message : friendlyMailError(error);
-}
-
-function attachmentErrorStatus(error: unknown): number {
-  const message = error instanceof Error ? error.message : "";
-  if (message === "Attachment part is invalid.") return 400;
-  if (message === "Message not found." || message === "Attachment not found. Sync this message again.") return 404;
-  if (message === "Attachment is no longer available in this mailbox. Sync this message again." || message === "Message is no longer available in this mailbox. Sync this message again.") return 409;
-  return 422;
-}
-
 function storedDraftMessageId(context: RuntimeContext, accountId: string, localDraftId: string | undefined): string | undefined {
   if (!localDraftId) return undefined;
   const stored = messagePayloadById(context.db, context.masterKey, localDraftId);
@@ -243,31 +184,48 @@ async function readImportedAttachment(content: Readable): Promise<Buffer> {
 const submittedVerificationMessage = "邮件已发送，投递状态确认中。";
 const unknownDeliveryVerificationMessage = "邮件已提交，但服务商未确认投递结果。请稍后查看发件箱。";
 
+/**
+ * The ledger statuses that mean an attempt at this submission has already been
+ * claimed or has finished: everything except the initial `pending` and a
+ * retryable `failed`.
+ *
+ * Two readers, one predicate. The idempotent peek answers a duplicate of a send
+ * that got this far with the durable row instead of running the acceptance again
+ * (the scheduler may already have released the original's uploads, and resolving
+ * them here would fail the retry), and the immediate branch re-checks the same
+ * thing after committing, because the row can progress between the peek and the
+ * commit. `confirmed` belongs even though it is the mail's end state rather than
+ * an in-flight one: "past `pending`" is the property both readers ask about.
+ */
+const ATTEMPTED_DELIVERY_STATUSES: readonly string[] = ["submitting", "submitted", "confirmed", "unknown_delivery"];
+
 export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDeps): void {
-  const { context, log, operationQueue } = deps;
+  const { context, log, scheduler, scheduleSentVerification } = deps;
 
-  const sentVerificationAbortController = new AbortController();
-  // Fastify only runs onClose once in-flight handlers have drained. Aborting
-  // first stops a Sent-folder verification from making shutdown wait out its
-  // IMAP timeout; the submission is then re-verified by the outbox sweep.
-  app.addHook("preClose", () => {
-    sentVerificationAbortController.abort();
-  });
+  /**
+   * The flags writes below commit through the task layer. Note the sink is named
+   * `agentEvents` there and `agentMailEvents` everywhere else -- the flags port
+   * predates the rename, and renaming it now would touch the port's own tests
+   * for no behavioural gain.
+   */
+  const flagsTaskDeps: FlagsTaskDeps = {
+    db: context.db,
+    masterKey: context.masterKey,
+    scheduler,
+    ...(context.agentMailEvents ? { agentEvents: context.agentMailEvents } : {}),
+  };
 
-  function scheduleSentVerification(submissionId: string): void {
-    scheduleSentSubmissionVerification(
-      context.db,
-      context.masterKey,
-      submissionId,
-      context.oauthService,
-      {
-        abortSignal: sentVerificationAbortController.signal,
-        onDeferred: (error) => {
-          log.info({ submissionId, code: mailFailure(error).body.code }, "Sent-folder verification deferred");
-        },
-      },
-    );
-  }
+  /**
+   * Every write in this file commits through the same layer and needs nothing
+   * beyond the commit itself: the acceptances make no provider call, and the
+   * runners dial, reconcile and publish on their own. What differs between them
+   * is only which target state the acceptance commits beside the task.
+   */
+  const taskDeps: CommitTaskDeps = {
+    db: context.db,
+    masterKey: context.masterKey,
+    scheduler,
+  };
 
   /**
    * Shapes the reply for a request that duplicated an already-progressed
@@ -490,8 +448,10 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   });
 
   app.get<{ Params: { id: string; partId: string } }>("/api/messages/:id/attachments/:partId", async (request, reply) => {
+    const messageId = messageIdSchema.safeParse(request.params.id);
+    if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
-      const download = await downloadMessageAttachment(context.db, context.masterKey, request.params.id, request.params.partId, context.oauthService);
+      const download = await downloadMessageAttachment(context.db, context.masterKey, messageId.data, request.params.partId, context.oauthService);
       reply
         .type(download.attachment.contentType)
         .header("Content-Disposition", `attachment; filename*=UTF-8''${contentDispositionFilename(download.attachment.filename)}`)
@@ -508,15 +468,15 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   // ---- CID inline images (cid:xxx references in email HTML) -----------------
 
   app.get<{ Params: { id: string; partId: string } }>("/api/messages/:id/inline/:partId", async (request, reply) => {
-    const messageId = z.string().uuid().safeParse(request.params.id);
+    const messageId = messageIdSchema.safeParse(request.params.id);
     if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
       const download = await downloadMessageAttachment(context.db, context.masterKey, messageId.data, request.params.partId, context.oauthService);
+      const inlineType = inlineImageType(download.attachment.contentType);
       reply
-        .type(download.attachment.contentType)
-        .header("Content-Disposition", "inline")
-        .header("X-Content-Type-Options", "nosniff")
-        .header("Cache-Control", "public, max-age=604800, immutable");
+        .type(inlineType ?? "application/octet-stream")
+        .header("Content-Disposition", inlineType ? "inline" : `attachment; filename*=UTF-8''${contentDispositionFilename(download.attachment.filename)}`)
+        .header("X-Content-Type-Options", "nosniff");
       return reply.send(download.content);
     } catch (error) {
       const failure = mailFailure(error);
@@ -530,7 +490,7 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
   app.get<{ Querystring: { url: string } }>("/api/images/proxy", async (request, reply) => {
     const url = typeof request.query.url === "string" ? request.query.url.trim() : "";
     if (!url) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "缺少图片地址。" });
-    const result = await proxyImage(url);
+    const result = await proxyImage(url, context.masterKey);
     if (!result) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "无法获取图片。" });
     reply
       .type(result.contentType)
@@ -539,11 +499,13 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       // Overridden by the `onSend` hook, which stamps no-store on every /api/
       // response; kept because it documents the intent if that ever changes.
       .header("Cache-Control", "public, max-age=604800");
-    return reply.send(fs.createReadStream(result.filePath));
+    // The cache file is sealed, so the proxy hands back the image itself rather
+    // than a path to stream.
+    return reply.send(result.content);
   });
 
   app.get<{ Params: { id: string } }>("/api/messages/:id/eml", async (request, reply) => {
-    const messageId = z.string().uuid().safeParse(request.params.id);
+    const messageId = messageIdSchema.safeParse(request.params.id);
     if (!messageId.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "邮件标识无效。" });
     try {
       const download = await downloadMessageSource(context.db, context.masterKey, messageId.data, context.oauthService);
@@ -588,9 +550,11 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = batchMessageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     try {
-      // Write-behind: one local transaction commits the whole selection in
-      // milliseconds; the IMAP STORE is pushed per account by the durable
-      // background queue, so the response never queues behind a running sync.
+      // Local-first: one transaction commits the whole selection's target state
+      // and one durable push task per account -- plus one per 1000-entry slice,
+      // because a predicate selection is unbounded -- then returns. The IMAP
+      // STORE is those tasks' job, so the response never queues behind a running
+      // sync, a move, or a provider.
       //
       // Counts only, never `changedIds`. The commit's changed-id list is
       // server-side: a 5000-id selection serialized ~200 KB of ids the client
@@ -599,8 +563,16 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       // it either; the batch-job path keeps its own scope in memory, exactly
       // as `toSnapshot()` dropped it from the progress payload. Keep the
       // response flat in the selection size.
-      const outcome = commitLocalFlags(context.db, parsed.data.ids, parsed.data.patch, operationQueue, context.agentMailEvents);
-      return { ok: true, updated: outcome.updated, failed: outcome.failed };
+      //
+      // No `jobId` and no `undoWindowMs`, and both are deliberate: this route
+      // hands the caller no id to group or undo by, and the acceptance's own doc
+      // records why a job root cannot be invented here (the slices of one
+      // selection would get unrelated ids). The action offers no undo -- only a
+      // batch *job* does (§4.3b 第 3 条第 9 项 ②) -- so its tasks commit with
+      // `undo_window_ms = NULL` and an undo of one answers `no_window`, which is
+      // the truthful word for "this action never offered one".
+      const accepted = acceptFlagsTask(flagsTaskDeps, { messageIds: parsed.data.ids, patch: parsed.data.patch });
+      return { ok: true, updated: accepted.updated, failed: accepted.failed };
     } catch (error) {
       request.log.error({ error }, "Batch flag update failed");
       return reply.code(500).send({ ok: false, code: ROUTE_ERROR_CODES.internal_error, message: "批量更新标志失败。" });
@@ -611,59 +583,32 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = batchMessageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     try {
-      // Enqueue one durable operation per affected account. Each row waits
-      // for that account's write slot, so a batch issued while another move
-      // is in flight queues instead of failing the whole request.
-      const rows = messageAccountIds(context.db, parsed.data.ids);
-      const idsByAccount = new Map<string, string[]>();
-      for (const row of rows) {
-        const list = idsByAccount.get(row.account_id);
-        if (list) list.push(row.id);
-        else idsByAccount.set(row.account_id, [row.id]);
-      }
-      const knownIds = new Set(rows.map((row) => row.id));
-      const failures: Array<{ id: string; message: string }> = [];
-      for (const id of parsed.data.ids) {
-        if (!knownIds.has(id)) failures.push({ id, message: "Message not found." });
-      }
-      let updated = 0;
-      const pendingAccounts = new Set<string>();
-      for (const [accountId, accountIds] of idsByAccount) {
-        const outcome = await operationQueue.enqueueAndRun<BatchMessageMoveOutcome>(
-          [accountId],
-          "batch-move",
-          { ids: accountIds, target: parsed.data.target },
-        );
-        updated += outcome.updated;
-        failures.push(...outcome.failures);
-        for (const pending of outcome.pendingAccounts) pendingAccounts.add(pending);
-      }
+      // Local-first like the flag batch above, and answered the same way: one
+      // transaction writes every selected message's goal -- the rows leave their
+      // source folder -- with one durable task per affected account, and each
+      // task reconciles its own account when the provider cannot confirm the
+      // batches synchronously. That is why neither this route nor the single one
+      // kicks a sync: the runner owns the reconciliation now, and it is the
+      // runner that publishes the `mail.synced` the renderer's confirmation
+      // rides.
+      const accepted = acceptMoveTask(taskDeps, {
+        destination: { target: parsed.data.target },
+        messageIds: parsed.data.ids,
+      });
+      const failures = accepted.refusals.map((refusal) => ({
+        id: refusal.id,
+        message: moveRefusalMessage(refusal.reason, parsed.data.target),
+      }));
       for (const failure of failures) {
         request.log.warn({ messageId: failure.id, reason: failure.message }, "Batch move failed for message");
-      }
-      for (const accountId of pendingAccounts) {
-        // Some providers cannot confirm a batch MOVE outcome synchronously.
-        // Reconcile each affected account in the background so the renderer
-        // receives the verified destination instead of a stale local snapshot.
-        void syncAccount(
-          context.db,
-          context.masterKey,
-          accountId,
-          getSyncMessageLimit(context.db),
-          context.oauthService,
-          context.agentMailEvents,
-          // Process shutdown stops this reconciliation; the client that issued
-          // the move navigating away must not.
-          context.syncShutdownSignal,
-        )
-          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
-          .catch(() => request.log.warn({ accountId }, "Batch move cache refresh is pending"));
       }
       // Same counts-only contract as the flag batch above: `failures` carries
       // one entry per *refused* message, so it stays bounded by the failure
       // count rather than by the selection. A move that succeeded needs no
-      // per-id echo — the reconciled sync above refreshes the folder anyway.
-      return { ok: true, updated, failed: failures.length, failures };
+      // per-id echo -- the account's own task reconciles the folder -- and
+      // `updated` counts every id whose goal is now in force, the ones already
+      // at the destination included (§4.6 "响应体只增不改", §0.4 十五 W3).
+      return { ok: true, updated: accepted.updated, failed: failures.length, failures };
     } catch (error) {
       request.log.error({ error }, "Batch move failed");
       return reply.code(500).send({ ok: false, code: ROUTE_ERROR_CODES.internal_error, message: "批量移动失败。" });
@@ -674,13 +619,20 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = messageFlagsPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     try {
-      // Write-behind: the local cache commits in milliseconds and the IMAP
-      // STORE is pushed by the durable background queue (flags-outbox), so a
-      // toggle never queues behind a move, a batch, or a running sync.
+      // Local-first: the local commit *is* the user's target state -- it lands in
+      // one transaction together with the durable push task -- and the IMAP STORE
+      // is that task's job, so a toggle never queues behind a move, a batch, or a
+      // running sync.
       const flagsAccountId = messageAccountId(context.db, request.params.id);
       if (!flagsAccountId) throw new Error("Message not found.");
-      commitLocalFlags(context.db, [request.params.id], parsed.data, operationQueue, context.agentMailEvents);
-      return { ok: true };
+      const accepted = acceptFlagsTask(flagsTaskDeps, { messageIds: [request.params.id], patch: parsed.data });
+      // `ok` and 200 are unchanged, and nothing is removed -- the task id is
+      // *added*, and only when a task was actually committed: a patch that names
+      // no flag is a no-op that commits nothing, and reporting a task id there
+      // would send the renderer to poll a task that does not exist (§4.6
+      // "响应体只增不改", §4.6 第 2 行).
+      const taskId = accepted.handles[0]?.id;
+      return taskId === undefined ? { ok: true } : { ok: true, taskId, status: "pending" };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, messageFlagActionErrorMessage(error)), failure.statusCode));
@@ -691,36 +643,36 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const parsed = messageMoveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
     try {
-      // The operation is recorded durably before it waits for the account's
-      // write slot: a second delete issued while the first is still in flight
-      // queues behind it instead of failing, and survives a shutdown while
-      // queued (resumePending re-enqueues it on the next start).
-      const moveAccountId = messageAccountId(context.db, request.params.id);
-      const { accountId, ...result } = await operationQueue.enqueueAndRun<MessageMoveResult>(
-        moveAccountId ? [moveAccountId] : [],
-        "move",
-        { messageId: request.params.id, target: parsed.data.target },
-      );
-      if (result.refreshPending || result.locationUnverified) {
-        // UIDPLUS may be unavailable, a provider may omit a stable message ID,
-        // or a transport failure may have made the outcome ambiguous. Do not
-        // delay the response on a full refresh; the renderer receives either
-        // pending reconciliation or a read-only retained local snapshot.
-        void syncAccount(
-          context.db,
-          context.masterKey,
-          accountId,
-          getSyncMessageLimit(context.db),
-          context.oauthService,
-          context.agentMailEvents,
-          // Process shutdown stops this reconciliation; the client that issued
-          // the move navigating away must not.
-          context.syncShutdownSignal,
-        )
-          .then(() => emitAccountSynced(context.db, context.serverEvents, accountId))
-          .catch(() => request.log.warn({ messageId: request.params.id }, "Message move cache refresh is pending"));
-      }
-      return { ok: true, ...result };
+      // Local-first, and the reason this route no longer waits on IMAP: the
+      // acceptance commits the message's goal -- it leaves its source folder --
+      // in one transaction with one durable task, and the task performs the
+      // MOVE, retries it, and reconciles the account afterwards. Waiting here
+      // for the provider is what made a delete queue behind a running sync.
+      const accepted = acceptMoveTask(taskDeps, {
+        destination: { target: parsed.data.target },
+        messageIds: [request.params.id],
+      });
+      // One id in, so at most one refusal out, and it is the answer this route
+      // has always given it -- in the same words, because the mapping reads the
+      // same constants the legacy throw did (§0.4 十五 W3).
+      const refusal = accepted.refusals[0];
+      if (refusal) throw moveRefusalError(refusal.reason, parsed.data.target);
+      // `destination` is known from the acceptance alone: the folder was
+      // resolved before the transaction, and its path is what the goal holds.
+      const destination = [...accepted.destinations.values()][0];
+      // `refreshPending` means "something is still coming for this message", and
+      // it is read from the *delivery* count rather than from the task count: an
+      // acceptance whose whole selection is already at the destination still
+      // commits its slice's task, and reporting a pending refresh for a move that
+      // is already done is exactly what the legacy path answered `false` for
+      // (`sync-moves.ts` `moveMessage`'s arrived-message branch, §0.4 十五 W2).
+      // The three keys that used to describe the provider's answer (`uid`,
+      // `uncertain`, `locationUnverified`) are gone with the provider call -- the
+      // renderer reads them as optional, and `move.uid === undefined` is what
+      // keeps its optimistic row on the local uid.
+      const taskId = accepted.handles[0]?.id;
+      const body = { ok: true, destination, refreshPending: accepted.delivering > 0 };
+      return taskId === undefined ? body : { ...body, taskId, status: "pending" };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, moveActionErrorMessage(error)), failure.statusCode));
@@ -737,9 +689,12 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      // The reply carries the normalized UTC form that was actually stored.
-      const snoozedUntil = setMessageSnoozed(context.db, request.params.id, parsed.data.until);
-      return { ok: true, snoozedUntil };
+      // The reply carries the normalized UTC form that was actually stored. The
+      // message is already hidden by the time this returns, and the task the
+      // acceptance parks on the same instant only owes the *release* -- which is
+      // why no `taskId` is reported: there is no pending provider work to poll.
+      const accepted = acceptSnoozeTask(taskDeps, { messageId: request.params.id, until: parsed.data.until });
+      return { ok: true, snoozedUntil: accepted.snoozedUntil };
     } catch (error) {
       const failure = mailFailure(error);
       return reply.code(failure.statusCode).send(withErrorCode(mailFailureBody(failure, error instanceof Error ? error.message : "无法稍后处理这封邮件。"), failure.statusCode));
@@ -750,7 +705,9 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const existing = messageExists(context.db, request.params.id);
     if (!existing) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "邮件不存在。" });
     try {
-      clearMessageSnooze(context.db, request.params.id);
+      // Clearing the column and withdrawing the release task are one commit; a
+      // runner that already claimed the task sees the guard fail and does nothing.
+      cancelSnoozeTask(context.db, request.params.id);
       return { ok: true };
     } catch (error) {
       const failure = mailFailure(error);
@@ -777,7 +734,6 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
       discardDraftId,
       attachmentTokens,
     };
-    let submissionId: string | undefined;
     try {
       // A duplicate of a submission that already progressed past `pending`
       // reports the durable real status BEFORE any attachment work. The
@@ -789,122 +745,87 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
         if (existing) {
           const progressed = sendAt
             ? existing.deliveryStatus !== "pending"
-            : ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(existing.deliveryStatus);
+            : ATTEMPTED_DELIVERY_STATUSES.includes(existing.deliveryStatus);
           if (progressed) return replyPersistedSubmission(reply, existing);
         }
       }
-      // A scheduled send resolves its uploads before the durable create: a
-      // rejected or unreadable token must not leave an executable task
-      // behind. The peek above already answered duplicates, so this can
-      // never overwrite a committed terminal status.
-      if (sendAt && attachmentTokens.length) {
-        resolveOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey, account.id, attachmentTokens);
-      }
-      const prepared = prepareSubmission(context.db, context.masterKey, {
-        accountId: account.id,
-        accountEmail: account.email,
-        idempotencyKey,
-        request: submissionRequest,
-        sendAt,
-        // A new scheduled task links its uploads in the same transaction as
-        // the row itself, so a crash can no longer leave a pending task
-        // whose attachments were never linked (the 24h TTL cleanup would
-        // take them and the due pass would fail).
-        ...(sendAt && attachmentTokens.length
-          ? {
-            linkAttachmentsInCreate: (newSubmissionId: string) => {
-              linkOutboundAttachmentsToSubmission(context.db, account.id, newSubmissionId, attachmentTokens);
-            },
-          }
-          : {}),
-      });
-      submissionId = prepared.submission.id;
 
-      if (sendAt) {
-        // A future send time parks the durable submission in `pending`; the
-        // background scheduler submits it when due. The interactive route
-        // never touches SMTP for a scheduled send.
-        if (!prepared.created) {
-          // A retry of a still-pending task re-links idempotently: links
-          // lost by tasks parked before park-time linking existed are
-          // rebuilt here (the startup restore pass is the other half).
-          linkOutboundAttachmentsToSubmission(context.db, account.id, prepared.submission.id, attachmentTokens);
+      // One acceptance serves both send kinds. The ledger row, its uploads' links,
+      // the idempotency key and the exact RFC Message-ID are committed before
+      // either kind can reach a socket, and the SMTP conversation, the draft
+      // discard and the Sent verification belong to the scheduler's `send` attempt
+      // from there on -- so nothing in this route touches the provider, which is
+      // what makes the answer immediate (I2). The previous shape resolved the
+      // uploads, dialed SMTP and discarded the draft before replying, so a large
+      // attachment or a slow server was visible as a frozen composer.
+      //
+      // `sendAt` is the whole difference between the two: it is stored as the
+      // ledger's `send_at` and the task is parked on the same instant as its
+      // `due_at` (`acceptSendTask`), so the mail leaves when the user asked rather
+      // than during this call's drain.
+      const accepted = acceptSendTask(taskDeps, {
+        account,
+        request: submissionRequest,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(sendAt === undefined ? {} : { sendAt }),
+      });
+
+      if (sendAt !== undefined) {
+        // A retry of a still-parked send re-links idempotently: links lost by
+        // submissions parked before park-time linking existed are rebuilt here
+        // (the startup restore pass is the other half). The acceptance linked them
+        // for a row it created, so this is the replay's own repair.
+        if (!accepted.created && attachmentTokens.length) {
+          try {
+            linkOutboundAttachmentsToSubmission(context.db, account.id, accepted.submission.id, attachmentTokens);
+          } catch (error) {
+            if (!(error instanceof OutboundAttachmentError)) throw error;
+            // The upload is definitively gone. Nothing has been or will be sent
+            // without it (the attempt re-resolves every token and refuses the same
+            // way), and the row the retry named is where the user reads why --
+            // answering 4xx here without recording it would leave a pending send
+            // with a dated promise and no explanation.
+            markSubmissionFailed(context.db, context.masterKey, accepted.submission.id, "attachment_unavailable", outboundAttachmentActionErrorMessage(error));
+            const status = outboundAttachmentErrorStatus(error);
+            return reply.code(status).send(withErrorCode({ ok: false, message: outboundAttachmentActionErrorMessage(error) }, status));
+          }
+        }
+        // The race with the peek above: the ledger is the truth about whether this
+        // row is still a parked send, so anything past `pending` is reported as the
+        // durable status instead of a second `scheduled: true` for a mail that is
+        // already on its way. Same predicate as the peek: for a scheduled send a
+        // parked `pending` is the normal answer, and every other status is not.
+        if (!accepted.created && accepted.submission.deliveryStatus !== "pending") {
+          return replyPersistedSubmission(reply, accepted.submission);
         }
         return reply.code(202).send({
           ok: true,
-          messageId: prepared.submission.messageId,
-          deliveryStatus: "pending",
-          sendAt,
+          messageId: accepted.submission.messageId,
+          deliveryStatus: accepted.submission.deliveryStatus,
+          // The stored instant, normalized to UTC by `prepareSubmission` -- the
+          // value the cancel path compares against, not a second spelling of the
+          // same moment.
+          sendAt: accepted.submission.sendAt,
           scheduled: true,
-          submission: prepared.submission,
+          submission: accepted.submission,
+          ...(accepted.taskId ? { taskId: accepted.taskId } : {}),
         });
       }
 
-      if (!prepared.created && ["submitting", "submitted", "confirmed", "unknown_delivery"].includes(prepared.submission.deliveryStatus)) {
-        return replyPersistedSubmission(reply, prepared.submission);
+      // A race with the first acceptance since the peek above: the mail is
+      // already past `pending`, so the durable status is the truth and answering
+      // "pending" would send the client polling a task that has already settled.
+      if (!accepted.created && ATTEMPTED_DELIVERY_STATUSES.includes(accepted.submission.deliveryStatus)) {
+        return replyPersistedSubmission(reply, accepted.submission);
       }
-
-      const directory = outboundAttachmentDirectory(context);
-      const attachments = resolveOutboundAttachments(context.db, directory, context.masterKey, account.id, attachmentTokens);
-      // Link before marking the SMTP call in progress. A process crash after
-      // this point leaves both the exact Message-ID and its attachments intact.
-      linkOutboundAttachmentsToSubmission(context.db, account.id, prepared.submission.id, attachmentTokens);
-      const attempt = startSubmission(context.db, context.masterKey, prepared.submission.id);
-      if (!attempt.shouldAttempt) {
-        if (attempt.submission.deliveryStatus === "submitted" || attempt.submission.deliveryStatus === "unknown_delivery") {
-          scheduleSentVerification(attempt.submission.id);
-        }
-        const pending = attempt.submission.deliveryStatus === "submitting" || attempt.submission.deliveryStatus === "unknown_delivery";
-        return reply.code(pending ? 202 : 200).send({
-          ok: true,
-          messageId: attempt.submission.messageId,
-          deliveryStatus: attempt.submission.deliveryStatus,
-          submission: attempt.submission,
-          ...(attempt.submission.deliveryStatus === "submitted" ? { message: submittedVerificationMessage } : {}),
-          ...(attempt.submission.deliveryStatus === "unknown_delivery" ? {
-            message: unknownDeliveryVerificationMessage,
-          } : {}),
-        });
-      }
-      const sourceDraftMessageId = storedDraftMessageId(context, account.id, discardDraftId);
-      const result = await sendMail(account, context.masterKey, {
-        ...message,
-        messageId: attempt.submission.messageId,
-        ...completedThreadingHeaders(message),
-        attachments,
-      }, context.oauthService);
-      let submission = markSubmissionSubmitted(context.db, context.masterKey, prepared.submission.id, result.messageId);
-      scheduleSentVerification(submission.id);
-      let draftDiscardWarning: string | undefined;
-      if (discardDraftId) {
-        try {
-          await discardDraft(context.db, context.masterKey, account, discardDraftId, context.oauthService, context.agentMailEvents);
-          // Existing draft attachments are still retained by the submission
-          // link. Remove the draft association first, then release the sent
-          // submission's temporary files below.
-          discardDraftOutboundAttachments(context.db, directory, account.id, sourceDraftMessageId);
-        } catch (error) {
-          draftDiscardWarning = draftActionErrorMessage(error);
-        }
-      }
-      try {
-        releaseSubmissionOutboundAttachments(context.db, directory, account.id, prepared.submission.id);
-      } catch (error) {
-        // SMTP accepted the message. The durable link prevents premature stale
-        // cleanup, so attachment cleanup can be retried without changing send.
-        log.warn({ error, accountId: account.id, submissionId: prepared.submission.id }, "Could not release sent outbound attachments");
-      }
-      if (draftDiscardWarning) {
-        submission = setSubmissionPostSubmitWarning(context.db, context.masterKey, prepared.submission.id, draftDiscardWarning);
-      }
-      return {
+      return reply.code(202).send({
         ok: true,
-        messageId: submission.messageId,
-        deliveryStatus: submission.deliveryStatus,
-        submission,
-        message: submittedVerificationMessage,
-        ...(draftDiscardWarning ? { draftDiscardWarning } : {}),
-      };
+        messageId: accepted.submission.messageId,
+        deliveryStatus: accepted.submission.deliveryStatus,
+        submission: accepted.submission,
+        status: "pending",
+        ...(accepted.taskId ? { taskId: accepted.taskId } : {}),
+      });
     } catch (error) {
       if (error instanceof SubmissionConflictError) {
         return reply.code(409).send({
@@ -914,33 +835,25 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
         });
       }
       if (error instanceof OutboundAttachmentError) {
-        if (submissionId) {
-          markSubmissionFailed(context.db, context.masterKey, submissionId, "attachment_unavailable", outboundAttachmentActionErrorMessage(error));
-        }
+        // Raised by the acceptance's own validation, i.e. before anything was
+        // committed: the ledger row, the links and the task are all inside the
+        // transaction that threw, and `acceptSendTask` starts the task only after
+        // it returns. So this is the request's answer and nothing else's -- the one
+        // shape in this route where an outbound-attachment rejection has no row to
+        // record it on.
         return reply.code(outboundAttachmentErrorStatus(error)).send(withErrorCode({ ok: false, message: outboundAttachmentActionErrorMessage(error) }, outboundAttachmentErrorStatus(error)));
       }
+      // Everything left is a failure of the request itself. This route no longer
+      // has a state to leave behind: it never dials SMTP, so no error it can see
+      // means a mail might be in flight, and the ledger row and its task either
+      // committed whole (with the attempt owning every later outcome) or not at
+      // all. The former `submissionId`-guarded tail -- `markSubmissionUnknownDelivery`
+      // and the 202 "check your Sent folder by hand" -- was written for the old
+      // shape where this handler owned the SMTP call; it became unreachable when
+      // the immediate branch moved to the task layer, and the scheduled branch was
+      // its last caller.
       const failure = mailFailure(error, detectProvider(account.email).credentialHint);
-      if (!submissionId) return reply.code(failure.statusCode).send(failure.body);
-
-      const deliveryStatus = deliveryFailureStatus(error);
-      const submission = deliveryStatus === "unknown_delivery"
-        ? markSubmissionUnknownDelivery(context.db, context.masterKey, submissionId, failure.body.code, failure.body.message)
-        : markSubmissionFailed(context.db, context.masterKey, submissionId, failure.body.code, failure.body.message);
-      if (deliveryStatus === "unknown_delivery") {
-        scheduleSentVerification(submission.id);
-        return reply.code(202).send({
-          ok: true,
-          messageId: submission.messageId,
-          deliveryStatus: submission.deliveryStatus,
-          submission,
-          message: unknownDeliveryVerificationMessage,
-        });
-      }
-      return reply.code(failure.statusCode).send({
-        ...failure.body,
-        deliveryStatus: submission.deliveryStatus,
-        submission,
-      });
+      return reply.code(failure.statusCode).send(failure.body);
     }
   });
 
@@ -948,7 +861,13 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     const submission = submissionForId(context.db, context.masterKey, request.params.id);
     if (!submission) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "发送任务不存在。" });
     const requestPayload = submissionRequestForId(context.db, context.masterKey, request.params.id);
-    const cancelled = deletePendingScheduledSubmission(context.db, request.params.id);
+    // One call, because the ledger row's lifetime and its task's are one
+    // lifetime: the withdrawal commits both deletes or neither, and the half-state
+    // is the ghost the contract names -- a `send` task whose `submission_id` the
+    // foreign key has just nulled, which an attempt can only abort as
+    // `no_submission`. `false` is the ledger's own predicate answering (`status =
+    // 'pending' AND send_at > now`), i.e. the send has come due or is in flight.
+    const cancelled = cancelScheduledSend(context.db, request.params.id);
     if (!cancelled) {
       return reply.code(409).send({ ok: false, code: ROUTE_ERROR_CODES.conflict, message: "该邮件已到发送时间或正在发送，无法取消。" });
     }

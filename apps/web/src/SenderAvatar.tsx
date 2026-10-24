@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useCustomAvatar } from "./avatarStore";
 import { useBimiLogo } from "./bimiStore";
+import { getBrandAvatar } from "./brand-avatars";
 
 export function initials(name: string, address: string): string {
   const value = name.trim() || address.split("@")[0] || "?";
@@ -110,23 +111,58 @@ type SenderAvatarProps = {
 };
 
 /**
- * Sender avatar: a locally configured picture wins, then (when enabled) the
- * BIMI brand logo for the sender's domain, then (when enabled) Gravatar, then
- * colored initials (Gmail/QQ/163/custom domains uniformly). Gravatar sends
- * the md5(email) to a third party only when gravatarEnabled is true; BIMI
- * requests carry only the sender's domain, resolved by the local service; and
- * locally stored avatars never leave the machine.
+ * Sender avatar: a locally configured picture wins, then a built-in official
+ * brand avatar (0ms local vector), then (when enabled) the BIMI brand logo for
+ * the sender's domain, then (when enabled) Gravatar, then colored initials.
+ *
+ * The built-in brand glyph has no toggle, by design: it resolves from a bundled
+ * table and makes no network request, so it is always-on exactly like the local
+ * custom avatar. The two network-backed sources (BIMI, Gravatar) are the ones
+ * that need an opt-in, because those requests leave the machine. Gravatar is
+ * fetched through this app's own proxy (`/api/avatars/gravatar/<md5>`), so the
+ * renderer itself never contacts that host.
+ *
+ * Every branch renders the mark as decoration: the sender's identity is always
+ * in adjacent text, so the tiles are hidden from assistive tech rather than
+ * given a name that would only duplicate the text next to them.
  */
-export function SenderAvatar({ name, address, tone, size, gravatarEnabled, bimiEnabled }: SenderAvatarProps) {
+export function SenderAvatar({
+  name,
+  address,
+  tone,
+  size,
+  gravatarEnabled,
+  bimiEnabled,
+}: SenderAvatarProps) {
   const [failed, setFailed] = useState(false);
   const email = address.trim().toLowerCase();
   const domain = email.split("@")[1] ?? "";
   const customAvatar = useCustomAvatar(email);
-  // An empty domain (feature off) keeps the store untouched: no request, no snapshot.
-  const bimiLogo = useBimiLogo(bimiEnabled ? domain : "");
+  const brandAvatar = getBrandAvatar(email);
+  // An empty domain (feature off or already matched locally) keeps the store untouched: no request, no snapshot.
+  const shouldFetchBimi = bimiEnabled && !customAvatar && !brandAvatar;
+  const bimiLogo = useBimiLogo(shouldFetchBimi ? domain : "");
   const className = `sender-avatar${size ? ` ${size}` : ""} tone-${tone}`;
   if (customAvatar) {
     return <span className={className}><img src={customAvatar} alt="" /></span>;
+  }
+  // Every bundled glyph is a simple-icons 24x24 mark, so the viewBox and the glyph color
+  // are constants rather than per-brand data; the tile takes the brand's published color.
+  // The `brand-avatar` class carries no styles of its own - `.sender-avatar` sizes the tile
+  // and the inline style colors it - it exists so the DOM and the tests can tell apart which
+  // source resolved without re-deriving it from the rendered pixels.
+  if (brandAvatar) {
+    return (
+      <span
+        className={`sender-avatar brand-avatar${size ? ` ${size}` : ""}`}
+        aria-hidden="true"
+        style={{ backgroundColor: brandAvatar.color, color: "#ffffff" }}
+      >
+        <svg viewBox="0 0 24 24" style={{ width: "56%", height: "56%", fill: "currentColor" }}>
+          <path d={brandAvatar.svgPath} />
+        </svg>
+      </span>
+    );
   }
   if (bimiLogo) {
     return <span className={className}><img src={bimiLogo} alt="" /></span>;
@@ -137,8 +173,13 @@ export function SenderAvatar({ name, address, tone, size, gravatarEnabled, bimiE
   }
   return (
     <span className={className}>
+      {/*
+        Same-origin proxy, not gravatar.com: the renderer sends only the md5 it
+        already computed, and the server builds the upstream URL itself. Direct
+        requests would also be blocked by `img-src 'self' data: blob:`.
+      */}
       <img
-        src={`https://www.gravatar.com/avatar/${md5(email)}?d=404&s=96`}
+        src={`/api/avatars/gravatar/${md5(email)}`}
         alt=""
         loading="lazy"
         referrerPolicy="no-referrer"

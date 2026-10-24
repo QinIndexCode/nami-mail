@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "./db.js";
+import { isVisibleAttachment } from "@nami/agent-contracts";
 import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from "./crypto.js";
 import { attachmentKindsJson } from "./attachment-kind.js";
 
@@ -21,7 +22,7 @@ export const MAILBOX_SYNCING_ERROR = "邮箱正在同步，请稍后重试。";
 export const MAIL_MOVE_IN_FLIGHT_ERROR = "上一条移动操作仍在处理中，请稍后重试。";
 
 const MESSAGE_MIGRATION_ID = "message-payload-v1";
-const ATTACHMENT_KINDS_MIGRATION_ID = "attachment-kinds-v1";
+const ATTACHMENT_METADATA_MIGRATION_ID = "attachment-metadata-v1";
 const messageKeyPurpose = "message-payload-v1";
 
 export type StoredAddress = { name: string; address: string };
@@ -99,6 +100,32 @@ export type MessageStorageRow = Record<string, unknown> & {
   payload_metadata_ready?: number | null;
 };
 
+/** A message row paired with the generation its mailbox carried in the same read. */
+export type GenerationStampedMessageRow = MessageStorageRow & {
+  snapshot_uid_validity: string | null;
+};
+
+/**
+ * Reads a message row and its mailbox generation as one snapshot.
+ *
+ * Downloads read the row and then spend an arbitrary time opening a connection.
+ * A separate sync can rebuild the mailbox -- atomically rewriting `folders` and
+ * resetting the folder's rows -- while that wait is in progress, so a generation
+ * read *after* the wait would describe the provider's new epoch while the row
+ * still names the old message (and its attachments). SQLite serves one
+ * statement from one snapshot, so this pair always describes the same moment;
+ * the caller compares the stamped value with the live `UIDVALIDITY` after the
+ * mailbox lock and refuses on a mismatch.
+ */
+export function generationStampedMessage(db: DatabaseHandle, messageId: string): GenerationStampedMessageRow | undefined {
+  return db.prepare(`
+    SELECT m.*, f.uid_validity AS snapshot_uid_validity
+    FROM messages AS m
+    LEFT JOIN folders AS f ON f.account_id = m.account_id AND f.path = m.mailbox
+    WHERE m.id = ?
+  `).get(messageId) as GenerationStampedMessageRow | undefined;
+}
+
 function pendingMoveDestinationValue(row: unknown): string | null {
   const destination = row && typeof row === "object"
     ? (row as Record<string, unknown>).pending_move_destination
@@ -142,7 +169,7 @@ function payloadAad(id: string, accountId: string): string {
 
 // The HKDF derivation dominates bulk decrypt cost and its output depends only
 // on (masterKey, purpose) — crypto.ts mixes in a compile-time-constant salt —
-// so memoize it per master-key object (same pattern as sync.ts's
+// so memoize it per master-key object (same pattern as message-remote-id.ts's
 // remoteIdLookupKeyCache). The cached key shares the master key's own lifetime
 // (both live for the whole process), which is why it is not zeroed after each
 // use unlike a single-shot key. Callers never mutate the key.
@@ -467,22 +494,29 @@ function clearPlaintextColumns(db: DatabaseHandle, row: MessageStorageRow, encry
 const VERIFICATION_PAGE_SIZE = 200;
 
 /**
- * Decrypts every stored payload in rowid-keyset pages and throws on the first
- * undecryptable row. Runs only when the encryption migration's proof of
- * decryptability can be stale: when the marker is still missing (first
- * startup after the migration, or a marker cleared by an interrupted retry —
- * a crash mid-migration can leave rows in either form, and a half-migrated
- * corrupted row must not be silently accepted) and whenever rows were
- * re-encrypted during this pass. Routine startups (marker present, nothing
- * migrated) skip the sweep entirely: re-proving every row costs a full
- * decrypt of the mailbox plus seconds of main-process block before listen,
- * for a property the next real decrypt re-establishes anyway — a row
- * corrupted after the sweep is skipped surfaces there instead. A
- * fingerprint/sample hybrid was rejected because a sampled scheme still
- * passes a corrupted row a full pass would catch, and the stored ciphertext
- * length carries no authenticated fingerprint to compare against.
+ * Decrypts every stored payload in rowid-keyset pages and throws once the sweep
+ * is done if any row could not be decrypted. Rows are collected first, so the
+ * error can name the affected ids: the previous "throw on the first bad row"
+ * gave the operator a stack trace with no idea which message was damaged or how
+ * many others were, and the marker is only written after a clean sweep, so every
+ * following start failed the same way with the same silence.
+ *
+ * Runs only when the encryption migration's proof of decryptability can be
+ * stale: when the marker is still missing (first startup after the migration, or
+ * a marker cleared by an interrupted retry — a crash mid-migration can leave rows
+ * in either form) and whenever rows were re-encrypted during this pass. Routine
+ * startups (marker present, nothing migrated) skip the sweep entirely: re-proving
+ * every row costs a full decrypt of the mailbox plus seconds of main-process
+ * block before listen, for a property the next real decrypt re-establishes
+ * anyway — a row corrupted after the sweep is skipped surfaces there instead. A
+ * fingerprint/sample hybrid was rejected because a sampled scheme still passes a
+ * corrupted row a full pass would catch, and the stored ciphertext length carries
+ * no authenticated fingerprint to compare against.
  */
-function verifyEncryptedPayloads(db: DatabaseHandle, masterKey: Buffer): number {
+function verifyEncryptedPayloads(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { verified: number; unreadable: string[] } {
   // Keyset pagination over rowid (the physical scan order, never NULL): each
   // page reads only its own ciphertexts, so peak memory is one page instead
   // of the whole mailbox.
@@ -492,50 +526,92 @@ function verifyEncryptedPayloads(db: DatabaseHandle, masterKey: Buffer): number 
   `);
   let cursor = 0;
   let verified = 0;
+  let total = 0;
+  // Bounded: a store where everything is unreadable must not build a list of
+  // every id before failing closed.
+  const unreadable: string[] = [];
+  const UNREADABLE_ID_SAMPLE = 50;
   for (;;) {
     const batch = page.all(cursor, VERIFICATION_PAGE_SIZE) as Array<MessageStorageRow & { rowid: number }>;
     if (batch.length === 0) break;
     for (const row of batch) {
-      messagePayloadForRow(row, masterKey);
-      verified += 1;
+      total += 1;
+      try {
+        messagePayloadForRow(row, masterKey);
+        verified += 1;
+      } catch {
+        if (unreadable.length < UNREADABLE_ID_SAMPLE) unreadable.push(row.id);
+      }
     }
     cursor = batch[batch.length - 1]!.rowid;
     if (batch.length < VERIFICATION_PAGE_SIZE) break;
   }
-  return verified;
+  if (unreadable.length > 0) {
+    // Fail closed on purpose: a payload that cannot be decrypted means the file
+    // no longer matches what was written, and starting up would hide that. The
+    // error names the rows because a stack trace alone left the operator with no
+    // way to tell one damaged message from a key problem.
+    throw new Error(
+      `${unreadable.length} of ${total} stored message payload(s) could not be decrypted after migration. `
+      + `The file was left untouched. First affected ids: ${unreadable.join(", ")}`,
+    );
+  }
+  return { verified, unreadable };
 }
 
 /**
- * Encrypts legacy rows transactionally. Missing completion markers cause the
- * physical cleanup to be retried after an interrupted migration.
+ * Encrypts legacy rows transactionally in rowid-keyset pages. Missing completion
+ * markers cause the physical cleanup to be retried after an interrupted
+ * migration.
  */
-export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { migrated: number; vacuumed: boolean } {
+export function migrateMessageStorage(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { migrated: number; vacuumed: boolean; unreadable: string[] } {
   const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(MESSAGE_MIGRATION_ID);
-  const rows = db.prepare(`
-    SELECT * FROM messages
-    WHERE encrypted_payload IS NULL OR encrypted_payload = '' OR payload_version <> ?
-       OR message_id IS NOT NULL OR subject <> '' OR from_name <> '' OR from_address <> ''
-       OR to_json <> '[]' OR COALESCE(cc_json, '[]') <> '[]' OR in_reply_to IS NOT NULL
-       OR COALESCE(references_json, '[]') <> '[]' OR snippet <> '' OR text_body <> '' OR html_body <> ''
-       OR COALESCE(attachments_json, '[]') <> '[]'
-  `).all(MESSAGE_PAYLOAD_VERSION) as MessageStorageRow[];
+  // Paged like the verification sweep: a first start after the encryption
+  // migration matches every row, and reading them all at once was measured at
+  // hundreds of MB of JS heap for a large mailbox before listen.
+  const selectPage = db.prepare(`
+    SELECT rowid, * FROM messages
+    WHERE rowid > ? AND (
+      encrypted_payload IS NULL OR encrypted_payload = '' OR payload_version <> ?
+         OR message_id IS NOT NULL OR subject <> '' OR from_name <> '' OR from_address <> ''
+         OR to_json <> '[]' OR COALESCE(cc_json, '[]') <> '[]' OR in_reply_to IS NOT NULL
+         OR COALESCE(references_json, '[]') <> '[]' OR snippet <> '' OR text_body <> '' OR html_body <> ''
+         OR COALESCE(attachments_json, '[]') <> '[]'
+    )
+    ORDER BY rowid LIMIT ?
+  `);
 
-  const migrate = db.transaction(() => {
-    for (const row of rows) {
-      const payload = messagePayloadForRow(row, masterKey);
-      clearPlaintextColumns(db, row, encryptMessagePayload(masterKey, row.id, row.account_id, payload));
+  let migrated = 0;
+  db.transaction(() => {
+    let cursor = 0;
+    for (;;) {
+      const rows = selectPage.all(cursor, MESSAGE_PAYLOAD_VERSION, VERIFICATION_PAGE_SIZE) as Array<
+        MessageStorageRow & { rowid: number }
+      >;
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        const payload = messagePayloadForRow(row, masterKey);
+        clearPlaintextColumns(db, row, encryptMessagePayload(masterKey, row.id, row.account_id, payload));
+      }
+      migrated += rows.length;
+      cursor = rows[rows.length - 1]!.rowid;
+      if (rows.length < VERIFICATION_PAGE_SIZE) break;
     }
-  });
-  migrate();
+  })();
 
   // Previously this sweep decrypted the whole mailbox on every startup,
   // before listen. It is now owed only when the decryptability proof can be
   // stale: no marker yet (first startup after the migration, or a marker
   // cleared by an interrupted retry) or rows migrated in this pass.
-  const encryptedRowCount = !marker || rows.length > 0 ? verifyEncryptedPayloads(db, masterKey) : 0;
+  const verification = !marker || migrated > 0
+    ? verifyEncryptedPayloads(db, masterKey)
+    : { verified: 0, unreadable: [] };
 
   let vacuumed = false;
-  if (rows.length > 0 || (!marker && encryptedRowCount > 0)) {
+  if (migrated > 0 || (!marker && verification.verified > 0)) {
     db.pragma("wal_checkpoint(TRUNCATE)");
     db.exec("VACUUM");
     db.pragma("wal_checkpoint(TRUNCATE)");
@@ -546,37 +622,71 @@ export function migrateMessageStorage(db: DatabaseHandle, masterKey: Buffer): { 
     ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
   `).run(MESSAGE_MIGRATION_ID, new Date().toISOString());
   if (vacuumed) db.pragma("wal_checkpoint(TRUNCATE)");
-  return { migrated: rows.length, vacuumed };
+  // Unreadable rows are reported rather than thrown: the sweep now distinguishes
+  // "one damaged message" from "nothing readable at all" (which still throws).
+  return { migrated, vacuumed, unreadable: verification.unreadable };
 }
 
 /**
- * Backfills the attachment-kind search column for rows written before the
- * column existed. Rows inserted after this migration carry the kinds via the
- * sync/draft paths, so this pass is a one-time decrypt sweep (the same cost
- * profile as the FTS rebuild). Runs after `migrateMessageStorage`, which
- * guarantees every row holds a decryptable payload.
+ * Recomputes both derived attachment columns for rows written before the
+ * visible-attachment rule existed: `has_attachments` used to count every part
+ * the parser listed, including `multipart/related` inline images, so a message
+ * whose only "attachment" was a signature logo or tracking pixel carried a
+ * paperclip that the reader — which lists only non-related parts — could not
+ * explain. `attachment_kinds_json` had the same bias: its kinds could name an
+ * attachment the reader never shows.
+ *
+ * One decrypt sweep for both columns (the same cost profile as the FTS
+ * rebuild), in rowid-keyset pages so a large mailbox is not read into memory at
+ * once. Runs after `migrateMessageStorage`, which guarantees every row holds a
+ * decryptable payload. A row whose payload cannot be read keeps its previous
+ * values: nothing can be derived from it, and inventing zeros would trade one
+ * inconsistency for another.
+ *
+ * That exception is counted rather than dropped. The sweep still records its
+ * marker — a permanently unreadable row must not cost a full-table decrypt on
+ * every start — so the returned `unclassified` count is the only trace that the
+ * columns and the derived metadata disagree somewhere, and callers that gain a
+ * diagnostics surface should report it.
  */
-export function ensureAttachmentKinds(db: DatabaseHandle, masterKey: Buffer): { backfilled: number } {
-  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_KINDS_MIGRATION_ID);
-  if (marker) return { backfilled: 0 };
-  const rows = db.prepare("SELECT * FROM messages").all() as MessageStorageRow[];
-  const update = db.prepare("UPDATE messages SET attachment_kinds_json = ? WHERE id = ?");
+export function ensureAttachmentMetadata(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+): { backfilled: number; unclassified: number } {
+  const marker = db.prepare("SELECT 1 FROM data_migrations WHERE id = ?").get(ATTACHMENT_METADATA_MIGRATION_ID);
+  if (marker) return { backfilled: 0, unclassified: 0 };
+  const selectPage = db.prepare(`
+    SELECT rowid, * FROM messages WHERE rowid > ? ORDER BY rowid LIMIT ?
+  `);
+  const update = db.prepare("UPDATE messages SET has_attachments = ?, attachment_kinds_json = ? WHERE id = ?");
   let backfilled = 0;
+  let unclassified = 0;
   db.transaction(() => {
-    for (const row of rows) {
-      let payload: MessagePayload;
-      try {
-        payload = messagePayloadForRow(row, masterKey);
-      } catch {
-        continue; // Unreadable payloads cannot be classified either.
+    let cursor = 0;
+    for (;;) {
+      const rows = selectPage.all(cursor, VERIFICATION_PAGE_SIZE) as Array<MessageStorageRow & { rowid: number }>;
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        let payload: MessagePayload;
+        try {
+          payload = messagePayloadForRow(row, masterKey);
+        } catch {
+          // Unreadable payloads cannot be classified either; the row keeps the
+          // flag it had, and the count below is what says so.
+          unclassified += 1;
+          continue;
+        }
+        const visible = (payload.attachments ?? []).filter(isVisibleAttachment);
+        update.run(visible.length ? 1 : 0, attachmentKindsJson(visible), row.id);
+        backfilled += 1;
       }
-      update.run(attachmentKindsJson(payload.attachments ?? []), row.id);
-      backfilled += 1;
+      cursor = rows[rows.length - 1]!.rowid;
+      if (rows.length < VERIFICATION_PAGE_SIZE) break;
     }
     db.prepare(`
       INSERT INTO data_migrations (id, completed_at) VALUES (?, ?)
       ON CONFLICT(id) DO UPDATE SET completed_at = excluded.completed_at
-    `).run(ATTACHMENT_KINDS_MIGRATION_ID, new Date().toISOString());
+    `).run(ATTACHMENT_METADATA_MIGRATION_ID, new Date().toISOString());
   })();
-  return { backfilled };
+  return { backfilled, unclassified };
 }

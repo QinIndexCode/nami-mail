@@ -159,7 +159,12 @@ export interface MailApplicationService {
 
   /** Wrap `prepareSubmission` and preserve its idempotency key for a later visible confirmation. */
   prepareSubmission(context: MailApplicationContext, input: DraftMutation & { idempotencyKey?: string }): Promise<PreparedMailSubmission>;
-  /** Wrap current SMTP/outbox verification only after the immutable confirmation is consumed. */
+  /**
+   * Accepts a prepared submission for dispatch and returns the state that was
+   * persisted. The send itself (SMTP, the draft discard, the Sent verification)
+   * belongs to the task scheduler's `send` runner, so the status this answers
+   * with is normally `pending` -- never a claim that the mail already left.
+   */
   submitPreparedMail(context: MailApplicationContext, submissionId: string): Promise<PreparedMailSubmission>;
   /** Permanently removes a mail account and its local state. Requires a visible confirmation. */
   deleteAccount(context: MailApplicationContext, accountId: string): Promise<void>;

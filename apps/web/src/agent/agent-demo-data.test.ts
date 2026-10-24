@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getBrandAvatar } from "../brand-avatars";
 import { createDemoConversation, createDemoSourceMessages } from "./agent-demo-data";
 
 describe("Agent demo conversation", () => {
@@ -27,5 +28,22 @@ describe("Agent demo conversation", () => {
       conversation.messages.flatMap((message) => message.citations).every((citation) => sourceIds.has(citation.messageId)),
     ).toBe(true);
     expect(conversation.preview).toBe(conversation.messages[3]?.content);
+  });
+});
+
+describe("Agent demo senders", () => {
+  // A demo screenshot pairing a fictional sender with a real company's mark would
+  // read as that brand endorsing the sample mail, so every demo address has to stay
+  // on a reserved domain that no bundled brand claims.
+  it("never puts a demo sender on a bundled brand domain", () => {
+    for (const locale of ["zh-CN", "en-US"]) {
+      const sources = createDemoSourceMessages(locale);
+      expect(sources.length).toBeGreaterThan(0);
+
+      for (const source of sources) {
+        expect(getBrandAvatar(source.from.address)).toBeUndefined();
+        expect(getBrandAvatar(source.accountEmail)).toBeUndefined();
+      }
+    }
   });
 });

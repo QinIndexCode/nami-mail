@@ -248,9 +248,27 @@ function writeFileAtomically(filePath: string, payload: Buffer): void {
   }
 }
 
+/**
+ * One attachment's plaintext, or an `OutboundAttachmentError` saying the file is
+ * unusable.
+ *
+ * The wrap is the point. `assertStoredFile` already answers a missing, renamed or
+ * truncated file with "re-add this attachment" (`409`), and a file that will not
+ * open is the same answer to the user for the same reason -- but the cipher's own
+ * `Error` used to escape instead, and one layer down the two became
+ * indistinguishable: the send path could not tell a damaged upload from a
+ * database that refused the read, so it had to retry a file that will never open.
+ * Before the task layer it answered "the mail may be out, check Sent" for a mail
+ * that never left a socket, which is the one answer that must never be a guess.
+ */
 function storedAttachmentContent(row: StoredOutboundAttachment, directory: string, masterKey: Buffer): Buffer {
   const filePath = assertStoredFile(directory, row);
-  return decryptAttachmentContent(row, fs.readFileSync(filePath), masterKey);
+  try {
+    return decryptAttachmentContent(row, fs.readFileSync(filePath), masterKey);
+  } catch (error) {
+    if (error instanceof OutboundAttachmentError) throw error;
+    throw new OutboundAttachmentError("附件文件已不可用，请重新添加。", 409);
+  }
 }
 
 function migrateStoredAttachment(db: DatabaseHandle, directory: string, row: StoredOutboundAttachment, masterKey: Buffer): boolean {
@@ -397,6 +415,68 @@ export function createOutboundAttachment(
   }
 }
 
+/**
+ * The one implementation of "is this token set acceptable", returning the rows it
+ * accepted.
+ *
+ * Private, and the rows are why: `StoredOutboundAttachment` stays inside this
+ * module (the convention `outbox.ts`'s `StoredSubmission` also follows), so the
+ * exported projections below hand out the public shape instead of leaking the
+ * storage layout to callers. Both of them are one `map` over this, which is the
+ * point -- there is one copy of the rules and one row read per token, and the
+ * send acceptance, the send runner and the composing path cannot drift apart.
+ *
+ * Three checks, in the order the caller-visible errors imply: token shape and
+ * count first (400), then one row lookup per token, then the cumulative size
+ * bound (413). An absent token and another account's token get the *same* answer
+ * on purpose: a renderer must never be able to use a token as a path probe.
+ *
+ * No file is touched and nothing is decrypted beyond the metadata this reads --
+ * that is what lets the send acceptance call this inside its own transaction
+ * (`acceptSendTask`). File existence is deliberately *not* checked here: the
+ * answer belongs to the attempt, not the acceptance, because the 24h TTL cleanup
+ * runs in between and may legitimately have taken the file by then.
+ */
+function validatedOutboundAttachmentRows(
+  db: DatabaseHandle,
+  accountId: string,
+  tokens: readonly string[],
+): StoredOutboundAttachment[] {
+  validateOutboundAttachmentTokens(tokens);
+  let totalBytes = 0;
+  const rows: StoredOutboundAttachment[] = [];
+  for (const token of tokens) {
+    const row = rowForToken(db, token);
+    if (!row || row.account_id !== accountId) throw new OutboundAttachmentError("附件不存在或不属于当前发件邮箱。", 404);
+    totalBytes += row.size;
+    if (totalBytes > MAX_OUTBOUND_ATTACHMENTS_BYTES) {
+      throw new OutboundAttachmentError("所有附件合计不能超过 25 MB。", 413);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * Validates a token set and answers with the attachments it names, reading no
+ * file and decrypting no body.
+ *
+ * The send acceptance needs exactly this and nothing more: a bad token set has to
+ * be a 4xx on the request, and it has to be found inside the same transaction
+ * that writes the submission -- but `better-sqlite3` runs a transaction body
+ * synchronously, so a disk read in there would hold the database's write lock for
+ * the length of an I/O. Splitting the check from `resolveOutboundAttachments` is
+ * what makes that possible; the file read stays with the runner, one phase later.
+ */
+export function validateOutboundAttachmentSet(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  accountId: string,
+  tokens: readonly string[],
+): OutboundAttachment[] {
+  return validatedOutboundAttachmentRows(db, accountId, tokens).map((row) => publicAttachment(row, masterKey));
+}
+
 /** Resolves opaque tokens into bounded in-memory attachment payloads for Nodemailer. */
 export function resolveOutboundAttachments(
   db: DatabaseHandle,
@@ -405,21 +485,10 @@ export function resolveOutboundAttachments(
   accountId: string,
   tokens: readonly string[],
 ): ResolvedOutboundAttachment[] {
-  validateOutboundAttachmentTokens(tokens);
-  let totalBytes = 0;
-  const attachments: ResolvedOutboundAttachment[] = [];
-  for (const token of tokens) {
-    const row = rowForToken(db, token);
-    // Deliberately use the same response for absent tokens and tokens owned by
-    // a different account. A renderer must never use a token as a file path.
-    if (!row || row.account_id !== accountId) throw new OutboundAttachmentError("附件不存在或不属于当前发件邮箱。", 404);
-    totalBytes += row.size;
-    if (totalBytes > MAX_OUTBOUND_ATTACHMENTS_BYTES) {
-      throw new OutboundAttachmentError("所有附件合计不能超过 25 MB。", 413);
-    }
-    attachments.push({ ...publicAttachment(row, masterKey), content: storedAttachmentContent(row, directory, masterKey) });
-  }
-  return attachments;
+  return validatedOutboundAttachmentRows(db, accountId, tokens).map((row) => ({
+    ...publicAttachment(row, masterKey),
+    content: storedAttachmentContent(row, directory, masterKey),
+  }));
 }
 
 export function linkOutboundAttachmentsToDraft(

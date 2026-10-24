@@ -7,6 +7,7 @@ import process from "node:process";
 import {
   assertWindowsSqlitePrebuild,
   projectRoot,
+  sqliteModuleName,
   sqliteModulePath,
 } from "./sqlite-native.mjs";
 
@@ -36,15 +37,15 @@ assert.ok(fs.existsSync(electronExecutable), `Electron executable is missing: ${
 const prebuildHashBefore = hashFile(prebuildPath);
 const nodeProbe = run(process.execPath, [
   "--eval",
-  "const Database = require('better-sqlite3'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);",
+  `const Database = require('${sqliteModuleName}'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);`,
 ]);
-assert.equal(nodeProbe, process.versions.modules, "better-sqlite3 did not load in the command-line Node runtime.");
+assert.equal(nodeProbe, process.versions.modules, `${sqliteModuleName} did not load in the command-line Node runtime.`);
 
 const electronProbe = run(
   electronExecutable,
   [
     "--eval",
-    "const Database = require('better-sqlite3'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);",
+    `const Database = require('${sqliteModuleName}'); const database = new Database(':memory:'); const row = database.prepare('SELECT 13 AS value').get(); database.close(); if (row.value !== 13) process.exit(1); console.log(process.versions.modules);`,
   ],
   { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
 );

@@ -182,6 +182,24 @@ describe("clampContextMenuPosition", () => {
 });
 
 describe("message list context menu", () => {
+  it("resolves localized Trash metadata for both row shortcuts and the context menu", () => {
+    const onQuickMoveMessage = vi.fn();
+    const html = renderList({
+      accounts: [{ ...account, folders: [{ path: "已删除邮件", name: "已删除邮件", specialUse: "\\Trash", total: 1, unseen: 0 }] }],
+      messages: [message({ id: "m-1", mailbox: "已删除邮件" })],
+      onQuickMoveMessage,
+    });
+    expect(html.querySelector('.row-quick-action[aria-label="恢复到收件箱"]')).not.toBeNull();
+    rightClickRow(html, 0, 300, 120);
+    const menu = html.querySelector('.context-menu')!;
+    const restore = Array.from(menu.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(zh("mail.action.restore")));
+    expect(restore).toBeDefined();
+    expect(menu.textContent).not.toContain(zh("mail.action.archive"));
+    expect(menu.textContent).not.toContain(zh("mail.action.moveToTrash"));
+    act(() => restore!.click());
+    expect(onQuickMoveMessage).toHaveBeenCalledWith(expect.objectContaining({ id: "m-1" }), "inbox");
+  });
+
   it("opens at the pointer with the expected actions after a right-click on a row", () => {
     const html = renderList({});
     rightClickRow(html, 0, 300, 120);
@@ -463,6 +481,35 @@ describe("mail reader title wrapping", () => {
     expect(keyboardBlock).toContain("outline-offset:2px");
     // Guard against regressing to a single bare outline:none rule on focus.
     expect(stylesheet).not.toMatch(/\.mail-title h2:focus\s*\{\s*outline:none\s*\}/);
+  });
+});
+
+describe("attachment marker", () => {
+  it("marks only messages whose reader has an attachment section", () => {
+    // A multipart/related inline image is a body resource, not an attachment:
+    // the reader filters it out. The row used to trust the server's
+    // hasAttachments flag, so a message whose only part was such an image got a
+    // paperclip that opened onto nothing. Both rows here carry a stale truthy
+    // flag; only the real file may show the marker.
+    const html = renderList({
+      messages: [
+        message({
+          id: "inline-only",
+          hasAttachments: true,
+          attachments: [{ partId: "2.2", filename: "wordmark.png", contentType: "image/png", size: 915, related: true, disposition: "inline" }],
+        }),
+        message({
+          id: "real-file",
+          hasAttachments: true,
+          attachments: [{ partId: "2", filename: "invoice.pdf", contentType: "application/pdf", size: 7, related: false, disposition: "attachment" }],
+        }),
+      ],
+    });
+    const marker = (id: string) =>
+      rows(html).find((row) => row.dataset.messageId === id)?.querySelector(".lucide-paperclip") ?? null;
+
+    expect(marker("inline-only")).toBeNull();
+    expect(marker("real-file")).not.toBeNull();
   });
 });
 

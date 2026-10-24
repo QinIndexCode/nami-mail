@@ -106,6 +106,11 @@ describe("sending status modal presentation (SSR)", () => {
     });
 
     expect(mapped).toContain(zh("sending.notice.unknownDelivery"));
+    expect(mapped).toContain(zh("sending.notice.unknownDeliveryDetail"));
+    // The generic timeout/unknown advice ("check the network, try again") is the
+    // wrong instruction for a mail that may already be in Sent.
+    expect(mapped).not.toContain(zh("error.timeout.guidance"));
+    expect(mapped).not.toContain(zh("error.unknown.guidance"));
     expect(mapped).not.toContain("socket hang up");
 
     const markup = renderToStaticMarkup(

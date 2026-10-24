@@ -1,7 +1,12 @@
 import type { DatabaseHandle } from "./db.js";
 import { accountById } from "./account-store.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
-import { moveActionBlockedError, messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
+import { generationStampedMessage, moveActionBlockedError, messagePayloadForRow } from "./message-storage.js";
+import {
+  UID_GENERATION_CHANGED_ERROR,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+} from "./mailbox-generation.js";
 
 export type MessageSourceDownload = {
   /** The provider's original RFC822 source for the message. */
@@ -22,9 +27,7 @@ export async function downloadMessageSource(
   messageId: string,
   accessTokenProvider?: AccountAccessTokenProvider,
 ): Promise<MessageSourceDownload> {
-  const message = db.prepare(`
-    SELECT * FROM messages WHERE id = ?
-  `).get(messageId) as MessageStorageRow | undefined;
+  const message = generationStampedMessage(db, messageId);
   if (!message) throw new Error("Message not found.");
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError) throw new Error(moveBlockedError);
@@ -37,6 +40,15 @@ export async function downloadMessageSource(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
+    // The generation the row was read with, not one read after the wait: a sync
+    // may have rebuilt the mailbox while the connection opened, and the row (and
+    // its subject) still describes the old message (`message-storage.ts`).
+    if (!uidGenerationAllowsWrite(
+      { source: "accepted", value: message.snapshot_uid_validity },
+      liveUidValidity(client),
+    )) {
+      throw new Error(UID_GENERATION_CHANGED_ERROR);
+    }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, source: true }, { uid: true });
     if (!remoteMessage || remoteMessage.uid !== message.uid || !Buffer.isBuffer(remoteMessage.source)) {
       throw new Error("Message is no longer available in this mailbox. Sync this message again.");

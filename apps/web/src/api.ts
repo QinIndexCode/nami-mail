@@ -62,6 +62,18 @@ export type SendMessageResult = {
  */
 export type MoveTarget = "archive" | "trash" | "junk" | "inbox";
 
+/**
+ * Result of a single-message move (`POST /api/messages/:id/move`).
+ *
+ * The route commits the message's goal and returns; the durable task it also
+ * committed performs the MOVE and reconciles the account. So `destination` is
+ * known locally at once, `refreshPending` means "something is still coming for
+ * this message", and the two keys that name the task are added only when there is
+ * one. The three keys that described the provider's answer (`uid`, `uncertain`,
+ * `locationUnverified`) are no longer sent — they were only knowable while the
+ * request itself awaited IMAP — and they stay optional here because the callers
+ * that read them already treat an absent value as "keep the local one".
+ */
 export type MoveMessageResult = {
   ok: boolean;
   destination: string;
@@ -71,6 +83,9 @@ export type MoveMessageResult = {
   uncertain?: boolean;
   /** The provider confirmed MOVE but supplied no stable target identifier. */
   locationUnverified?: boolean;
+  /** The committed task's id and status. Absent when no task was needed. */
+  taskId?: string;
+  status?: "pending";
 };
 
 /**
@@ -90,52 +105,27 @@ export type BatchMessageOperationResult = {
   failures?: Array<{ id: string; message: string }>;
 };
 
-export type BatchJobQuery = {
-  accountId?: string;
-  folder?: string;
-  q?: string;
-  starred?: boolean;
-  unread?: boolean;
-  archived?: boolean;
-  snoozed?: boolean;
-  /** Matches the server's hasAttachments: the Attachments view across folders. */
-  hasAttachments?: boolean;
-  /** Attachment-kind segmentation, mirroring the list filter. */
-  attachmentKind?: string;
-  /** Sent-date bounds as UTC instants ("after" inclusive, "before" exclusive). */
-  after?: string;
-  before?: string;
-  /** Matches the server's scope=all: search every account and mailbox. */
-  scope?: "all";
-};
+/**
+ * Result of a single-message flag write (`PATCH /api/messages/:id`).
+ *
+ * `ok` is all that is guaranteed. The route adds the committed task's id and its
+ * `pending` status when the write had something to push, and answers bare `ok`
+ * when the flags were already in the requested state — nothing to push, so
+ * nothing to name. A caller that only cares that the local target committed can
+ * ignore both, which is every caller today; they are declared so the shape on
+ * the wire is the shape in the type.
+ */
+export type MessageFlagWriteResult = { ok: boolean; taskId?: string; status?: "pending" };
+
+// The batch-job shapes moved to `batchJobTypes.ts`: the ratchet wants this file
+// smaller, and the delivery watcher, the panel and `App.tsx` read them without
+// the request layer. Re-exported so `import … from "./api"` still works.
+import type { BatchJobQuery, BatchJobSnapshot, BatchJobUndoReason, DeliveryTaskList } from "./batchJobTypes";
+export type { BatchJobQuery, BatchJobSnapshot, BatchJobUndoReason, DeliveryTaskList };
 
 export type BatchJobCreatePayload =
   | { kind: "flags"; patch: { seen?: boolean; flagged?: boolean }; query: BatchJobQuery }
   | { kind: "move"; target: MoveTarget; query: BatchJobQuery };
-
-/**
- * Progress view of a batch job — the exact shape of `GET /api/batch-jobs/:id`.
- *
- * Progress numbers only. The server deliberately keeps a job's changed-message
- * ids out of this response: a 30 000-id selection made every poll carry 1.3 MB,
- * and the poll loop runs every 600ms for up to 10 minutes. `batchJobUndo` needs
- * no id list either — the server undoes from its own record of what changed.
- * `undoWindowMs` stays optional because `start` fabricates a local "just
- * started" snapshot before the first poll lands.
- */
-export type BatchJobSnapshot = {
-  id: string;
-  kind: "flags" | "move" | "undo";
-  status: "running" | "completed" | "failed";
-  total: number;
-  done: number;
-  updated: number;
-  failed: number;
-  createdAt: number;
-  error?: string;
-  undone?: boolean;
-  undoWindowMs?: number;
-};
 
 export type MessageTranslationResult = {
   ok: true;
@@ -190,7 +180,7 @@ export { ApiError, type BinaryRequestOptions } from "./apiTransport";
 
 /** Longest a JSON request may wait for the local service before it is treated
  * as a failure. A wedged local service (e.g. a hung account write slot behind
- * the operation queue) must not leave the renderer's optimistic state —
+ * a task drain) must not leave the renderer's optimistic state —
  * seen/move ids and the list poll — pending forever: rejecting here lets the
  * callers' `.finally()` clear those ids so a later poll can write back the
  * server's true state. Binary endpoints are excluded on purpose and carry the
@@ -205,11 +195,8 @@ function emlFilenameFromDisposition(disposition: string | null): string {
   if (markerIndex < 0) return "message.eml";
   const encoded = header.slice(markerIndex + marker.length).split(";")[0];
   if (!encoded) return "message.eml";
-  try {
-    return decodeURIComponent(encoded) || "message.eml";
-  } catch {
-    return "message.eml";
-  }
+  // Compact because this file is on its line ratchet and `GET /api/tasks` needed the room.
+  try { return decodeURIComponent(encoded) || "message.eml"; } catch { return "message.eml"; }
 }
 
 function calendarIcsPath(range?: { after?: string; before?: string }): string { // shared by exportCalendarIcsUrl + downloadCalendarIcs
@@ -401,7 +388,8 @@ function autoReplyConfigFromSettings(settings: AppSettings): AppSettings {
 export const api = {
   accounts: () => request<Account[]>("/api/accounts"),
   providers: () => request<ProviderInfo[]>("/api/providers"),
-  stats: () => request<Stats>("/api/stats"),
+  // Scoped like the list query; omitting it keeps the whole-mailbox reading.
+  stats: (accountId?: string) => request<Stats>(accountId ? `/api/stats?accountId=${encodeURIComponent(accountId)}` : "/api/stats"),
   // Every settings response runs through the single auto-reply wire→web seam
   // (see autoReplyConfigFromWire) so scope dates are always present.
   settings: async () => autoReplyConfigFromSettings(await request<AppSettings>("/api/settings")),
@@ -545,8 +533,6 @@ export const api = {
     if (!response.ok) throw await apiError(response);
     return readSseTranslation(response, targetLocale, (partial) => onChunk(partial));
   },
-  attachmentDownloadUrl: (messageId: string, partId: string) =>
-    `/api/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(partId)}`,
   draftOutboundAttachments: (messageId: string) =>
     request<{ items: OutboundAttachment[] }>(`/api/messages/${encodeURIComponent(messageId)}/outbound-attachments`),
   importDraftOutboundAttachments: (messageId: string) =>
@@ -630,9 +616,9 @@ export const api = {
       body: "{}",
     }),
   markSeen: (id: string, seen: boolean) =>
-    request<{ ok: boolean }>(`/api/messages/${id}`, { method: "PATCH", body: JSON.stringify({ seen }) }),
+    request<MessageFlagWriteResult>(`/api/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ seen }) }),
   updateMessageFlags: (id: string, patch: { seen?: boolean; flagged?: boolean }) =>
-    request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    request<MessageFlagWriteResult>(`/api/messages/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   moveMessage: (id: string, target: MoveTarget) =>
     request<MoveMessageResult>(`/api/messages/${encodeURIComponent(id)}/move`, {
       method: "POST",
@@ -649,19 +635,32 @@ export const api = {
       body: JSON.stringify({ ids, target }),
     }),
   batchJobCreate: (payload: BatchJobCreatePayload) =>
-    request<{ ok: boolean; jobId: string }>("/api/batch-jobs", {
+    // `jobId: null` is an accepted batch that committed no task at all — the
+    // selection was already in the requested state, or matched no message. The
+    // caller must not poll it (the id would 404 forever) and cannot undo it;
+    // `updated`/`failed` are the acceptance's own arithmetic and are sent
+    // precisely for that case (`updated + failed` is the selection size).
+    request<{ ok: boolean; jobId: string | null; updated: number; failed: number }>("/api/batch-jobs", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
   batchJobStatus: (jobId: string) =>
     request<{ ok: boolean; job: BatchJobSnapshot }>(`/api/batch-jobs/${encodeURIComponent(jobId)}`),
   batchJobUndo: (jobId: string) =>
-    request<{ ok: boolean; jobId?: string; reason?: "not_found" | "not_completed" | "already_undone" | "expired" }>(
+    // The request names only the job; the answer names the *reverse* it
+    // committed, which is what the caller follows to settlement. A list, not a
+    // single id: the reverse is one undoable task per account, so a selection
+    // spanning accounts has several and no single root groups them (§4.7 A ⑨).
+    // Absent on a refusal, which arrives as a 404/409 `ApiError` carrying `reason`.
+    request<{ ok: boolean; taskIds?: string[]; reason?: BatchJobUndoReason }>(
       `/api/batch-jobs/${encodeURIComponent(jobId)}/undo`,
       { method: "POST", body: "{}" },
     ),
   discardDraft: (id: string) =>
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}/draft`, { method: "DELETE" }),
+  // The cloud-sync panel's list: what is still owing a provider write, plus the
+  // recent failures. Names no job — it is the whole in-flight set (§二十六).
+  taskList: () => request<DeliveryTaskList>("/api/tasks"),
   submissions: (accountId: string, limit?: number) => {
     const query = new URLSearchParams({ accountId });
     if (limit) query.set("limit", String(limit));

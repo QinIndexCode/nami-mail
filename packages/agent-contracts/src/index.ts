@@ -1,4 +1,5 @@
 export * from "./agent-commands.js";
+export * from "./attachment-catalog.js";
 export * from "./audit.js";
 export * from "./auto-reply.js";
 export * from "./broker.js";

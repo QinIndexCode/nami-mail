@@ -32,7 +32,17 @@ export const nativeLocaleCatalog = {
     "externalConfirmApprove": "Approve",
     "externalConfirmReject": "Reject",
     "externalAccessDriftTitle": "External Agent access scope changed",
-    "externalAccessDriftBody": "{count} paired client(s) need to be approved again. Open Settings → External access and re-pair them."
+    "externalAccessDriftBody": "{count} paired client(s) need to be approved again. Open Settings → External access and re-pair them.",
+    "externalPairAllowMessage": "Allow external read-only access for profile \"{profile}\"?",
+    "externalPairAllowFingerprint": "Profile fingerprint: {fingerprint}",
+    "externalPairAllowAccounts": "Authorized account snapshot: {count} connected account(s).",
+    "externalPairAllowBoundary": "The external interface can only list or read bounded mail data. It cannot send, move, delete, or change mail.",
+    "externalPairAllowButton": "Allow read-only access",
+    "externalPairRevokeMessage": "Revoke external access for profile \"{profile}\"?",
+    "externalPairRevokeEffect": "The profile will no longer be able to read mail through NamiMail.",
+    "externalPairRevokeButton": "Revoke access",
+    "externalPairCancel": "Cancel",
+    "externalPairNoAccounts": "Connect a mail account before approving external Agent access."
   },
   "zh-CN": {
     "trayTooltip": "Nami Mail",
@@ -64,7 +74,17 @@ export const nativeLocaleCatalog = {
     "externalConfirmApprove": "允许",
     "externalConfirmReject": "拒绝",
     "externalAccessDriftTitle": "外部接入的授权范围已变化",
-    "externalAccessDriftBody": "{count} 个已配对客户端需要重新授权，请在设置 → 外部接入中重新配对。"
+    "externalAccessDriftBody": "{count} 个已配对客户端需要重新授权，请在设置 → 外部接入中重新配对。",
+    "externalPairAllowMessage": "允许外部客户端“{profile}”进行只读访问？",
+    "externalPairAllowFingerprint": "客户端指纹：{fingerprint}",
+    "externalPairAllowAccounts": "授权账户快照：{count} 个已连接账户。",
+    "externalPairAllowBoundary": "外部接口只能列出或读取受限的邮件数据，不能发送、移动、删除或修改邮件。",
+    "externalPairAllowButton": "允许只读访问",
+    "externalPairRevokeMessage": "撤销外部客户端“{profile}”的访问？",
+    "externalPairRevokeEffect": "该客户端将无法再通过 NamiMail 读取邮件。",
+    "externalPairRevokeButton": "撤销访问",
+    "externalPairCancel": "取消",
+    "externalPairNoAccounts": "请先连接至少一个邮箱账户，再批准外部客户端访问。"
   }
 } as const;
 

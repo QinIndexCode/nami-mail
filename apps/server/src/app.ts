@@ -5,6 +5,7 @@ import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest }
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { AgentService } from "./agent-service.js";
+import { AgentMailChangeBridge } from "./agent/mail-change-bridge.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { registerAgentRoutes } from "./routes/agent.js";
@@ -22,8 +23,23 @@ import { registerBackupRoutes } from "./routes/backup.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
-import { clearOrphanedPendingFlagsMarkers, clearPendingFlagsMarkers, pushFlagsRemote, type FlagsPushEntry } from "./flags-outbox.js";
+import { registerTaskRoutes } from "./routes/tasks.js";
 import {
+  acceptFlagsTask,
+  acceptMoveTask,
+  acceptPreparedSendTask,
+  clearOrphanedFlagsMarkers,
+  createTaskExecution,
+  replayTaskSettlementObligations,
+  sealMigratedTaskPayloads,
+  type CommitTaskDeps,
+  type MoveTaskDestination,
+  type TaskScheduler,
+} from "./tasks/index.js";
+import type { MessageFlagsPatch } from "./message-flags.js";
+import { scheduleSentSubmissionVerification } from "./sync-sent-verify.js";
+import {
+  mailFailure,
   oauthProviderFor,
   providerInfo,
 } from "./helpers.js";
@@ -32,37 +48,31 @@ import { serverLog } from "./logging.js";
 import { config, isLoopbackRemoteAddress } from "./config.js";
 import {
   migrateMessageStorage,
-  ensureAttachmentKinds,
+  ensureAttachmentMetadata,
 } from "./message-storage.js";
 import { ensureMessageFtsIndex } from "./message-search.js";
 import { backfillRedactMessageSnippets } from "./sync.js";
-import { createOperationQueue } from "./operation-queue.js";
-import { inboxMessageFilter } from "./message-filters.js";
-import { FLAGGED_PREDICATE_SQL, UNSEEN_PREDICATE_SQL } from "./message-flag-indexes.js";
+import { mailboxBadges } from "./folder-counts.js";
 import {
   migrateOutboundAttachments,
   outboundAttachmentDirectory,
 } from "./outbound-attachments.js";
+import { hasStoredCustomBackground, migrateCustomBackground } from "./background-image.js";
 import {
   migrateOutboundSubmissionStorage,
   recoverInterruptedSubmissions,
 } from "./outbox.js";
 import { normalizeScheduledTimesMigration } from "./scheduled-times-migration.js";
+import { defaultProviderFactory, setProviderFactory } from "./provider/index.js";
 import { providerPresets } from "./providers.js";
 import { TranslationConfigurationStore } from "./translation-configuration.js";
 import { buildTranslationService } from "./routes/translation.js";
-import { batchMoveMessages, moveMessage, type MessageMoveTarget } from "./sync-moves.js";
-import {
-  updateMessageFlags,
-  updateMessageFlagsBatch,
-  type MessageFlagsPatch,
-} from "./sync-flags.js";
+import { contentSecurityPolicy } from "./security/csp.js";
 import { seedBuiltinTemplates } from "./templates.js";
 import {
   getSyncMessageLimit,
 } from "./settings.js";
-import { customBackgroundPath } from "./routes/settings.js";
-import { type RuntimeContext, type TranslationServiceLike } from "./types.js";
+import { type AccountRecord, type RuntimeContext, type TranslationServiceLike } from "./types.js";
 
 // Re-exported from helpers.ts for backward compatibility (used by tests).
 import { MAX_BACKGROUND_UPLOAD_BYTES } from "./helpers.js";
@@ -85,21 +95,6 @@ function pruneStartupRequestLog(logPath: string): void {
   }
 }
 
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https: http:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
-  "media-src 'self'",
-  "frame-src 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'none'",
-].join("; ");
-
 export type BuildAppOptions = {
   // Empty in browser-only development. The desktop host passes a fresh token
   // through this option rather than persisting it with the mail database.
@@ -111,6 +106,16 @@ export type BuildAppOptions = {
   // internal phases (migrations, service construction, route registration,
   // static file serving) so a slow boot can be attributed precisely.
   onStartupTiming?: (stage: string, elapsedMs: number) => void;
+  /**
+   * Called once, with the scheduler this app built, before any route can accept
+   * work.
+   *
+   * The runtime constructs its Agent mail service before it calls `buildApp`
+   * (the Agent service needs it), while the scheduler only exists inside this
+   * function. This is the seam that lets the already-built service accept sends
+   * through the task layer without either owner reaching into the other.
+   */
+  onTaskSchedulerReady?: (scheduler: TaskScheduler) => void;
 };
 
 const localApiAccessHeader = "x-nami-api-token";
@@ -188,12 +193,53 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   const notePhase = (stage: string): void => {
     options.onStartupTiming?.(stage, Math.round(performance.now() - buildPhaseStart));
   };
-  migrateMessageStorage(context.db, context.masterKey);
-  ensureAttachmentKinds(context.db, context.masterKey);
-  ensureMessageFtsIndex(context.db, context.masterKey);
+  // Applied before anything can open a connection: the seam is process-global,
+  // so the earliest possible assignment is the only one that cannot race the
+  // first sync. Assigned unconditionally, including when `providers` is absent,
+  // so the active factory is always the one the most recently built app asked
+  // for — a test that builds an app with a fake and then builds another without
+  // one gets the real factory back instead of silently keeping the fake.
+  setProviderFactory(context.providers ?? defaultProviderFactory);
+  const messageMigration = migrateMessageStorage(context.db, context.masterKey);
+  if (messageMigration.unreadable.length > 0) {
+    // serverLog: this runs before the fastify instance exists. The rows are not
+    // fatal (an isolated damaged payload must not keep the app from starting),
+    // but they are the only trace that those messages cannot be opened.
+    serverLog.warn(
+      { unreadable: messageMigration.unreadable },
+      "Some stored message payloads could not be decrypted",
+    );
+  }
+  const attachmentMetadata = ensureAttachmentMetadata(context.db, context.masterKey);
+  if (attachmentMetadata.unclassified > 0) {
+    serverLog.warn(
+      { ...attachmentMetadata },
+      "Some message rows kept stale attachment flags because their payload could not be read",
+    );
+  }
+  const ftsIndex = ensureMessageFtsIndex(context.db, context.masterKey);
+  if (ftsIndex.skipped.length > 0) {
+    // serverLog: this runs before the fastify instance exists. Those messages
+    // are permanently unsearchable, so the ids have to reach a log.
+    serverLog.warn(
+      { indexed: ftsIndex.indexed, skipped: ftsIndex.skipped },
+      "Some messages could not be indexed for search",
+    );
+  }
   backfillRedactMessageSnippets(context.db);
   migrateOutboundAttachments(context.db, outboundAttachmentDirectory(context), context.masterKey);
+  migrateCustomBackground(context, context.masterKey);
   migrateOutboundSubmissionStorage(context.db, context.masterKey);
+  // The task layer's migration ran inside `openDatabase` (`db.ts`), where the
+  // legacy tables are still readable. This is its second half, and it is here
+  // rather than there for the reason the module header gives: the backfill cannot
+  // seal what it carries, because the master key does not exist yet at open time.
+  // Idempotent and deliberately not marker-guarded, so a failure is retried on the
+  // next start instead of frozen into a row that never opens.
+  const sealedTaskPayloads = sealMigratedTaskPayloads(context.db, context.masterKey);
+  if (sealedTaskPayloads) {
+    serverLog.info({ sealedTaskPayloads }, "Sealed migrated task payloads");
+  }
   // R05: legacy offset-form scheduled times normalize to UTC once; the due
   // queries and the snoozed view compare stored times as strings.
   const normalizedTimes = normalizeScheduledTimesMigration(context.db, context.masterKey);
@@ -202,14 +248,57 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     serverLog.warn({ ...normalizedTimes }, "Found unparseable scheduled times during UTC normalization");
   }
   notePhase("build:message-migrations");
+  // The Agent service this function owns (when the runtime did not supply one)
+  // writes through the same sink as the runtime's. Wrapping it here is what lets
+  // a browser see an Agent write without waiting for the poll; a context with no
+  // bus keeps the raw sink, because the wrapper's only job is transport.
+  const ownedAgentMailEvents = context.agentMailEvents && context.serverEvents
+    ? new AgentMailChangeBridge(context.agentMailEvents, context.serverEvents)
+    : context.agentMailEvents;
+  // The scheduler is built further down, but the Agent service that sends on its
+  // behalf is built here. This holds the acceptance seam open for the service: a
+  // closure over a variable assigned once the scheduler exists, rather than a
+  // scheduler handed over before it does. Reaching it earlier is impossible in
+  // practice (no route is mounted yet) and is an error rather than a fallback
+  // because the fallback would be the inlined SMTP this replaced.
+  const taskDepsRef: { current?: CommitTaskDeps } = {};
+  const acceptPreparedSend = (input: { account: AccountRecord; submissionId: string }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent submissions cannot be accepted before the task scheduler is built.");
+    return acceptPreparedSendTask(taskDeps, input);
+  };
+  // The other two Agent writes, through the same seam. The flag half carries the
+  // Agent event sink so the push task announces its arrival the way every other
+  // flags task does; the move half needs nothing beyond the commit.
+  const acceptFlags = (input: { messageIds: readonly string[]; patch: MessageFlagsPatch }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent flag writes cannot be accepted before the task scheduler is built.");
+    return acceptFlagsTask(
+      {
+        db: taskDeps.db,
+        masterKey: taskDeps.masterKey,
+        scheduler: taskDeps.scheduler,
+        ...(ownedAgentMailEvents ? { agentEvents: ownedAgentMailEvents } : {}),
+      },
+      input,
+    );
+  };
+  const acceptMove = (input: { messageIds: readonly string[]; destination: MoveTaskDestination }) => {
+    const taskDeps = taskDepsRef.current;
+    if (!taskDeps) throw new Error("Agent moves cannot be accepted before the task scheduler is built.");
+    return acceptMoveTask(taskDeps, input);
+  };
   const ownedAgentMailApplication = !context.agentService && context.agentLifecycle && context.agentSourceEvents
     ? new SqliteMailApplicationService({
       db: context.db,
       masterKey: context.masterKey,
       oauthService: context.oauthService,
-      agentMailEvents: context.agentMailEvents,
+      agentMailEvents: ownedAgentMailEvents,
       syncMessageLimit: getSyncMessageLimit(context.db),
       outboundAttachmentDirectory: outboundAttachmentDirectory(context),
+      acceptPreparedSend,
+      acceptFlags,
+      acceptMove,
     })
     : undefined;
   const ownedAgentService = !context.agentService && context.agentLifecycle && context.agentSourceEvents
@@ -219,7 +308,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
       lifecycle: context.agentLifecycle,
       sourceEvents: context.agentSourceEvents,
       mailApplication: ownedAgentMailApplication,
-      hasCustomBackground: (filename) => Boolean(customBackgroundPath(context, filename) && fs.existsSync(customBackgroundPath(context, filename)!)),
+      hasCustomBackground: (filename) => hasStoredCustomBackground(context, filename),
       onSettingsChanged: () => emitSettingsChanged(context.serverEvents),
     })
     : undefined;
@@ -238,6 +327,35 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     // the server would fail to boot.
     pluginTimeout: 60_000,
   });
+
+  // The Sent-folder verification pass, owned by the app rather than by the
+  // message routes, because two callers share it: a send route's own submission
+  // and the `send` task the scheduler drives. It is created next to the Fastify
+  // instance that aborts it.
+  //
+  // Fastify only runs close hooks once in-flight handlers have drained. Aborting
+  // first stops a Sent-folder verification from making shutdown wait out its
+  // IMAP timeout; the submission is then re-verified by the outbox sweep.
+  const sentVerificationAbortController = new AbortController();
+  app.addHook("preClose", () => {
+    sentVerificationAbortController.abort();
+  });
+
+  const scheduleSentVerification = (submissionId: string): void => {
+    scheduleSentSubmissionVerification(
+      context.db,
+      context.masterKey,
+      submissionId,
+      context.oauthService,
+      {
+        abortSignal: sentVerificationAbortController.signal,
+        onDeferred: (error) => {
+          app.log.info({ submissionId, code: mailFailure(error).body.code }, "Sent-folder verification deferred");
+        },
+      },
+    );
+  };
+
   const translationConfigurationStore = new TranslationConfigurationStore(context.db, context.masterKey, {
     endpoint: config.translationEndpoint,
     apiKey: config.translationApiKey,
@@ -269,66 +387,81 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   if (recoveredSubmissions) {
     app.log.warn({ recoveredSubmissions }, "Marked interrupted SMTP submissions as unknown delivery");
   }
-  // Durable write-operation queue. User moves and flag updates are recorded
-  // before they dispatch, so a shutdown while an operation is queued or in
-  // flight never loses it: pending/running rows are re-enqueued here.
-  const operationQueue = createOperationQueue(context.db, {
-    onOperationSettled: (kind, payload, rowId) => {
-      // The marker clear follows the durable settlement of a row, never the
-      // executor: an executor abandoned by a write-slot timeout keeps running
-      // and would otherwise clear a newer push's protection after its own
-      // row had already settled. The clear re-checks pending AND running
-      // rows for each message (excluding the settling row itself), so a
-      // newer push in either state stays protected. This covers success,
-      // exhausted retries, and foreground failures — the former
-      // permanent-failure hook's job is a subset.
-      if (kind === "flags-push") {
-        const { entries } = payload as { entries?: FlagsPushEntry[] };
-        if (Array.isArray(entries)) {
-          clearPendingFlagsMarkers(context.db, entries.map((entry) => entry.id), rowId);
-        }
-      }
-    },
-  });
-  operationQueue.registerRunner("move", async (payload) => {
-    const { messageId, target } = payload as { messageId: string; target: MessageMoveTarget };
-    return moveMessage(context.db, context.masterKey, messageId, target, context.oauthService, context.agentMailEvents);
-  });
-  operationQueue.registerRunner("batch-move", async (payload) => {
-    const { ids, target } = payload as { ids: string[]; target: MessageMoveTarget };
-    return batchMoveMessages(context.db, context.masterKey, ids, target, context.oauthService, context.agentMailEvents);
-  });
-  operationQueue.registerRunner("flags", async (payload) => {
-    // One executor serves both payload shapes: a single-message patch
-    // (internal callers) and an account-scoped batch (batch jobs).
-    const { messageId, ids, patch } = payload as { messageId?: string; ids?: string[]; patch: MessageFlagsPatch };
-    if (Array.isArray(ids)) {
-      return updateMessageFlagsBatch(context.db, context.masterKey, ids, patch, context.oauthService, context.agentMailEvents);
-    }
-    await updateMessageFlags(context.db, context.masterKey, messageId as string, patch, context.oauthService, context.agentMailEvents);
-    return { updated: 0, failed: 0, changedIds: [] };
-  });
-  operationQueue.registerRunner("flags-push", async (payload) => {
-    // The marker clear lives in the onOperationSettled hook, not here: a
-    // late executor completion (after a write-slot timeout already settled
-    // this row) must not clear a newer push's protection.
-    const push = payload as { accountId: string; entries: FlagsPushEntry[] };
-    await pushFlagsRemote({ db: context.db, masterKey: context.masterKey, accessTokenProvider: context.oauthService }, push);
-  });
-  // Repair `pending_flags_push` markers that no queued push is behind before
-  // the resumed queue starts: a marker only syncs ever clears again is a
-  // message whose flags stop following the server for good. Runs against the
-  // queue exactly as it sits on disk, so every still-pending row counts as its
-  // push. Best effort by design — a reconciliation problem must never stop the
-  // app from booting.
+  // A task's terminal status is committed by `settleTask` and its settlement
+  // obligations run one statement later as a hook -- a process that died between
+  // the two (or a hook that threw, which the scheduler only warns about) left a
+  // settled row whose repairs never ran. Re-running them here is safe because
+  // every obligation is idempotent; see `replayTaskSettlementObligations`. This
+  // pass must run BEFORE `clearOrphanedFlagsMarkers` below: that sweep would
+  // remove the very markers the flags rollback restores through. Best effort by
+  // design -- a reconciliation problem must never stop the app from booting.
   try {
-    const orphaned = clearOrphanedPendingFlagsMarkers(context.db);
-    if (orphaned) app.log.warn({ orphaned }, "Cleared flag push markers with no queued push");
+    const repaired = replayTaskSettlementObligations({ db: context.db, masterKey: context.masterKey });
+    if (repaired) app.log.warn({ repaired }, "Replayed settlement obligations a settled task was still owed");
+  } catch (replayError) {
+    app.log.warn({ error: replayError }, "Could not replay task settlement obligations");
+  }
+  // Repair `pending_flags_push` markers that no live push is behind, before the
+  // resumed work starts: a marker only sync ever clears again is a message whose
+  // flags stop following the server for good. Best effort by design — a
+  // reconciliation problem must never stop the app from booting.
+  //
+  // One store holds a marker now. While `operation_queue` outlived the write
+  // paths, this call handed the task layer the legacy store's still-held ids,
+  // because neither store's reconciliation could see the other's live pushes.
+  // The queue is gone, so `clearOrphanedFlagsMarkers` asks `tasks` alone and
+  // there is no second answer to reconcile against.
+  try {
+    const orphaned = clearOrphanedFlagsMarkers(context.db);
+    if (orphaned) app.log.warn({ orphaned }, "Cleared flag push markers with no live push");
   } catch (reconcileError) {
     app.log.warn({ error: reconcileError }, "Could not reconcile orphaned flag push markers");
   }
-  void operationQueue.resumePending().then((resumed) => {
-    if (resumed) app.log.warn({ resumed }, "Resumed interrupted write operations");
+  // The task layer's execution is the only executor this process has. The legacy
+  // write queue is gone from it -- its four executors, its durable-job handle
+  // rebuild and its boot-time resume were deleted together, because the three
+  // only made sense as a set: a resume with no executor would re-enqueue work
+  // nobody runs, and an executor with no resume would hold the write slot for
+  // work nobody starts. So every `tasks` row now comes from a write path this
+  // build switched (a batch acceptance, a flags route, a move, an accepted send)
+  // -- except on a database an older build wrote, whose unfinished work still
+  // sits in the three legacy stores. `migrateTaskStorageInTransaction` converts
+  // those rows, and `openDatabase` runs it on every open (4b): nothing in this
+  // process resumes those stores any more, so that migration is the only thing
+  // that ever will (contract §十九).
+  //
+  // The acknowledgement is registered in its own hook rather than reusing the
+  // agent service's above: `stop()` clears the due tick, which is what keeps a
+  // 15-second timer from holding the process open after close.
+  const scheduler = createTaskExecution({
+    db: context.db,
+    masterKey: context.masterKey,
+    outboundAttachmentDirectory: outboundAttachmentDirectory(context),
+    scheduleSentVerification,
+    ...(context.oauthService ? { accessTokenProvider: context.oauthService } : {}),
+    ...(context.agentMailEvents ? { agentMailEvents: context.agentMailEvents } : {}),
+    // The move runner's reconcile kick needs both: it answers the renderer's
+    // "did my archive land?" itself now that the route no longer does, and
+    // process shutdown -- not a client navigating away -- is what may interrupt
+    // that pass.
+    ...(context.serverEvents ? { serverEvents: context.serverEvents } : {}),
+    ...(context.syncShutdownSignal ? { syncAbortSignal: context.syncShutdownSignal } : {}),
+    ...(context.onSnoozeReleased ? { onSnoozeReleased: context.onSnoozeReleased } : {}),
+  });
+  // The runtime's Agent service was built before this one, so it cannot have
+  // received a scheduler by constructor injection either; this callback is how
+  // it gets one. The holder above is the same answer for the service built above.
+  taskDepsRef.current = { db: context.db, masterKey: context.masterKey, scheduler };
+  options.onTaskSchedulerReady?.(scheduler);
+  app.addHook("onClose", async () => {
+    await scheduler.stop();
+  });
+  void scheduler.resume().then((pending) => {
+    if (pending) app.log.warn({ pending }, "Resumed interrupted tasks");
+  }).catch((error: unknown) => {
+    // Without this handler a database error during resume becomes an unhandled
+    // rejection, which terminates the process after the server already started.
+    app.log.warn({ error: String(error) }, "Could not resume interrupted tasks");
   });
   const localApiAccessToken = options.localApiAccessToken?.trim() || undefined;
 
@@ -351,7 +484,13 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // sanitized mail HTML from loading code or network resources outside it.
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("Content-Security-Policy", contentSecurityPolicy);
-    if (request.url.startsWith("/api/")) {
+    // The Gravatar proxy is the one route allowed to choose its own caching: a
+    // response keyed by an address hash never changes, and `no-store` here
+    // would re-fetch the same 96px image for every message that mentions the
+    // sender. The route sets `public, max-age=…` on both the hit and the
+    // negative answer, and `no-store` on every refusal.
+    const isGravatarProxy = request.url.startsWith("/api/avatars/gravatar/");
+    if (request.url.startsWith("/api/") && !isGravatarProxy) {
       // Note that this runs after every route handler, so it also overrides the
       // `Cache-Control` that GET /api/images/proxy sets for its cached images —
       // that header is currently unreachable, and re-reading a message re-fetches
@@ -495,7 +634,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // rows (edited or deleted by the user) are never overwritten.
   seedBuiltinTemplates(context.db, context.masterKey);
 
-  registerMessageRoutes(app, { context, log: app.log, operationQueue });
+  registerMessageRoutes(app, { context, log: app.log, scheduler, scheduleSentVerification });
 
   registerTranslationRoutes(app, {
     context,
@@ -508,47 +647,36 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
 
   registerBackupRoutes(app, { context, log: app.log });
 
-  registerBatchJobRoutes(app, { context, log: app.log });
+  registerBatchJobRoutes(app, { context, scheduler });
+  // The task layer's own read surface: `/api/tasks/:id` answers about a `tasks`
+  // row. It sits beside `registerBatchJobRoutes` rather than replacing it because
+  // that one is the *compatibility alias* -- it projects the same `tasks` rows
+  // under the renderer's older job shape (`routes/batch-jobs.ts`) -- and not
+  // because a second write layer survives: every write path this build mounts goes
+  // through the task layer.
+  registerTaskRoutes(app, { context });
   notePhase("build:register-remaining-routes");
 
-  app.get("/api/stats", async () => {
-    // Snoozed messages are hidden from the unified inbox, so the sidebar
-    // counts must exclude active snoozes too.
-    const nowIso = new Date().toISOString();
-    // Only the badges whose predicate is indexable get their own scalar
-    // subquery. Wrapping a predicate in SUM(CASE WHEN ...) hides it from the
-    // planner: it cannot prove such a CASE implies a partial index's WHERE, so
-    // the whole endpoint degraded to one full scan of messages (measured on
-    // 50 000 rows: 816ms, EXPLAIN "SCAN m") even though three of the six
-    // partial indexes match these predicates exactly. Spelled as a top-level
-    // WHERE, the same three badges become index seeks (measured: 0.06-0.17ms
-    // each, "SEARCH m USING COVERING INDEX idx_messages_...").
-    //
-    // The two that stay summed are the ones no index can serve: `messages` and
-    // `unread` both test inbox membership, which reads the effective_mailbox
-    // generated column and a correlated folders lookup. Their SUM arms also keep
-    // this SELECT anchored to `FROM messages m`, which is what makes the whole
-    // statement return exactly one row on an empty mailbox; moving them into
-    // their own scalar subqueries drops that anchor and the endpoint stops
-    // answering at all when there is no mail. Splitting them was also measured
-    // *slower* (773ms vs 528ms on 50 000 rows): the unseen index holds ~55% of
-    // the mailbox and none of the columns the inbox test reads, so it buys a
-    // full walk of that index with a row fetch per entry to save one CASE.
-    // SUM returns NULL on an empty table, hence the COALESCE guards.
-    const row = context.db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM accounts) AS accounts,
-        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS messages,
-        COALESCE(SUM(CASE WHEN ${inboxMessageFilter} AND m.${UNSEEN_PREDICATE_SQL} AND (m.snoozed_until IS NULL OR m.snoozed_until <= ?) THEN 1 ELSE 0 END), 0) AS unread,
-        (SELECT COUNT(*) FROM messages m WHERE m.${FLAGGED_PREDICATE_SQL}) AS starred,
-        (SELECT COUNT(*) FROM messages m WHERE m.snoozed_until IS NOT NULL AND m.snoozed_until > ?) AS snoozed,
-        (SELECT COUNT(*) FROM messages m WHERE m.has_attachments = 1) AS attachments
-      FROM messages m
-    `).get(nowIso, nowIso, nowIso) as { accounts: number; messages: number; unread: number; starred: number; snoozed: number; attachments: number };
-    // Sidebar badge counts for the cross-folder views: starred, snoozed and
-    // the attachments view (every folder participates, mirroring the messages
-    // route's filter semantics for those views).
-    return { accounts: row.accounts, messages: row.messages, unread: row.unread, starred: row.starred, snoozed: row.snoozed, attachments: row.attachments };
+  // Superseded, in place: this endpoint used to be a single statement with two
+  // SUM(CASE ...) arms whose inbox test carried a correlated
+  // `EXISTS (SELECT 1 FROM folders ...)`, and the comment here used to say the
+  // two arms must stay summed. Both of its reasons were about *that* split --
+  // which still ran the per-message folder lookup, only moved into a subquery
+  // shell (hence cheaper to leave alone than to split), and whose `FROM messages
+  // m` doubled as the anchor that made the whole statement return one row on an
+  // empty mailbox. `mailboxBadges` removes the correlation instead of the shell
+  // (277.52ms unread / 217.60ms total become one index seek per inbox folder,
+  // measured in folder-counts.ts) and starts its counters at zero in JS, so an
+  // empty mailbox still answers -- with 0, never NULL -- without needing a row
+  // to hang the anchor on. `?accountId=` scopes the badges to one account, which
+  // is what keeps a chip and the list beneath it measuring the same mail;
+  // omitting it keeps the older whole-mailbox reading. See contract §4.5 and I4.
+  app.get("/api/stats", async (request) => {
+    // Read as a plain string, not through a schema: an absent or empty
+    // `accountId` must mean "global", which is exactly what an unvalidated
+    // query read gives, and the badges are parameterized either way.
+    const accountId = (request.query as { accountId?: string }).accountId || undefined;
+    return mailboxBadges(context.db, Date.now(), accountId);
   });
 
   const hasWebDist = fs.existsSync(config.webDistPath);

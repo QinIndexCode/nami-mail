@@ -11,7 +11,8 @@ vi.mock("../src/mail.js", async (importOriginal) => {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { EFFECTIVE_MAILBOX_SQL, SORT_KEY_SQL, openDatabase, type DatabaseHandle } from "../src/db.js";
+import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { EFFECTIVE_MAILBOX_SQL, SORT_KEY_SQL } from "../src/db-schema.js";
 import { accountById } from "../src/account-store.js";
 import { buildMessageListSql } from "../src/message-filters.js";
 import { countMessageRows, listMessageRows } from "../src/message-queries.js";
@@ -355,7 +356,7 @@ describe("write-point value equivalence", () => {
   const archive = { path: "Archive", name: "Archive", listed: true, flags: new Set<string>(), specialUse: "\\Archive" };
 
   function setFolders(extra: Array<{ path: string; specialUse: string }> = []): void {
-    const insert = db.prepare("INSERT OR REPLACE INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES (?, ?, ?, ?, 0, 0, '1')");
+    const insert = db.prepare("INSERT OR REPLACE INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, '1')");
     insert.run("account-1", "INBOX", "Inbox", "\\Inbox");
     for (const folder of extra) insert.run("account-1", folder.path, folder.path, folder.specialUse);
   }
@@ -606,10 +607,14 @@ describe("migration", () => {
    * table as it stands, so effective_mailbox cannot be added while
    * pending_move_state is missing.
    *
-   * The DROP INDEX list has to enumerate *every* index that reads sort_key,
-   * because SQLite refuses to drop a column an index still references. It grew
-   * by two when the starred/unread partial indexes landed, since those are keyed
-   * on (account_id, sort_key DESC, id DESC) to serve the list's own order.
+   * The DROP INDEX list has to enumerate *every* index that reads either
+   * column, because SQLite refuses to drop a column an index still references.
+   * It grew by two when the starred/unread partial indexes landed, since those
+   * are keyed on (account_id, sort_key DESC, id DESC) to serve the list's own
+   * order, and by one more when the sidebar's per-folder unread index landed
+   * (idx_messages_unseen_by_folder, keyed on effective_mailbox). An index over a
+   * column a rebuild is about to remove is exactly what SQLite reports as
+   * "error in index ... after drop column: no such column".
    */
   function seedPreColumnDatabase(file: string, dropPendingMove = false): void {
     const db = openDatabase(file);
@@ -621,6 +626,7 @@ describe("migration", () => {
       DROP INDEX IF EXISTS idx_messages_sort_key_id;
       DROP INDEX IF EXISTS idx_messages_flagged;
       DROP INDEX IF EXISTS idx_messages_unseen;
+      DROP INDEX IF EXISTS idx_messages_unseen_by_folder;
       ALTER TABLE messages DROP COLUMN sort_key;
       ALTER TABLE messages DROP COLUMN effective_mailbox;
       ${dropPendingMove ? `
@@ -646,6 +652,7 @@ describe("migration", () => {
       DROP INDEX IF EXISTS idx_messages_sort_key_id;
       DROP INDEX IF EXISTS idx_messages_flagged;
       DROP INDEX IF EXISTS idx_messages_unseen;
+      DROP INDEX IF EXISTS idx_messages_unseen_by_folder;
       ALTER TABLE messages DROP COLUMN sort_key;
       ALTER TABLE messages DROP COLUMN effective_mailbox;
       ALTER TABLE messages ADD COLUMN sort_key TEXT;

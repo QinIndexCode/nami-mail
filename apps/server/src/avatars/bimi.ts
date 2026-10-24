@@ -17,6 +17,18 @@ import { isIP } from "node:net";
  * resulting risk profile matches loading remote mail imagery the user already
  * opted into.
  *
+ * Known deviation from the BIMI spec: §7.1 requires that BIMI processing MUST
+ * NOT be performed unless the message's DMARC result is pass, with `p=none`,
+ * `sp=none` and `pct<100` each independently barring processing. This resolver
+ * is handed the sender's domain and nothing else — never a message, never an
+ * authentication verdict — so that precondition cannot be evaluated here, and
+ * the route layer (`routes/avatars.ts`) passes only the domain. A conformant
+ * path would need DMARC/SPF/DKIM results parsed and carried into this call;
+ * that is deliberately not built, because no code in this repository parses
+ * those headers and the cue is only a decoration. Treat the returned logo as
+ * the domain owner's published assertion, not as evidence that the message
+ * authenticated.
+ *
  * SSRF posture (this server runs on the user's machine): logo URLs must be
  * https on port 443, must not be IP literals or localhost variants, and must
  * resolve to public unicast addresses. The download connects to the

@@ -2,21 +2,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
+import { UNSEEN_PREDICATE_SQL } from "../src/message-flag-indexes.js";
 
 // The sidebar badges polled every few seconds by GET /api/stats.
 //
-// The hazard this file exists for is that the endpoint's six counts used to be
-// six SUM(CASE WHEN ...) arms over one table walk. That shape is correct but
-// opaque: SQLite cannot prove a predicate buried inside a CASE implies a partial
-// index's WHERE clause, so an index that matches the predicate *exactly* is
-// silently declined and the endpoint degrades to a full scan of messages —
-// carrying every row's encrypted payload — while still returning correct
-// numbers. Nothing warns; the sidebar just gets slow, permanently.
+// The hazard this file exists for is that a count gets its number by a shape the
+// planner cannot serve with an index. It used to be one statement with six
+// SUM(CASE WHEN ...) arms: SQLite cannot prove a predicate buried inside a CASE
+// implies a partial index's WHERE clause, so an index matching the predicate
+// *exactly* is silently declined and the endpoint degrades to a full scan of
+// messages -- carrying every row's encrypted payload -- while still returning
+// correct numbers. Batch 3 replaced that with derived counts, and the shape to
+// watch for changed with it: the unified inbox is now TWO steps (resolve the
+// inbox paths from `folders`, then one indexed count per path), and the form it
+// replaced -- a per-message correlated `EXISTS (SELECT 1 FROM folders ...)` --
+// measured 277.52ms unread / 217.60ms total on 51 000 rows (contract §0.2).
 //
 // So the assertions below come in pairs: the badge *values* (the endpoint must
 // not change what it reports) and the badge *plans* (it must keep reaching the
-// indexes). A future edit that re-folds a predicate into a CASE passes the first
-// and fails the second.
+// indexes). A future edit that re-folds a predicate into a CASE, or that goes
+// back to looking the folder up per message, passes the first and fails the
+// second.
 
 describe("GET /api/stats sidebar badges", () => {
   let db: DatabaseHandle;
@@ -39,11 +45,11 @@ describe("GET /api/stats sidebar badges", () => {
       // "Newsletters" is inbox membership by special_use only, so the unified
       // inbox filter's EXISTS branch is genuinely exercised, not just its
       // UPPER(mailbox) = 'INBOX' half.
-      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
         .run(id, "INBOX", "Inbox", "\\Inbox");
-      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
         .run(id, "Newsletters", "Newsletters", "\\Inbox");
-      db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+      db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
         .run(id, "Archive", "Archive", "\\Archive");
     }
 
@@ -113,9 +119,10 @@ describe("GET /api/stats sidebar badges", () => {
     const emptyApp = await buildApp({ db: empty, masterKey: Buffer.alloc(32, 9) });
     try {
       const response = await emptyApp.inject({ method: "GET", url: "/api/stats" });
-      // SUM() over no rows is NULL; the badges are counts and must be 0. This is
-      // the one behaviour a SUM-arm to COUNT(*) rewrite could plausibly change,
-      // since the COALESCE guards only protect the arms that stayed SUM.
+      // The counters start at zero in JS and no statement has to return a row
+      // for the answer to exist (`mailboxBadges`), so an empty mailbox is 0 and
+      // not NULL. This is the shape that replaced the `FROM messages m` anchor
+      // the old SUM-arms comment argued was load-bearing.
       expect(response.json()).toEqual({
         accounts: 0, messages: 0, unread: 0, starred: 0, snoozed: 0, attachments: 0,
       });
@@ -139,11 +146,11 @@ describe("GET /api/stats sidebar badges", () => {
   });
 
   describe("the badges that a partial index can serve reach it", () => {
-    // These plan the endpoint's *own* statement rather than a hand-written
-    // fragment: re-folding a badge back into SUM(CASE WHEN ...) would leave
-    // every fragment-level assertion here passing while the endpoint quietly
-    // went back to scanning the table.
-    async function statsPlan(): Promise<string> {
+    // These plan the endpoint's *own* statements rather than a hand-written
+    // fragment: re-folding a badge back into SUM(CASE WHEN ...), or going back to
+    // a per-message folder lookup, would leave every fragment-level assertion
+    // here passing while the endpoint quietly started scanning the table.
+    async function statsStatements(): Promise<string[]> {
       const seen: string[] = [];
       const bind = db.prepare.bind(db);
       (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
@@ -155,32 +162,53 @@ describe("GET /api/stats sidebar badges", () => {
       } finally {
         (db as unknown as { prepare: typeof bind }).prepare = bind;
       }
-      const sql = seen.find((statement) => statement.includes("AS attachments"));
-      expect(sql, "the /api/stats query was never prepared").toBeDefined();
-      // Three placeholders, in badge order: messages, unread, snoozed.
-      const detail = (db.prepare(`EXPLAIN QUERY PLAN ${sql!}`).all(now, now, now) as Array<{ detail: string }>).map((row) => row.detail);
-      return detail.join(" | ");
+      return seen;
+    }
+
+    /**
+     * The plan of the one statement carrying `fragment`'s shape.
+     *
+     * Every placeholder is bound to the same instant the endpoint binds: a snooze
+     * comparison planned against NULL is a different query to the planner, so a
+     * null-binding helper could report an index for a query that never binds one.
+     * The count comes from the statement itself, so an edit that changes its
+     * arity fails here rather than planning something the endpoint never runs.
+     */
+    function planOf(statements: string[], matches: (sql: string) => boolean): string {
+      const found = statements.filter(matches);
+      expect(found, `${found.length} /api/stats statements matched`).toHaveLength(1);
+      const sql = found[0]!;
+      const params = Array<string>((sql.match(/\?/g) ?? []).length).fill(now);
+      return (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>)
+        .map((row) => row.detail).join(" | ");
     }
 
     it("serves the starred, snoozed and attachments badges from their partial indexes", async () => {
-      const detail = await statsPlan();
-      expect(detail).toContain("idx_messages_flagged");
-      expect(detail).toContain("idx_messages_snoozed_until");
-      expect(detail).toContain("idx_messages_has_attachments");
+      const statements = await statsStatements();
+      expect(planOf(statements, (sql) => sql.includes("m.flags_json LIKE"))).toContain("idx_messages_flagged");
+      expect(planOf(statements, (sql) => sql.includes("m.snoozed_until >"))).toContain("idx_messages_snoozed_until");
+      expect(planOf(statements, (sql) => sql.includes("m.has_attachments = 1"))).toContain("idx_messages_has_attachments");
     });
 
-    it("walks the table once, and does not trade that for a walk of the unseen index", async () => {
-      // `messages` and `unread` both test inbox membership, which reads the
-      // effective_mailbox generated column plus a correlated folders lookup, so
-      // no index covers them and they share a single pass. Giving `unread` its
-      // own COUNT(*) was measured and is *slower*: the unseen index holds ~55%
-      // of the mailbox and none of the columns the inbox test reads, so it
-      // becomes a full walk of the partial index with a row fetch per entry —
-      // 773ms against 528ms on 50 000 rows. Both halves of that are pinned
-      // here, because the split looks like an improvement and is not one.
-      const detail = await statsPlan();
-      expect(detail.split(" | ").filter((line) => line === "SCAN m")).toHaveLength(1);
-      expect(detail).not.toContain("idx_messages_unseen");
+    it("counts the unified inbox per folder instead of resolving the folder per message", async () => {
+      const statements = await statsStatements();
+      // The unread half is the partial index built for exactly this query
+      // (message-flag-indexes.ts): one top-level WHERE per folder, so the
+      // predicate is the index's own and the planner takes it. The total half has
+      // no partial index -- `effective_mailbox` is a generated column, so a
+      // partial predicate would have to be spelled the same way by hand -- and is
+      // served by the plain `(account_id, effective_mailbox, …)` index instead.
+      const inboxUnread = planOf(statements, (sql) => sql.includes("effective_mailbox = ?") && sql.includes(UNSEEN_PREDICATE_SQL));
+      expect(inboxUnread).toContain("idx_messages_unseen_by_folder");
+      const inboxTotal = planOf(statements, (sql) => sql.includes("effective_mailbox = ?") && !sql.includes(UNSEEN_PREDICATE_SQL));
+      expect(inboxTotal).toContain("idx_messages_account_effective_mailbox");
+      // And the shape that cost 277.52ms / 217.60ms is pinned as absent: no arm
+      // folded into a CASE for the planner to decline, and no folder looked up
+      // once per message. Both are what "correct but slow" looks like here.
+      for (const sql of statements) {
+        expect(sql).not.toMatch(/SUM\s*\(/i);
+        expect(sql).not.toMatch(/EXISTS\s*\(\s*SELECT/i);
+      }
     });
   });
 });

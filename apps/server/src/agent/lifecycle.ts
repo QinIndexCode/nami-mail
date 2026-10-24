@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "../db.js";
+import { preparedStatement } from "../db.js";
 import {
   createAccountDataKey,
   unwrapAccountDataKey,
@@ -88,7 +89,10 @@ export class AccountLifecycleStore {
   }
 
   private rowForAccount(accountId: string): StoredLifecycleRow | undefined {
-    return this.db.prepare(`
+    // The hottest read in the Agent store: `assertCurrent` runs it before every
+    // commit and once more per source-event write, so a per-row batch loop paid
+    // a compilation per row.
+    return preparedStatement(this.db, `
       SELECT account_id, generation, state, encrypted_dek, crypto_version, created_at, updated_at, deleted_at
       FROM agent_account_lifecycle
       WHERE account_id = ?
@@ -96,7 +100,7 @@ export class AccountLifecycleStore {
   }
 
   private primaryAccountExists(accountId: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM accounts WHERE id = ?").get(accountId));
+    return Boolean(preparedStatement(this.db, "SELECT 1 FROM accounts WHERE id = ?").get(accountId));
   }
 
   private createActiveLifecycle(accountId: string, generation = 0): AccountLifecycleRecord {

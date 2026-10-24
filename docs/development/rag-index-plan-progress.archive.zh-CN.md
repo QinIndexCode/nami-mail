@@ -1,7 +1,7 @@
 # RAG 词法索引持久化（B-1.1）实施计划与进度
 
 > 交接文档（供更换编码 Agent 后续推进）。创建：2026-08-09，最后更新：2026-08-12（B-1.1 全部完成，S6 文档同步已收尾）
-> 项目根：`d:\MyCode\nami-workspace\nami-mail-agent`（pnpm workspace）
+> 项目根：仓库根目录（pnpm workspace）
 > 前置文档：`docs/development/agent-improvement.plan.zh-CN.md`（Phase B-1.1）、`docs/rag/*`
 
 ---

@@ -1,4 +1,5 @@
 # Privacy and Local Data
+<!-- shipped-as: v0.5.1 -->
 
 [简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
@@ -33,11 +34,13 @@ For the Windows desktop app, Electron `safeStorage` protects the master key with
 
 This is not SQLCipher or full-disk encryption. Application-layer encryption reduces the risk of reading static files directly or copying them offline, but it cannot defend against an administrator, a malicious process able to call DPAPI as the same Windows user, or an already unlocked and running app.
 
+This page describes the encryption boundary of the **v0.5.1 release**. The development trunk has since introduced whole-database at-rest encryption, which is not in the table above because it has not shipped yet: the server uses SQLite3MultipleCiphers with a key derived from the master key as its `PRAGMA key`; an existing database is copied and verified through `PRAGMA rekey` by `ensureDatabaseEncrypted` at startup; the desktop master key stays under DPAPI and the command-line service keeps its separate `MASTER_KEY_PATH` development path. Whole-database encryption changes the threat model (the static file can no longer be read offline) and brings operational consequences (a migration cost on the first start of an existing database, and data that cannot be recovered once the master key is lost). Those behaviours and consequences will be stated item by item in the release notes at the version cut. Until then, the table above remains accurate for an installed v0.5.1.
+
 ## Local and UI Protections
 
 - The local service binds to `127.0.0.1` by default. The desktop app uses a dynamic loopback port and a local API access token regenerated on every launch.
 - Local API responses use `no-store`; desktop startup clears any HTTP or Service Worker cache that could retain mail responses.
-- Mail HTML is sanitized before display to remove untrusted scripts, forms, embedded content, and images. This is not an absolute guarantee of mail safety.
+- Mail HTML is sanitized before display to remove untrusted scripts, forms, and embedded content. Remote images are still loaded automatically through the local service proxy: the proxy requests the original image URL from this machine, which changes where the request originates but does **not** prevent a sender from observing opens through a unique image URL. This is not an absolute guarantee of mail safety. Default blocking, per-message authorization, per-sender allowlists, and the scope of such a setting are still pending a product decision.
 - `.gitignore` excludes `.env`, databases, keys, mail exports, logs, and release output. Ignore rules do not replace human review before committing.
 - Downloaded update ZIP files are temporarily stored in the current Windows user's app data directory. Skipping a version removes its cache. After a successful install, the updater makes bounded retry and existence checks for the ZIP and temporary extraction directory. If leftovers remain, the next version makes another best effort only in that target-version directory and shows status. Other processes on the system or under the same user can still lock or rename files, so do not treat the cache as long-term backup storage and do not describe cleanup as an absolute guarantee.
 

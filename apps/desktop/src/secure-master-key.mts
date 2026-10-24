@@ -95,8 +95,32 @@ async function writeProtectedMasterKey(filePath: string, payload: Buffer): Promi
   }
 }
 
+/**
+ * Overwrites the legacy plaintext key in place before it is deleted, the same
+ * treatment the plaintext database gets on conversion: a plain `rm` leaves the
+ * key material in freed blocks, and this file is the one secret that decrypts
+ * everything else. Best effort like every on-disk overwrite -- SSD wear
+ * levelling means it reduces, not eliminates, recovery.
+ */
+async function overwriteWithZeros(filePath: string): Promise<void> {
+  const handle = await fs.open(filePath, "r+");
+  try {
+    const { size } = await handle.stat();
+    if (size === 0) return;
+    const chunk = Buffer.alloc(Math.min(4096, size));
+    for (let offset = 0; offset < size; ) {
+      const { bytesWritten } = await handle.write(chunk, 0, Math.min(chunk.length, size - offset), offset);
+      offset += bytesWritten;
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 async function removeLegacyMasterKey(filePath: string): Promise<void> {
   try {
+    await overwriteWithZeros(filePath);
     await fs.rm(filePath, { force: true });
   } catch {
     throw new Error(

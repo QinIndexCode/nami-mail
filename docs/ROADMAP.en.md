@@ -35,6 +35,10 @@ This document tracks features that have been confirmed but are not yet scheduled
 - **Privacy**: image base64 is sent to the cloud provider, so it falls under the external-leak tool set; reuse the existing consent gating / explicit user intent confirmation.
 - **Suggested rollout**: support OpenAI-compatible + Gemini first (most standard image APIs), then Anthropic / Responses, to reduce first-round risk.
 
+## Error-log persistence (prerequisite for paste-a-log feedback)
+
+**Status**: partially done. Packaged desktop mirrors startup phases, crashes, unhandled rejections, and child-process console output into bounded diagnostic files under userData (`startup-log.jsonl`, `startup-timings.json`, `runtime-log.jsonl`), and the data directory keeps a bounded `startup-request-log.jsonl`. Still missing: a user-facing error history, log viewer, or export path, so the feedback guidance remains "description + screenshot + reproduction steps". If a copyable log history is added, the feedback flow can offer "paste the error log". Boundaries are listed in [known limitations](development/known-limitations.en.md) item 11.
+
 ## Reading-pane AI shortcuts (AI summary / AI draft reply)
 
 **Status**: completed (2026-10). Promotes reading toolbar button to "AI summary" (auto-attaches reference + `/summary` + auto-sends); adds "AI draft reply" to More menu (attaches reference + pre-fills `/draft ` + awaits review); extracted `readerAiActions` and `useInitialPrompt` to keep file length ratchets clean.
@@ -93,8 +97,9 @@ WCAG 4.5:1 floor (`--text-faint` `#727279`→`#66666c`, `--warning` `#b67816`→
 
 **Performance** (top items by value/effort):
 
-- The list endpoint returns the full `htmlBody` for every page, so list payloads are large.
-- `/api/stats` polls every 60s with a full-table `SUM(CASE ...)`, and `flags_json LIKE '%\Seen%'` cannot use an index; `messages` has no derived-column index for flags.
+- ~~The list endpoint returns the full `htmlBody` for every page, so list payloads are large.~~ **Done**: list rows are returned with `{ body: false }`, and the body is fetched only when the reader opens a message (`apps/server/src/routes/messages.ts`).
+- ~~`/api/stats` uses a full-table `SUM(CASE ...)` for its badges, `flags_json LIKE '%\Seen%'` cannot use an index, and `messages` has no derived-column index for flags.~~ **Done**: sidebar badges come from the derived queries in `folder-counts.ts` and the `idx_messages_unseen_by_folder` partial index; `/api/stats` calls `mailboxBadges`.
+- The list still recomputes an unfiltered `COUNT(*)` on every page (`countMessageRows` in `routes/messages.ts`); pages after the first could reuse the first page's total.
 - ~~The list sorts by `ORDER BY COALESCE(sent_at, created_at)` (an expression, so `idx_messages_sent_at` cannot help) and pages with `LIMIT/OFFSET`.~~ **Done**: refactored to keyset cursor pagination (`message-cursor.ts`, `message-list-indexes.ts`, with opaque `cursor` tokens), eliminating deep pagination latency and guaranteeing total ordering across pages.
 - Every request re-prepares its statements; there is no statement cache.
 - First paint already fetches in parallel (`Promise.all`) — no change needed.

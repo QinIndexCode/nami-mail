@@ -1,6 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject } from "react";
+import { hasVisibleAttachments } from "@nami/agent-contracts";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { Archive, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { Archive, Inbox, Layers3, Mail, MailOpen, MousePointerClick, Paperclip, Plus, Search, Star, Trash2, X } from "lucide-react";
+import type { MoveTarget } from "./api";
+import { messageFolderContext, messageMoveActions, type MessageFolderContext } from "./messageMoveActions";
 import type { MessageListQuery } from "./mailListState";
 import { useI18n } from "./i18n";
 import type { MailErrorPresentation } from "./errorPresentation";
@@ -53,7 +56,7 @@ type MessageListProps = {
   onSelectRange: (ids: string[]) => void;
   onQuickToggleStar: (message: Message) => void;
   onQuickToggleSeen: (message: Message) => void;
-  onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
+  onQuickMoveMessage: (message: Message, target: MoveTarget) => void;
 };
 
 export type ContextMenuPosition = { x: number; y: number };
@@ -142,7 +145,8 @@ type MessageListRowProps = {
   onRowClick: (message: Message, index: number, event: MouseEvent<HTMLButtonElement>) => void;
   onOpenContextMenu: (message: Message, x: number, y: number) => void;
   onQuickToggleStar: (message: Message) => void;
-  onQuickMoveMessage: (message: Message, target: "archive" | "trash") => void;
+  onQuickMoveMessage: (message: Message, target: MoveTarget) => void;
+  folderContext?: MessageFolderContext;
 };
 
 /**
@@ -165,25 +169,38 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   // shows "To <recipient>" with the recipient's avatar instead of presenting
   // the user as the sender. Falls back to the sender when `to` is empty.
   const ownSent = isOwnSentMessage(message, accountEmails);
+  // The marker must answer the question the reader answers: does this message
+  // have an attachment section waiting for it? The wire flag is derived from
+  // the same metadata server-side, and deriving here as well keeps the list
+  // honest for a row whose metadata predates a flag correction.
+  const rowHasAttachments = hasVisibleAttachments(message.attachments);
   const rowPerson = ownSent && message.to[0] ? message.to[0] : message.from;
+  // A blank or whitespace-only subject is a real (and common) server value, so
+  // the row must render a localized placeholder instead of an empty line — and
+  // the screen-reader label needs the same text, or it announces a subjectless
+  // selection with a dangling gap.
+  const subjectLabel = message.subject.trim() ? message.subject : t("mail.message.noSubject");
   return (
     <div className="message-list-row" role="listitem" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
       <button tabIndex={tabbable ? 0 : -1} data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
-        <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: message.subject }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: message.hasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
+        <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: subjectLabel }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: rowHasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} bimiEnabled={bimiEnabled} />
         <span className="message-copy">
           <span className="message-meta"><strong>{ownSent && message.to[0] ? t("mail.reader.toRecipient", { recipient: rowPerson.name || rowPerson.address }) : (rowPerson.name || rowPerson.address)}</strong><time>{formatMessageTime(message.sentAt, locale)}</time></span>
-          <span className="message-subject">{message.subject}</span>
+          <span className="message-subject">{subjectLabel}</span>
           <span className="message-snippet">{localizeMessageLinks(message.snippet, locale)}</span>
-          <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{message.hasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
+          <span className="message-tags"><i>{message.accountEmail.split("@")[0]}</i>{message.moveLocationUnverified && <i className="message-local-copy">{t("mail.messageLocalReadOnly")}</i>}{threadSize > 1 && <span className="thread-count-badge" data-tooltip={t("mail.thread.count", { count: threadSize })} aria-label={t("mail.thread.count", { count: threadSize })}><Layers3 size={12} />{threadSize}</span>}{rowHasAttachments && <Paperclip size={13} />}{message.flagged && <Star size={13} fill="currentColor" />}</span>
         </span>
         {!message.seen && <span className="unread-dot" />}
       </button>
       <span className="row-quick-actions">
         <button type="button" aria-label={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} data-tooltip={message.flagged ? t("mail.action.unstar") : t("mail.action.star")} className={message.flagged ? "row-quick-action active-star" : "row-quick-action"} onClick={() => onQuickToggleStar(message)}><Star size={15} fill={message.flagged ? "currentColor" : "none"} /></button>
-        <button type="button" aria-label={t("mail.action.archive")} data-tooltip={t("mail.action.archive")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "archive")}><Archive size={15} /></button>
-        <button type="button" aria-label={t("mail.action.moveToTrash")} data-tooltip={t("mail.action.moveToTrash")} className="row-quick-action" onClick={() => onQuickMoveMessage(message, "trash")}><Trash2 size={15} /></button>
+        {messageMoveActions(props.folderContext ?? "other").map((action) => (
+          <button key={action.target} type="button" aria-label={t(action.labelKey)} data-tooltip={t(action.labelKey)} className="row-quick-action" onClick={() => onQuickMoveMessage(message, action.target)}>
+            {action.target === "inbox" ? <Inbox size={15} /> : action.target === "archive" ? <Archive size={15} /> : <Trash2 size={15} />}
+          </button>
+        ))}
       </span>
     </div>
   );
@@ -566,6 +583,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
               gravatarEnabled={avatarGravatarEnabled}
               bimiEnabled={avatarBimiEnabled}
               accountEmails={accountEmails}
+              folderContext={messageFolderContext(message, accounts)}
               buttonRefs={messageButtonRefs}
               rowVirtualizer={rowVirtualizer}
               onRowClick={handleRowClick}
@@ -591,13 +609,11 @@ function MessageList(props: MessageListProps): React.JSX.Element {
             <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickToggleStar(target); }}>
               <Star size={15} fill={contextMenu.message.flagged ? "currentColor" : "none"} /><span>{t(contextMenu.message.flagged ? "mail.action.unstar" : "mail.action.star")}</span>
             </button>
-            <button type="button" role="menuitem" className="context-menu-item" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "archive"); }}>
-              <Archive size={15} /><span>{t("mail.action.archive")}</span>
-            </button>
-            <div className="context-menu-divider" role="separator" />
-            <button type="button" role="menuitem" className="context-menu-item danger" onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, "trash"); }}>
-              <Trash2 size={15} /><span>{t("mail.action.moveToTrash")}</span>
-            </button>
+            {messageMoveActions(messageFolderContext(contextMenu.message, accounts)).map((action) => (
+              <button key={action.target} type="button" role="menuitem" className={`context-menu-item${action.target === "trash" ? " danger" : ""}`} onClick={() => { const target = contextMenu.message; setContextMenu(null); onQuickMoveMessage(target, action.target); }}>
+                {action.target === "inbox" ? <Inbox size={15} /> : action.target === "archive" ? <Archive size={15} /> : <Trash2 size={15} />}<span>{t(action.labelKey)}</span>
+              </button>
+            ))}
           </div>
         </>
       )}

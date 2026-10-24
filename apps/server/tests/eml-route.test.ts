@@ -13,6 +13,9 @@ import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 
 const now = "2026-07-18T00:00:00.000Z";
+// Production shape: sync derives the id as 32 hex characters. A uuid passes the
+// same schema (a pending-sent placeholder), but it is not what this route sees.
+const messageId = "11111111111141118111111111111111";
 
 function insertAccountAndMessage(db: DatabaseHandle): void {
   db.prepare(`
@@ -44,7 +47,7 @@ function insertAccountAndMessage(db: DatabaseHandle): void {
       attachments_json, size, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    "11111111-1111-4111-8111-111111111111",
+    "11111111111141118111111111111111",
     "account-1",
     "INBOX",
     42,
@@ -94,7 +97,7 @@ describe("EML export API", () => {
   });
 
   it("streams the provider's original message source with export-safe headers", async () => {
-    const response = await app.inject({ method: "GET", url: "/api/messages/11111111-1111-4111-8111-111111111111/eml" });
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/eml` });
 
     expect(response.statusCode).toBe(200);
     expect(Buffer.from(response.rawPayload)).toEqual(source);
@@ -106,8 +109,8 @@ describe("EML export API", () => {
     expect(client.fetchOne).toHaveBeenCalledWith(42, { uid: true, source: true }, { uid: true });
   });
 
-  it("rejects a non-UUID id before creating an IMAP connection", async () => {
-    const response = await app.inject({ method: "GET", url: "/api/messages/not-a-uuid/eml" });
+  it("rejects an id that is neither hex digest nor uuid before creating an IMAP connection", async () => {
+    const response = await app.inject({ method: "GET", url: "/api/messages/not-a-message-id/eml" });
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ ok: false, code: "invalid_argument", message: "邮件标识无效。" });
@@ -124,7 +127,7 @@ describe("EML export API", () => {
 
   it("reports 409 when the provider no longer has the message", async () => {
     client.fetchOne.mockResolvedValue({ uid: 99, source });
-    const response = await app.inject({ method: "GET", url: "/api/messages/11111111-1111-4111-8111-111111111111/eml" });
+    const response = await app.inject({ method: "GET", url: `/api/messages/${messageId}/eml` });
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ ok: false, code: "conflict", message: "Message is no longer available in this mailbox. Sync this message again." });

@@ -6,10 +6,15 @@ import type { DatabaseHandle } from "./db.js";
 import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import {
+  generationStampedMessage,
   moveActionBlockedError,
   messagePayloadForRow,
-  type MessageStorageRow,
 } from "./message-storage.js";
+import {
+  UID_GENERATION_CHANGED_ERROR,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+} from "./mailbox-generation.js";
 
 const attachmentPartIdPattern = /^(?:[1-9]\d*)(?:\.[1-9]\d*)*$/;
 const maxAttachmentPartIdLength = 128;
@@ -53,6 +58,29 @@ export function sanitizeAttachmentContentType(value: unknown): string {
   if (typeof value !== "string") return "application/octet-stream";
   const contentType = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   return safeMimeTypePattern.test(contentType) ? contentType : "application/octet-stream";
+}
+
+/**
+ * Content types the inline endpoint is willing to let the renderer load as a
+ * document subresource. Everything else (HTML, SVG, PDF, unknown) is handed
+ * back as a download instead: the renderer and the API share one origin, so an
+ * attachment served inline can otherwise act with the app's origin.
+ */
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/avif",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+]);
+
+/** The normalized essence when it is one of the renderable image types, else null. */
+export function inlineImageType(contentType: string): string | null {
+  const essence = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return INLINE_IMAGE_TYPES.has(essence) ? essence : null;
 }
 
 function safeSize(value: unknown): number {
@@ -136,7 +164,13 @@ function isDownloadableBodyPart(part: MessageStructureObject): boolean {
   const disposition = part.disposition?.toLowerCase();
   const filename = part.dispositionParameters?.filename ?? part.parameters?.filename ?? part.parameters?.name;
   if (disposition === "attachment" || disposition === "inline" || Boolean(filename)) return true;
-  return !sanitizeAttachmentContentType(part.type).startsWith("text/");
+  const contentType = sanitizeAttachmentContentType(part.type);
+  // RFC 3462 delivery reports carry the rejected message's headers as a text
+  // part with no disposition and no filename. mailparser still lists it as an
+  // attachment, so rejecting text/* leaves here answered 409 for every bounced
+  // message even though the part is right there.
+  if (contentType === "text/rfc822-headers") return true;
+  return !contentType.startsWith("text/");
 }
 
 function isReadable(value: unknown): value is Readable {
@@ -152,9 +186,7 @@ export async function downloadMessageAttachment(
 ): Promise<MessageAttachmentDownload> {
   if (!isValidAttachmentPartId(partId)) throw new Error("Attachment part is invalid.");
 
-  const message = db.prepare(`
-    SELECT * FROM messages WHERE id = ?
-  `).get(messageId) as MessageStorageRow | undefined;
+  const message = generationStampedMessage(db, messageId);
   if (!message) throw new Error("Message not found.");
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError) throw new Error(moveBlockedError);
@@ -170,6 +202,17 @@ export async function downloadMessageAttachment(
   try {
     await client.connect();
     lock = await client.getMailboxLock(message.mailbox);
+    // A UID only identifies a message inside its generation, and the snapshot's
+    // generation was read with the row -- not re-read after this wait, when a
+    // sync may already have rebuilt the mailbox and moved the UID to a stranger.
+    // The part is refused rather than streamed from that stranger
+    // (`message-storage.ts`).
+    if (!uidGenerationAllowsWrite(
+      { source: "accepted", value: message.snapshot_uid_validity },
+      liveUidValidity(client),
+    )) {
+      throw new Error(UID_GENERATION_CHANGED_ERROR);
+    }
     const remoteMessage = await client.fetchOne(message.uid, { uid: true, bodyStructure: true }, { uid: true });
     const remotePart = remoteMessage && remoteMessage.uid === message.uid ? findBodyPart(remoteMessage.bodyStructure, partId) : undefined;
     if (!remotePart || !isDownloadableBodyPart(remotePart)) {

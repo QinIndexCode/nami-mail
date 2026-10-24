@@ -155,10 +155,8 @@ export function useAttachmentExports(options: AttachmentExportsOptions): Attachm
       showToast(t("mail.action.locationUnverified"), "info");
       return;
     }
-    if (isDemo) {
-      showToast(t("mail.attachment.previewDemoUnavailable"), "info");
-      return;
-    }
+    // Demo mode reaches the same route as production now: `demo.ts` registers
+    // the byte provider, so the drawer previews fixtures instead of refusing.
     openAttachmentPreviewRoute(message, attachment);
   };
 

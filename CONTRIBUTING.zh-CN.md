@@ -51,6 +51,9 @@ npm.cmd run verify:electron-sqlite
 3. 涉及界面交互时，至少在桌面和窄窗口检查焦点、键盘操作、文本溢出、主题和无障碍名称。
 4. 涉及邮件内容时，视其为不可信输入。不要放宽 HTML 清理、远程资源限制、本地 API 访问令牌或缓存策略。
 5. 涉及本地存储时，兼容已有数据库和加密载荷；任何迁移都应可检测、可重试，并且不能把敏感字段重新写成明文。
+6. 一次改动要带齐三件套：代码、覆盖它的测试、描述该行为的文档。三者不能同步时，提交说明必须写清哪一件被有意延后、由什么补齐——否则下一个人只能从代码反推文档，而文档会停在旧结论上。
+7. 工作树不要长期停在未提交状态。一次工作结束时要么提交，要么留下一条 WIP 说明（改了什么、已知残留、下一步）；跨多次会话的改动应拆成每个都能独立通过检查的提交。
+8. 跨模块的取舍——替换一层持久化、改动 HTTP 契约、并入或删除既有模块——先写[决策记录](docs/development/decisions/README.zh-CN.md)，再写代码。决策记录说明当时看到了什么、选了哪条路、放弃了什么；它不承诺路线图，也不随实现细节更新。
 
 提交 Pull Request 前至少运行与改动相关的检查；完整基线如下：
 
@@ -60,6 +63,8 @@ npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run build
@@ -72,7 +77,7 @@ Windows 安装包、签名和发布路径的额外步骤见 [发布指南](docs/
 
 1. 从上游仓库 fork 项目，基于最新的 `main` 创建名称清晰的功能或修复分支；不要直接向上游 `main` 推送提交。
 2. 在自己的 fork 中提交聚焦的改动。不要把 `.env`、测试账户、OAuth 回调参数、令牌、应用专用密码、证书、构建产物或本地数据一起推送。
-3. 提交前先执行下面的完整本地检查。它是 GitHub 上 `Validate Pull Request / validate` 的本地子集——CI 还会额外执行 `lint`、`test:e2e`、SQLite 加载验证与 smoke 检查；仅修正文档时也至少运行与改动相关的检查并在 PR 中说明未运行项。
+3. 提交前先执行下面的完整本地检查。它是 GitHub 上 `Validate Pull Request / validate` 的本地子集——CI 还会额外执行列表之外的检查：Node/Electron SQLite 加载验证、`smoke:server-node`、脚本级不变量测试（`node --test "scripts/tests/*.test.mjs"`）、`docs:claims:check`、`docs:release-review`、文档站构建与 locale 校验、`test:e2e:real`、Electron ABI 校验加 desktop smoke，以及 `npm audit`；仅修正文档时也至少运行与改动相关的检查并在 PR 中说明未运行项。
 4. 向上游 `main` 发起 Pull Request，按模板填写关联 Issue、用户可感知变化、验证证据和残余风险。来自 fork 的验证工作流只使用只读令牌，不读取发布或签名凭据；请不要尝试通过 PR 请求这些凭据。
 5. 先等待 `Validate Pull Request / validate` 成功，再请求审查。当前 `main` 规则要求 PR、已解决的讨论、至少一位有效审批，以及基于最新 `main` 的 `validate`；新提交会使旧审批失效。`.github/CODEOWNERS` 会将 PR 自动路由给维护者，但不能替代远端规则或人工审查。常规协作者不能直接推送或强推；管理员仅应在紧急情况下绕过，并留下可审计的后续 PR。
 
@@ -87,6 +92,8 @@ npm.cmd run build
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run smoke:runtime

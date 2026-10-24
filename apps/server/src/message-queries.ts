@@ -17,7 +17,7 @@ import type { AccountRecord } from "./types.js";
 
 /**
  * List-view reads. The WHERE/FROM fragments are produced by
- * `buildMessageListSql`, which the batch-job resolver also uses, so
+ * `buildMessageListSql`, which the batch-job selection resolver also uses, so
  * "select all matching this view" cannot drift from what the list shows.
  */
 export function countMessageRows(db: DatabaseHandle, selection: MessageListSqlSelection): number {
@@ -28,11 +28,36 @@ export function countMessageRows(db: DatabaseHandle, selection: MessageListSqlSe
 }
 
 /**
+ * The ids a list predicate matches, in list order.
+ *
+ * Same selection the list endpoints render, resolved when the caller asks --
+ * the batch acceptance materialises its selection before its transaction so a
+ * job acts on the messages the user selected, not on whatever the predicate
+ * matches once the task runs.
+ *
+ * The resolver is called with the **local-or-confirmed** flags spelling (the
+ * caller builds the selection): a message whose earlier job committed its new
+ * flags locally but has not pushed them yet is still unread as far as the
+ * server is concerned, so resolving on the target alone would make "select
+ * every unread message, mark read, then mark unread again" come back empty;
+ * resolving on the server's state alone would exclude the row the user just
+ * starred and can still see. The union is a superset of the list inside that
+ * pending window, so this can return ids the list no longer shows and a job's
+ * `total` can exceed the visible row count -- accepted deliberately.
+ */
+export function resolveMessageIds(db: DatabaseHandle, selection: MessageListSqlSelection): string[] {
+  return db
+    .prepare(`SELECT m.id ${selection.join} ${selection.where} ORDER BY COALESCE(m.sent_at, m.created_at) DESC`)
+    .pluck()
+    .all(...selection.params) as string[];
+}
+
+/**
  * The list's total order, and the cursor predicate that continues it. Both are
  * written once so a page and the cursor it hands out cannot disagree about
  * which row comes next.
  *
- * `sort_key` is the VIRTUAL generated column (SORT_KEY_SQL in db.ts) rather
+ * `sort_key` is the VIRTUAL generated column (SORT_KEY_SQL in db-schema.ts) rather
  * than a recomputed COALESCE(sent_at, created_at): the expression is not a bare
  * column, so the only index it could use was the account_id prefix of
  * idx_messages_account_mailbox and SQLite fell back to "USE TEMP B-TREE FOR
@@ -233,16 +258,6 @@ export function accountRowForMessage(db: DatabaseHandle, messageId: string): Acc
     `,
     )
     .get(messageId) as AccountRecord | undefined;
-}
-
-/** Accounts owning each of the given message ids, so a batch can be grouped per account. */
-export function messageAccountIds(
-  db: DatabaseHandle,
-  ids: readonly string[],
-): Array<{ id: string; account_id: string }> {
-  return db
-    .prepare(`SELECT id, account_id FROM messages WHERE id IN (${ids.map(() => "?").join(", ")})`)
-    .all(...ids) as Array<{ id: string; account_id: string }>;
 }
 
 export function messageAccountId(db: DatabaseHandle, id: string): string | undefined {

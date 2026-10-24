@@ -399,6 +399,7 @@ export const externalMailSummarizeInputSchema = z.object({
   sender: z.string().trim().min(1).max(externalMailReadBounds.contactAddressCharacters).optional(),
   after: isoDatetimeFieldSchema.optional(),
   before: isoDatetimeFieldSchema.optional(),
+  cursor: cursorFieldSchema.optional(),
   limit: summarizeLimitFieldSchema,
 }).strict().superRefine(validateOrderedRange);
 
@@ -415,6 +416,7 @@ export const externalMailSummarizeItemOutputSchema = z.object({
 export const externalMailSummarizeOutputSchema = z.object({
   messages: z.array(externalMailSummarizeItemOutputSchema).max(10),
   truncated: z.boolean(),
+  nextCursor: z.string().max(externalMailReadBounds.cursorCharacters).optional(),
 }).strict();
 
 export const externalMessageGetOutputSchema = z.object({

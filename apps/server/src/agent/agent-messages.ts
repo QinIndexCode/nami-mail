@@ -529,11 +529,6 @@ export const agentMessageCatalog = {
     "zh-CN": "添加邮箱后即可在 Agent 中使用邮件上下文。",
     "en-US": "Add a mail account to use mail context in Agent.",
   },
-
-  "label.new_conversation": {
-    "zh-CN": "新对话",
-    "en-US": "New conversation",
-  },
 } as const;
 
 /** Agent message key type, derived from the catalog. */

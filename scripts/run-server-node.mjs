@@ -8,6 +8,13 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const serverRoot = path.join(projectRoot, "apps", "server");
 
 const tsxCli = path.join(projectRoot, "node_modules", "tsx", "dist", "cli.mjs");
+// The dev run deliberately does not use apps/server/tsconfig.json. Its `paths`
+// alias exists only so `tsc` can see the SQLite driver's declarations, and tsx
+// applies tsconfig `paths` to runtime resolution as well -- which loads the
+// declaration file as the driver and fails startup with `ReferenceError:
+// Database is not defined`. The runtime config inherits everything else and
+// empties `paths`; see apps/server/tsconfig.runtime.json.
+const tsxRuntimeTsconfig = path.join(serverRoot, "tsconfig.runtime.json");
 
 function usage() {
   return "Usage: node scripts/run-server-node.mjs --watch | --start | --script <project-relative script>";
@@ -17,7 +24,12 @@ function resolveLaunch(argv) {
   const [mode, script] = argv;
   if (mode === "--watch" && argv.length === 1) {
     if (!fs.existsSync(tsxCli)) throw new Error(`tsx is missing: ${tsxCli}`);
-    return { command: process.execPath, args: [tsxCli, "watch", "src/index.ts"], cwd: serverRoot };
+    if (!fs.existsSync(tsxRuntimeTsconfig)) throw new Error(`The dev runtime tsconfig is missing: ${tsxRuntimeTsconfig}`);
+    return {
+      command: process.execPath,
+      args: [tsxCli, "watch", "--tsconfig", tsxRuntimeTsconfig, "src/index.ts"],
+      cwd: serverRoot,
+    };
   }
   if (mode === "--start" && argv.length === 1) {
     const entry = path.join(serverRoot, "dist", "index.js");

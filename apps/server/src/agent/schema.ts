@@ -1,24 +1,24 @@
 import type { DatabaseHandle } from "../db.js";
+import {
+  AGENT_STORE_MINIMUM_READER_VERSION,
+  AGENT_STORE_SCHEMA_VERSION,
+  AgentStoreVersionError,
+  assertCurrentSchemaShape,
+  forgetVerifiedAgentStoreShape,
+  requireColumns,
+  tableExists,
+  versionRow,
+} from "./schema-shape.js";
 
-export const AGENT_STORE_SCHEMA_VERSION = 7;
-export const AGENT_STORE_MINIMUM_READER_VERSION = 7;
-
-export class AgentStoreVersionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AgentStoreVersionError";
-  }
-}
-
-type AgentStoreVersionRow = {
-  schema_version: number;
-  minimum_reader_version: number;
-};
-
-type TableColumn = {
-  name: string;
-  pk: number;
-};
+// The store's other modules and the tests read the contract through this path;
+// the definitions live in `schema-shape.ts` so that this file stays the place
+// where a shape change becomes a new version.
+export {
+  AGENT_STORE_MINIMUM_READER_VERSION,
+  AGENT_STORE_SCHEMA_VERSION,
+  AgentStoreVersionError,
+  assertAgentStoreReadable,
+} from "./schema-shape.js";
 
 const agentStoreVersionSql = `
 CREATE TABLE IF NOT EXISTS agent_store_schema (
@@ -359,115 +359,11 @@ CREATE TABLE IF NOT EXISTS agent_rag_repair_state (
 );
 `;
 
-function tableExists(db: DatabaseHandle, name: string): boolean {
-  return Boolean(db.prepare(`
-    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
-  `).get(name));
-}
-
 function existingAgentTables(db: DatabaseHandle): string[] {
   return (db.prepare(`
     SELECT name FROM sqlite_master
     WHERE type = 'table' AND name LIKE 'agent_%' AND name <> 'agent_store_schema'
   `).all() as Array<{ name: string }>).map((row) => row.name);
-}
-
-function columnsFor(db: DatabaseHandle, table: string): TableColumn[] {
-  return db.prepare(`PRAGMA table_info(${table})`).all() as TableColumn[];
-}
-
-function requireColumns(db: DatabaseHandle, table: string, names: readonly string[]): void {
-  const columns = new Set(columnsFor(db, table).map((column) => column.name));
-  if (!names.every((name) => columns.has(name))) {
-    throw new AgentStoreVersionError(`The Agent store ${table} schema is incomplete.`);
-  }
-}
-
-function assertCurrentSchemaShape(db: DatabaseHandle): void {
-  requireColumns(db, "agent_source_events", [
-    "encrypted_source_locator",
-    "source_locator_crypto_version",
-    "claim_owner",
-    "claim_token_hash",
-    "claim_version",
-    "claim_expires_at",
-    "next_attempt_at",
-  ]);
-  requireColumns(db, "agent_provider_configurations", [
-    "provider_id",
-    "encrypted_configuration",
-    "crypto_version",
-    "created_at",
-    "updated_at",
-  ]);
-  requireColumns(db, "agent_mcp_servers", [
-    "server_id",
-    "encrypted_configuration",
-    "crypto_version",
-    "created_at",
-    "updated_at",
-  ]);
-  requireColumns(db, "agent_memory_records", [
-    "record_id",
-    "record_kind",
-    "account_id",
-    "encrypted_payload",
-    "crypto_version",
-    "occurred_at",
-    "created_at",
-    "updated_at",
-  ]);
-  requireColumns(db, "agent_conversation_streaming", [
-    "conversation_id",
-    "message_id",
-    "encrypted_payload",
-    "crypto_version",
-    "created_at",
-    "updated_at",
-  ]);
-  requireColumns(db, "agent_rag_index", [
-    "account_id",
-    "account_generation",
-    "page_id",
-    "page_revision",
-    "message_id",
-    "term",
-    "tf_subject",
-    "tf_sender",
-    "tf_body",
-    "term_count",
-    "sent_at",
-  ]);
-  requireColumns(db, "agent_rag_index_stats", [
-    "account_id",
-    "account_generation",
-    "doc_count",
-    "term_total",
-  ]);
-  const primaryKey = columnsFor(db, "agent_rag_pages")
-    .filter((column) => column.pk > 0)
-    .sort((left, right) => left.pk - right.pk)
-    .map((column) => column.name);
-  const expectedPrimaryKey = ["account_id", "account_generation", "page_id", "page_revision"];
-  if (primaryKey.length !== expectedPrimaryKey.length || primaryKey.some((column, index) => column !== expectedPrimaryKey[index])) {
-    throw new AgentStoreVersionError("The Agent RAG page schema has an unsupported primary key.");
-  }
-  const indexPrimaryKey = columnsFor(db, "agent_rag_index")
-    .filter((column) => column.pk > 0)
-    .sort((left, right) => left.pk - right.pk)
-    .map((column) => column.name);
-  const expectedIndexPrimaryKey = ["account_id", "account_generation", "page_id", "page_revision", "term"];
-  if (indexPrimaryKey.length !== expectedIndexPrimaryKey.length || indexPrimaryKey.some((column, index) => column !== expectedIndexPrimaryKey[index])) {
-    throw new AgentStoreVersionError("The Agent RAG index schema has an unsupported primary key.");
-  }
-  const statsPrimaryKey = columnsFor(db, "agent_rag_index_stats")
-    .filter((column) => column.pk > 0)
-    .sort((left, right) => left.pk - right.pk)
-    .map((column) => column.name);
-  const expectedStatsPrimaryKey = ["account_id", "account_generation"];
-  if (statsPrimaryKey.length !== expectedStatsPrimaryKey.length || statsPrimaryKey.some((column, index) => column !== expectedStatsPrimaryKey[index])) {
-    throw new AgentStoreVersionError("The Agent RAG index stats schema has an unsupported primary key.");
-  }
 }
 
 function migrateSourceEventsV1ToV2(db: DatabaseHandle, now: string): void {
@@ -700,19 +596,12 @@ function migrateAgentStoreV6ToV7(db: DatabaseHandle): void {
   db.exec(agentStoreSchemaSql);
 }
 
-function versionRow(db: DatabaseHandle): AgentStoreVersionRow | undefined {
-  return db.prepare(`
-    SELECT schema_version, minimum_reader_version
-    FROM agent_store_schema
-    WHERE id = 1
-  `).get() as AgentStoreVersionRow | undefined;
-}
-
 /**
  * Installs a new Agent schema or migrates the explicitly supported previous
  * version. A version row is never advanced unless its SQLite migration ran.
  */
 export function applyAgentStoreSchema(db: DatabaseHandle, now = new Date().toISOString()): void {
+  forgetVerifiedAgentStoreShape(db);
   db.transaction(() => {
     db.exec(agentStoreVersionSql);
     const row = versionRow(db);
@@ -757,22 +646,4 @@ export function applyAgentStoreSchema(db: DatabaseHandle, now = new Date().toISO
       WHERE id = 1
     `).run(AGENT_STORE_SCHEMA_VERSION, AGENT_STORE_MINIMUM_READER_VERSION, now);
   })();
-}
-
-/** Fails closed when schema installation or a compatible reader is unavailable. */
-export function assertAgentStoreReadable(db: DatabaseHandle): void {
-  let row: AgentStoreVersionRow | undefined;
-  try {
-    row = versionRow(db);
-  } catch {
-    throw new AgentStoreVersionError("The Agent store has not been initialized by this Runtime.");
-  }
-  if (!row) throw new AgentStoreVersionError("The Agent store has not been initialized by this Runtime.");
-  if (
-    row.schema_version !== AGENT_STORE_SCHEMA_VERSION
-    || row.minimum_reader_version > AGENT_STORE_SCHEMA_VERSION
-  ) {
-    throw new AgentStoreVersionError("The Agent store requires a schema migration or a newer Nami Mail Runtime.");
-  }
-  assertCurrentSchemaShape(db);
 }

@@ -38,7 +38,7 @@
 
 ## 错误日志落盘（feedback 支持日志粘贴的前提）
 
-**状态**：未排期。当前桌面端日志（pino）仅输出到控制台，不落盘。文件上传失败等反馈引导目前采用"问题描述 + 截图 + 复现步骤"；若实现日志落盘（写入用户数据目录、限制大小/轮转、前端可查看/复制），反馈引导可升级为"粘贴错误日志"。
+**状态**：部分完成。打包桌面已把启动阶段、崩溃、未处理拒绝与子进程 console 输出镜像进 userData 下的有界诊断文件（`startup-log.jsonl`、`startup-timings.json`、`runtime-log.jsonl`），数据目录另有有界的 `startup-request-log.jsonl`；仍缺的是面向用户的错误历史、日志查看与导出入口，因此反馈引导目前仍是"问题描述 + 截图 + 复现步骤"。若补上前端可查看/复制的日志历史，反馈引导可升级为"粘贴错误日志"。边界见[已知限制](development/known-limitations.zh-CN.md)第 11 条。
 
 ## 阅读区 AI 快捷入口（AI 总结 / AI 起草回复）
 
@@ -90,8 +90,9 @@
 
 **性能**（审计结论，按收益/工作量排序的上位项）：
 
-- 列表接口对每页返回完整 `htmlBody`，IPC 体积大（详情正文随列表一起传）。
-- `/api/stats` 每 60s 轮询做全表 `SUM(CASE ...)`，且 `flags_json LIKE '%\Seen%'` 不可走索引；`messages` 缺 `flags_json` 派生列索引。
+- ~~列表接口对每页返回完整 `htmlBody`，IPC 体积大（详情正文随列表一起传）。~~ **已完成**：列表行以 `{ body: false }` 返回，正文只在打开阅读区时单独取（`apps/server/src/routes/messages.ts`）。
+- ~~`/api/stats` 的徽标统计用全表 `SUM(CASE ...)`，`flags_json LIKE '%\Seen%'` 不可走索引，且缺少派生列索引。~~ **已完成**：侧边栏徽标改由 `folder-counts.ts` 的派生查询与 `idx_messages_unseen_by_folder` 部分索引提供，`/api/stats` 直接调用 `mailboxBadges`。
+- 列表每页仍重算一次不带游标的 `COUNT(*)`（`routes/messages.ts` 的 `countMessageRows`），首屏之后可复用首屏 total。
 - ~~列表排序用 `ORDER BY COALESCE(sent_at, created_at)` 表达式，无法用 `idx_messages_sent_at`；分页为 `LIMIT/OFFSET` 深分页。~~ **已完成**：已重构为 keyset 游标分页（`message-cursor.ts`、`message-list-indexes.ts`，游标字段为 `cursor`），支持百万级行数 O(1) 连续翻页，消除了深分页性能损耗。
 - 每请求重复 `db.prepare(...)`，无语句缓存。
 - `App.tsx` 首屏已并行（`Promise.all`），无需改动。

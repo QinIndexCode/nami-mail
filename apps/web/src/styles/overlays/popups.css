@@ -59,6 +59,11 @@ pointer-events:none
 animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
 pointer-events:none
 }
+.cloud-sync-panel.closing
+{
+animation:.12s cubic-bezier(.4,0,.2,1) both popup-out;
+pointer-events:none
+}
 .compose-contact-suggestions
 {
 animation:.12s cubic-bezier(.2,.8,.2,1) both drop-in

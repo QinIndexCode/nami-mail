@@ -1,11 +1,12 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
+import { isVisibleAttachment } from "@nami/agent-contracts";
 import type { ListResponse } from "imapflow";
-import { simpleParser, type AddressObject } from "mailparser";
+import { simpleParser } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
 import { attachmentKindsJson } from "./attachment-kind.js";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import { deleteMessagesWithBatchFtsCleanup, type DatabaseHandle } from "./db.js";
-import { deriveEncryptionKey } from "./crypto.js";
+import { remoteIdLookup } from "./message-remote-id.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import {
@@ -14,11 +15,14 @@ import {
 } from "./message-storage.js";
 import { autoCollectSender } from "./contacts.js";
 import { indexMessageFts } from "./message-search.js";
+import { flagsJsonFromRemoteSql, NO_FLAGS_INTENT_SQL } from "./message-flag-indexes.js";
 import { redactUrls } from "./message-links.js";
+import { addressValues, htmlToSnippetText, messageIdValues, snippet } from "./sync-message-text.js";
 import { serverLog } from "./logging.js";
 import {
   confirmSubmissionsInSent,
 } from "./outbox.js";
+import { claimPendingSentRow } from "./pending-sent.js";
 import { getAppSettings } from "./settings.js";
 import { getAutoReplyEngine } from "./agent/auto-reply.js";
 import {
@@ -30,6 +34,7 @@ import {
 import { accountById } from "./account-store.js";
 import { applyFilterRulesToNewMessages } from "./sync-filter-rules.js";
 import { limitStoredHtmlBody, limitStoredTextBody } from "./message-body-limits.js";
+import { uidValidityValue } from "./mailbox-generation.js";
 import { REMOTE_DELETION_PROBE_BATCH_SIZE, defaultRemoteDeletionProbeState, remoteDeletionProbeCursorKey, type RemoteDeletionProbeState } from "./sync-deletion-probe.js";
 
 /**
@@ -77,63 +82,6 @@ export type SyncProgress = {
 function autoReplyActiveForAccount(db: DatabaseHandle, accountId: string): boolean {
   const autoReply = getAppSettings(db).autoReply;
   return autoReply.enabled && autoReply.accountIds.includes(accountId);
-}
-
-function addressValues(address: AddressObject | AddressObject[] | undefined): Array<{ name: string; address: string }> {
-  if (!address) return [];
-  return (Array.isArray(address) ? address : [address]).flatMap((item) =>
-    item.value.map((entry) => ({ name: entry.name ?? "", address: entry.address ?? "" })),
-  );
-}
-
-const messageIdPattern = /<[^<>\r\n]{1,998}>/g;
-
-function messageIdValues(value: string | string[] | undefined): string[] {
-  const values = Array.isArray(value) ? value : value ? [value] : [];
-  const ids = values.flatMap((item) => item.match(messageIdPattern) ?? []);
-  return [...new Set(ids)].slice(-50);
-}
-
-const SNIPPET_MAX_LENGTH = 150;
-
-const htmlEntityMap: Record<string, string> = {
-  amp: "&",
-  apos: "'",
-  gt: ">",
-  lt: "<",
-  nbsp: " ",
-  quot: "\"",
-};
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(?:#(x[0-9a-fA-F]+|\d+)|([a-zA-Z]+));/g, (whole, numeric: string | undefined, name: string | undefined) => {
-    if (numeric) {
-      const codePoint = numeric.startsWith("x") || numeric.startsWith("X")
-        ? Number.parseInt(numeric.slice(1), 16)
-        : Number.parseInt(numeric, 10);
-      if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return whole;
-      try { return String.fromCodePoint(codePoint); } catch { return whole; }
-    }
-    return name && htmlEntityMap[name.toLowerCase()] !== undefined ? htmlEntityMap[name.toLowerCase()]! : whole;
-  });
-}
-
-function htmlToSnippetText(html: string): string {
-  let text = html;
-  // Strip non-visible blocks first so their content doesn't leak into the snippet.
-  text = text.replace(/<(script|style|head|noscript|svg)[^>]*>[\s\S]*?<\/\1\s*>/gi, " ");
-  // Strip all remaining HTML tags.
-  text = text.replace(/<[^>]+>/g, " ");
-  // Decode HTML entities and collapse whitespace.
-  text = decodeHtmlEntities(text).replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
-  return text;
-}
-
-function snippet(value: string): string {
-  // Redact URLs up front so raw links never land in the stored snippet; the
-  // neutral sentinel is rendered as a localized label by the consumer.
-  const compact = redactUrls(value.replace(/\s+/g, " ").trim());
-  return compact.length <= SNIPPET_MAX_LENGTH ? compact : `${compact.slice(0, SNIPPET_MAX_LENGTH).trimEnd()}…`;
 }
 
 const SNIPPET_REDACT_MIGRATION_ID = "message-snippet-redact-v1";
@@ -184,25 +132,6 @@ function messageKey(accountId: string, mailbox: string, uid: number): string {
   return createHash("sha256").update(`${accountId}\0${mailbox}\0${uid}`).digest("hex").slice(0, 32);
 }
 
-const remoteIdLookupKeyPurpose = "message-remote-id-lookup-v1";
-
-// The HKDF derivation dominates remoteIdLookup's cost and its output depends
-// only on (masterKey, purpose), so memoize it per master-key object. The
-// cached key shares the master key's own lifetime (both live for the whole
-// process), which is why it is not zeroed after each use unlike the
-// single-shot keys elsewhere.
-const remoteIdLookupKeyCache = new WeakMap<Buffer, Buffer>();
-
-function remoteIdLookup(masterKey: Buffer, accountId: string, remoteId: string | undefined): string | null {
-  if (!remoteId) return null;
-  let key = remoteIdLookupKeyCache.get(masterKey);
-  if (!key) {
-    key = deriveEncryptionKey(masterKey, remoteIdLookupKeyPurpose);
-    remoteIdLookupKeyCache.set(masterKey, key);
-  }
-  return `h1.${createHmac("sha256", key).update(accountId, "utf8").update("\0").update(remoteId, "utf8").digest("base64url")}`;
-}
-
 function isSelectableFolder(folder: ListResponse): boolean {
   return folder.listed && !folder.flags.has("\\Noselect");
 }
@@ -238,13 +167,9 @@ function partialSyncMessage(failedFolders: number): string {
   return `${failedFolders} 个文件夹未完成同步，其他文件夹的邮件仍可使用。`;
 }
 
-function uidValidityValue(value: unknown): string | undefined {
-  if (typeof value === "bigint") return value.toString();
-  // ImapFlow exposes a bigint in production. Accepting an integer here keeps
-  // the cache boundary easy to exercise with small test doubles.
-  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
-  return undefined;
-}
+// `uidValidityValue` lives in `mailbox-generation.ts` now: the user-driven write
+// paths need the same normalisation, and two spellings of "is this the same
+// generation" is exactly how one of them ends up wrong.
 
 export async function syncAccount(
   db: DatabaseHandle,
@@ -284,21 +209,21 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       .filter(isSelectableFolder)
       .sort((a, b) => folderPriority(a) - folderPriority(b) || a.name.localeCompare(b.name));
     const previousFolderState = new Map(
-      (db.prepare("SELECT path, uid_validity, total, unseen FROM folders WHERE account_id = ?").all(accountId) as Array<{
+      (db.prepare("SELECT path, uid_validity, remote_total, remote_unseen FROM folders WHERE account_id = ?").all(accountId) as Array<{
         path: string;
         uid_validity: string | null;
-        total: number;
-        unseen: number;
+        remote_total: number | null;
+        remote_unseen: number | null;
       }>).map((folder) => [folder.path, folder]),
     );
     const upsertFolder = db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
-      VALUES (@accountId, @path, @name, @specialUse, @total, @unseen, @uidValidity)
+      INSERT INTO folders (account_id, path, name, special_use, remote_total, remote_unseen, uid_validity)
+      VALUES (@accountId, @path, @name, @specialUse, @remoteTotal, @remoteUnseen, @uidValidity)
       ON CONFLICT(account_id, path) DO UPDATE SET
         name = excluded.name,
         special_use = excluded.special_use,
-        total = excluded.total,
-        unseen = excluded.unseen,
+        remote_total = excluded.remote_total,
+        remote_unseen = excluded.remote_unseen,
         uid_validity = excluded.uid_validity
     `);
 
@@ -306,8 +231,8 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       path: string;
       name: string;
       specialUse: string | null;
-      total: number;
-      unseen: number;
+      remoteTotal: number | null;
+      remoteUnseen: number | null;
       uidValidity: string | null;
     }> = [];
     for (const folder of folders) {
@@ -322,11 +247,11 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         path: folder.path,
         name: folder.name || folder.path,
         specialUse: folder.specialUse ?? null,
-        // STATUS can be denied for virtual folders; falling back to zero would
-        // clobber the last known counts (and trip unread badges) until the
-        // next successful STATUS. Keep the previous observation instead.
-        total: status.messages ?? previous?.total ?? 0,
-        unseen: status.unseen ?? previous?.unseen ?? 0,
+        // STATUS can be denied for virtual folders. Keep the previous observation
+        // rather than a zero, and "never observed" as NULL: nothing derives from
+        // this column, so a fabricated 0 is a wrong number wearing authority.
+        remoteTotal: status.messages ?? previous?.remote_total ?? null,
+        remoteUnseen: status.unseen ?? previous?.remote_unseen ?? null,
         // Do not accept a status-only UIDVALIDITY observation. It must be
         // confirmed by the successful mailbox SELECT below before old cache
         // rows can be considered part of the same UID epoch.
@@ -351,16 +276,24 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       serverLog.warn({ accountId }, "IMAP LIST returned no folders; skipping folder-removal pass");
     } else {
       const inactiveFolderClause = ` AND mailbox NOT IN (${activeFolderPaths.map(() => "?").join(", ")})`;
+      // A local Sent placeholder is exempt: it is keyed to a delivery that has
+      // not reconciled yet, so "LIST no longer has this folder" is not evidence
+      // about it. Only its own settle hook retracts one (`pending-sent.ts`). The
+      // exemption is in the SELECT, the DELETE and the batch FTS scope below, and
+      // all three must stay one domain: a scope wider than the DELETE clears the
+      // mirror of rows the DELETE leaves alive.
       const listMessagesInRemovedFolders = db.prepare(`
         SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
         FROM messages
         WHERE account_id = ?${inactiveFolderClause}
           AND COALESCE(pending_move_destination, '') = ''
+          AND COALESCE(pending_send, '') = ''
       `);
       const deleteMessagesInRemovedFolders = db.prepare(`
         DELETE FROM messages
         WHERE account_id = ?${inactiveFolderClause}
           AND COALESCE(pending_move_destination, '') = ''
+          AND COALESCE(pending_send, '') = ''
       `);
 
       db.transaction(() => {
@@ -373,7 +306,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         // the bulk delete instead of full-scanning the index once per row.
         deleteMessagesWithBatchFtsCleanup(
           db,
-          `account_id = ?${inactiveFolderClause} AND COALESCE(pending_move_destination, '') = ''`,
+          `account_id = ?${inactiveFolderClause} AND COALESCE(pending_move_destination, '') = '' AND COALESCE(pending_send, '') = ''`,
           [accountId, ...activeFolderPaths],
           () => {
             deleteMessagesInRemovedFolders.run(accountId, ...activeFolderPaths);
@@ -414,14 +347,14 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         from_name = excluded.from_name,
         from_address = excluded.from_address,
         to_json = excluded.to_json,
-        cc_json = excluded.to_json,
+        cc_json = excluded.cc_json,
         in_reply_to = excluded.in_reply_to,
         references_json = excluded.references_json,
         sent_at = excluded.sent_at,
         snippet = excluded.snippet,
         text_body = excluded.text_body,
         html_body = excluded.html_body,
-        flags_json = excluded.flags_json,
+        flags_json = ${flagsJsonFromRemoteSql("excluded.flags_json")},
         has_attachments = excluded.has_attachments,
         attachments_json = excluded.attachments_json,
         attachment_kinds_json = excluded.attachment_kinds_json,
@@ -439,7 +372,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           remote_id_lookup = COALESCE(?, remote_id_lookup),
           all_mail_archived = COALESCE(?, all_mail_archived)
       WHERE account_id = ? AND mailbox = ? AND uid = ?
-        AND pending_flags_push IS NOT 1
+        AND ${NO_FLAGS_INTENT_SQL}
     `);
     const findPendingMoves = db.prepare(`
       SELECT * FROM messages
@@ -460,7 +393,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       UPDATE messages
       SET mailbox = ?,
           uid = ?,
-          flags_json = ?,
+          flags_json = ${flagsJsonFromRemoteSql("?")},
           remote_id_lookup = ?,
           all_mail_archived = ?,
           pending_move_destination = NULL,
@@ -490,9 +423,14 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       SET pending_move_candidate_uid = NULL
       WHERE account_id = ? AND pending_move_destination = ? AND pending_move_candidate_uid = ?
     `);
+    // The UID epoch this pass destroys is not the placeholder's: it was never
+    // given a provider uid, so it survives a reset (the claim below hands it the
+    // real uid whenever the provider's copy finally appears). Same exemption in
+    // the candidate SELECT and the batch FTS scope -- all three one domain.
     const deleteFolderMessages = db.prepare(`
       DELETE FROM messages
       WHERE account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = ''
+        AND COALESCE(pending_send, '') = ''
     `);
     const updateFolderUidValidity = db.prepare("UPDATE folders SET uid_validity = ? WHERE account_id = ? AND path = ?");
     type RemoteDeletionCandidate = {
@@ -682,7 +620,15 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         // sufficient to classify an All Mail intent as archived when labels
         // are not observable from this provider.
         ?? (pendingWasIntent ? 1 : null);
-      const flagsJson = JSON.stringify([...(message.flags ?? [])]);
+      const remoteFlagsJson = JSON.stringify([...(message.flags ?? [])]);
+      // Confirming the destination position is the reconciler's whole job; it is
+      // not evidence that the provider's flags superseded a local write. While a
+      // `flags` task still holds this row, `flags_json` is the user's target, so
+      // the update below keeps it and the event mirrors the value actually
+      // stored rather than the one the provider just reported.
+      const flagsJson = pending.pending_flags_push === 1 && typeof pending.flags_json === "string"
+        ? pending.flags_json
+        : remoteFlagsJson;
       db.transaction(() => {
         const duplicateDestinationRows = listDestinationCopies.all(
           accountId,
@@ -694,7 +640,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         const reconciled = reconcilePendingMove.run(
           folder.path,
           message.uid,
-          flagsJson,
+          remoteFlagsJson,
           remoteLookup,
           reconciledAllMailState,
           pending.id,
@@ -806,6 +752,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
                 SELECT id, mailbox, uid, remote_id_lookup, flags_json, all_mail_archived
                 FROM messages
                 WHERE account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = ''
+                  AND COALESCE(pending_send, '') = ''
               `).all(accountId, folder.path) as Array<{
                 id: string;
                 mailbox: string;
@@ -819,7 +766,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               // the bulk delete instead of full-scanning the index once per row.
               deleteMessagesWithBatchFtsCleanup(
                 db,
-                "account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = ''",
+                "account_id = ? AND mailbox = ? AND COALESCE(pending_move_destination, '') = '' AND COALESCE(pending_send, '') = ''",
                 [accountId, folder.path],
                 () => {
                   deleteFolderMessages.run(accountId, folder.path);
@@ -908,6 +855,9 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
         const newUids: number[] = [];
         const attachmentMetadataRefreshUids: number[] = [];
         const hydratedMessageIds = new Map<number, string>();
+        // Only Sent can hold a claimable placeholder, so every other folder --
+        // the inbox above all -- never derives a probe for one.
+        const mayHoldPlaceholder = folder.specialUse === "\\Sent";
 
         for await (const message of client.fetch(windowFloor, {
           uid: true,
@@ -1022,8 +972,20 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           const html = limitStoredHtmlBody(typeof parsed?.html === "string" ? parsed.html : "");
           const sentAtValue = parsed?.date ?? message.envelope?.date ?? message.internalDate ?? new Date();
           const sentAt = sentAtValue instanceof Date ? sentAtValue : new Date(sentAtValue);
-          const id = hydratedMessageIds.get(message.uid) ?? messageKey(accountId, folder.path, message.uid);
-          const subject = parsed?.subject ?? message.envelope?.subject ?? "（无主题）";
+          // A just-sent mail was already written locally, so the provider's copy
+          // fills that row instead of adding a second one. The claim has to be
+          // resolved *here*: `id` is the payload's AAD, so it must be settled
+          // before the payload is sealed below, and every write in the
+          // transaction (the upsert, the FTS mirror, the agent event) must use
+          // the claimed row's id rather than a derived one.
+          const id = (mayHoldPlaceholder
+            ? claimPendingSentRow(db, masterKey, { accountId, mailbox: folder.path, messageId, uid: message.uid })
+            : null)
+            ?? hydratedMessageIds.get(message.uid)
+            ?? messageKey(accountId, folder.path, message.uid);
+          // Empty, not a hard-coded Chinese "（无主题）": the stored row must not
+          // carry one UI language's placeholder, so the reader localizes it.
+          const subject = parsed?.subject ?? message.envelope?.subject ?? "";
           const flags = [...(message.flags ?? [])];
           const attachments = attachmentMetadataFromParsedMail(parsed?.attachments ?? []);
           const protectedColumns = protectedMessageColumns(masterKey, id, accountId, {
@@ -1051,7 +1013,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           const allMailArchived = allMailArchivedValue(folder, message.labels);
           const flagsJson = JSON.stringify(flags);
           const sentAtIso = sentAt.toISOString();
-          const hasAttachments = parsed?.attachments?.length ? 1 : 0;
           const size = message.size ?? message.source?.length ?? 0;
           db.transaction(() => {
             upsert.run({
@@ -1064,8 +1025,8 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               ...protectedColumns,
               sentAt: sentAtIso,
               flagsJson,
-              hasAttachments,
-              attachmentKindsJson: attachmentKindsJson(attachments),
+              hasAttachments: attachments.some(isVisibleAttachment) ? 1 : 0,
+              attachmentKindsJson: attachmentKindsJson(attachments.filter(isVisibleAttachment)),
               size,
               payloadMetadataReady: 1,
               createdAt: new Date().toISOString(),
@@ -1215,9 +1176,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
       // Filter-rule automation must never break the sync result. Failures are
       // logged and the affected messages remain visible for manual handling.
       void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
-        .catch((error) => {
-          serverLog.warn({ accountId }, "Filter rule application failed", error);
-        });
+        .catch((error) => { serverLog.warn({ accountId }, "Filter rule application failed", error); });
     }
     if (pendingAutoReplyTargets.length > 0) {
       const targets = pendingAutoReplyTargets;

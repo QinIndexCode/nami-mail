@@ -5,6 +5,7 @@ import {
   type AgentSourceEventType,
 } from "@nami/agent-contracts";
 import type { DatabaseHandle } from "../db.js";
+import { preparedStatement } from "../db.js";
 import type { AccountLifecycleStore} from "./lifecycle.js";
 import { type AccountGenerationLease } from "./lifecycle.js";
 import {
@@ -204,7 +205,7 @@ export class AgentSourceEventOutbox {
   }
 
   private row(eventId: string): StoredSourceEventRow | undefined {
-    return this.db.prepare("SELECT * FROM agent_source_events WHERE event_id = ?").get(eventId) as StoredSourceEventRow | undefined;
+    return preparedStatement(this.db, "SELECT * FROM agent_source_events WHERE event_id = ?").get(eventId) as StoredSourceEventRow | undefined;
   }
 
   private claimHash(claim: Pick<SourceEventClaim, "eventId" | "owner" | "token" | "version">): string {
@@ -380,7 +381,7 @@ export class AgentSourceEventOutbox {
       // Re-check in the same local transaction as the source-state change.
       this.lifecycle.assertCurrent(lease);
     }
-    this.db.prepare(enqueueSourceEventSql).run(
+    preparedStatement(this.db, enqueueSourceEventSql).run(
       eventId,
       input.event.accountId,
       input.event.accountGeneration,
@@ -393,7 +394,7 @@ export class AgentSourceEventOutbox {
       input.event.occurredAt,
       createdAt,
     );
-    const stored = this.db.prepare(`
+    const stored = preparedStatement(this.db, `
       SELECT * FROM agent_source_events
       WHERE account_id = ? AND account_generation = ? AND source_locator_opaque = ?
         AND source_revision = ? AND event_type = ?

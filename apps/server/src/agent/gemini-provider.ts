@@ -1,9 +1,12 @@
 import {
   awaitAbortable,
+  createProviderToolNames,
   endpointUrl,
   hasUnsafeToolArguments,
   linesFrom,
   maximumSseLineBytes,
+  maximumToolArgumentsBytes,
+  providerErrorFromResponse,
   providerRequest,
   safeMessage,
   statusError,
@@ -12,6 +15,7 @@ import {
   unsafeToolArgumentsError,
   asRecord,
   type ProviderResponseLease,
+  type ProviderToolNames,
 } from "./provider-common.js";
 import {
   createAgentError,
@@ -26,8 +30,6 @@ import {
   type ProviderTokenUsage,
   type ToolCall,
 } from "@nami/agent-contracts";
-
-const maximumToolArgumentsBytes = 200 * 1024;
 
 export type GeminiProviderOptions = {
   id: string;
@@ -53,7 +55,7 @@ type PendingFunctionCall = {
  * `functionCall` parts inside model turns. Adjacent same-role turns are merged
  * because the Gemini API requires strictly alternating user/model roles.
  */
-function geminiContents(request: ProviderChatRequest): { system?: string; contents: unknown[] } {
+function geminiContents(request: ProviderChatRequest, names: ProviderToolNames): { system?: string; contents: unknown[] } {
   const systemParts: string[] = [];
   const rest: ProviderChatMessage[] = [];
   for (const message of request.messages) {
@@ -71,7 +73,7 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
   const toolNameById = new Map<string, string>();
   for (const message of rest) {
     if (message.role === "assistant") {
-      for (const call of message.toolCalls ?? []) toolNameById.set(call.id, call.toolName);
+      for (const call of message.toolCalls ?? []) toolNameById.set(call.id, names.toWire(call.toolName));
     }
   }
 
@@ -91,7 +93,7 @@ function geminiContents(request: ProviderChatRequest): { system?: string; conten
         parts.push({ text });
       }
       for (const call of message.toolCalls ?? []) {
-        parts.push({ functionCall: { name: call.toolName, args: call.input } });
+        parts.push({ functionCall: { name: names.toWire(call.toolName), args: call.input } });
       }
       if (!parts.length) parts.push({ text: " " });
       converted.push({ role: "model", parts });
@@ -157,13 +159,19 @@ function toolOutput(content: string): unknown {
   }
 }
 
-function geminiTools(tools: readonly AgentToolDescriptor[]): unknown[] {
+function geminiTools(tools: readonly AgentToolDescriptor[], names: ProviderToolNames): unknown[] {
   return tools.map((tool) => ({
     functionDeclarations: [
       {
-        name: tool.name,
+        name: names.toWire(tool.name),
         description: tool.description,
-        parameters: tool.parametersSchema ?? { type: "object", additionalProperties: true },
+        // `parameters` only accepts Gemini's Schema proto subset, which has no
+        // `$schema` or `additionalProperties`; the registry fills every schema
+        // with `z.toJSONSchema`, which emits both. `parametersJsonSchema`
+        // accepts the standard JSON Schema document instead.
+        ...(tool.parametersSchema
+          ? { parametersJsonSchema: tool.parametersSchema }
+          : { parameters: { type: "object" } }),
       },
     ],
   }));
@@ -250,6 +258,9 @@ export class GeminiProvider implements LlmProvider {
       return;
     }
     const functionCalls = new Map<number, PendingFunctionCall>();
+    // Wire names are remapped per request: providers reject the canonical
+    // dotted ids, and the mapping also has to cover replayed tool calls.
+    const names = createProviderToolNames(request.tools.map((tool) => tool.name));
     let nextCallIndex = 0;
       let finishReason: ProviderFinishReason = "stop";
       let sawDone = false;
@@ -258,7 +269,7 @@ export class GeminiProvider implements LlmProvider {
     let cachedTokens: number | undefined;
     let lease: ProviderResponseLease | undefined;
     try {
-      const { system, contents } = geminiContents(request);
+      const { system, contents } = geminiContents(request, names);
       const generationConfig: Record<string, unknown> = {};
       if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
       if (request.maxOutputTokens !== undefined) generationConfig.maxOutputTokens = request.maxOutputTokens;
@@ -266,7 +277,7 @@ export class GeminiProvider implements LlmProvider {
       const body: Record<string, unknown> = {
         contents,
         ...(system !== undefined ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-        ...(request.allowToolCalls && request.tools.length ? { tools: geminiTools(request.tools) } : {}),
+        ...(request.allowToolCalls && request.tools.length ? { tools: geminiTools(request.tools, names) } : {}),
         ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
       };
       const path = `models/${request.model}:streamGenerateContent?alt=sse`;
@@ -284,7 +295,7 @@ export class GeminiProvider implements LlmProvider {
       );
       const response = lease.response;
       if (!response.ok) {
-        yield { type: "error", error: statusError(response.status) };
+        yield { type: "error", error: await providerErrorFromResponse(response, lease.signal) };
         yield { type: "completed", finishReason: "content-filter" };
         return;
       }
@@ -351,7 +362,7 @@ export class GeminiProvider implements LlmProvider {
                   if (argsText.length > maximumToolArgumentsBytes) {
                     throw new Error("Tool call arguments exceeded the provider safety limit.");
                   }
-                  functionCalls.set(nextCallIndex, { name: call.name, args: argsText });
+                  functionCalls.set(nextCallIndex, { name: names.fromWire(call.name), args: argsText });
                   nextCallIndex += 1;
                 }
               }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
 import { autoReplyConfigPatchSchema } from "@nami/agent-contracts";
 import { openDatabase } from "../src/db.js";

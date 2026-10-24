@@ -26,11 +26,28 @@ export type AgentAccountDeletion = {
 };
 
 /**
+ * The full surface a caller needs from the Agent's mail-event recorder: the two
+ * message hooks plus the account-deletion pair.
+ *
+ * Structural rather than the class type, so the SSE bridge below (or a test
+ * double) can wrap the real recorder. `AgentMailStateEvents` has private fields,
+ * which makes the class nominal -- a wrapper could not be assigned where the
+ * class is expected even though it forwards every public method.
+ */
+export type AgentMailStateEventSink = AgentMailEventSink & {
+  beginAccountDeletion(
+    accountId: string,
+    deletePrimaryAccountWithinTransaction: () => void,
+  ): AgentAccountDeletion;
+  completeAccountDeletion(accountId: string, deletionGeneration: number): void;
+};
+
+/**
  * Turns committed primary-mail mutations into opaque Agent source events.
  * Callers own the surrounding SQLite transaction; this class never starts a
  * second transaction for message events.
  */
-export class AgentMailStateEvents implements AgentMailEventSink {
+export class AgentMailStateEvents implements AgentMailStateEventSink {
   constructor(
     private readonly masterKey: Buffer,
     private readonly lifecycle: AccountLifecycleStore,

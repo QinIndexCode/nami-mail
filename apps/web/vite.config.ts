@@ -4,6 +4,23 @@ import { readFileSync } from "node:fs";
 
 const appVersion = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
 
+// The attachment preview resolves pdf.js's CMaps/fonts/ICC profiles/wasm
+// decoders from `public/pdfjs/`, staged by scripts/copy-pdfjs-assets.mjs. The
+// guard below needs the installed version; fail config loading with an
+// actionable message instead of a bare ENOENT when node_modules is incomplete.
+function readPdfjsVersion(): string {
+  for (const candidate of ["../../node_modules/pdfjs-dist/package.json", "../node_modules/pdfjs-dist/package.json"]) {
+    try {
+      return (JSON.parse(readFileSync(new URL(candidate, import.meta.url), "utf8")) as { version: string }).version;
+    } catch {
+      // Try the next hoisting layout.
+    }
+  }
+  throw new Error("找不到 pdfjs-dist：先运行 npm install");
+}
+
+const pdfjsVersion = readPdfjsVersion();
+
 // The splash logo ships inline as a data URL so the app page's splash paints
 // the logo on its very first frame: an async <img src> re-fetches it after
 // the desktop's native splash hands over, and the logo visibly blinks off and
@@ -20,6 +37,27 @@ export default defineConfig({
         handler(html) {
           return html.replace("__NAMI_SPLASH_LOGO_SRC__", splashLogoDataUrl);
         },
+      },
+    },
+    {
+      // npm scripts stage the pdf.js assets before building, but a bare
+      // `npx vite build` bypasses them. Without this guard the build succeeds
+      // and the packaged app 404s every CMap/wasm request at render time, which
+      // is exactly the failure mode that is painful to diagnose. `apply: build`
+      // keeps dev/test runs unaffected.
+      name: "nami-pdfjs-assets-guard",
+      apply: "build",
+      buildStart() {
+        let manifestVersion: string | undefined;
+        try {
+          const manifest = JSON.parse(readFileSync(new URL("./public/pdfjs/manifest.json", import.meta.url), "utf8")) as { version?: string };
+          manifestVersion = manifest.version;
+        } catch {
+          manifestVersion = undefined;
+        }
+        if (manifestVersion !== pdfjsVersion) {
+          throw new Error("pdfjs 资产缺失：先运行 npm run assets:pdfjs");
+        }
       },
     },
   ],

@@ -1,55 +1,14 @@
 
 /* ---------------------------------------------------------------------------
  * Attachment display polish
- * 1. Kind-colored file tiles (both compose and reader).
+ * 1. Per-type file icons come from react-file-icon and carry their own colors
+ *    (Word blue, Excel green, PDF red), so the wrapper stays transparent.
  * 2. Green "done" badge on freshly attached / already downloaded files.
  * 3. Animated indeterminate transfer bar while uploading / downloading.
  * ------------------------------------------------------------------------- */
 .attachment-file-icon
 {
 position:relative
-}
-.attachment-file-icon.kind-image
-{
-background:color-mix(in srgb, var(--accent) 12%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--accent) 42%, var(--line));
-color:color-mix(in srgb, var(--accent) 84%, var(--text))
-}
-.attachment-file-icon.kind-spreadsheet
-{
-background:color-mix(in srgb, var(--success) 13%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--success) 42%, var(--line));
-color:color-mix(in srgb, var(--success) 84%, var(--text))
-}
-.attachment-file-icon.kind-pdf
-{
-background:color-mix(in srgb, var(--danger) 10%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--danger) 38%, var(--line));
-color:color-mix(in srgb, var(--danger) 84%, var(--text))
-}
-.attachment-file-icon.kind-archive
-{
-background:color-mix(in srgb, var(--warning) 14%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--warning) 44%, var(--line));
-color:color-mix(in srgb, var(--warning) 88%, var(--text))
-}
-.attachment-file-icon.kind-document,.attachment-file-icon.kind-text,.attachment-file-icon.kind-other
-{
-background:color-mix(in srgb, var(--text-soft) 9%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--text-soft) 26%, var(--line));
-color:var(--text-soft)
-}
-.attachment-file-icon.kind-code
-{
-background:color-mix(in srgb, var(--kind-code) 12%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--kind-code) 42%, var(--line));
-color:color-mix(in srgb, var(--kind-code) 84%, var(--text))
-}
-.attachment-file-icon.kind-media
-{
-background:color-mix(in srgb, var(--kind-media) 11%, var(--panel-muted));
-border-color:color-mix(in srgb, var(--kind-media) 40%, var(--line));
-color:color-mix(in srgb, var(--kind-media) 84%, var(--text))
 }
 .compose-attachment-item.is-success .attachment-file-icon::after,.attachment-card.is-ready .attachment-file-icon::after
 {
@@ -118,8 +77,7 @@ margin-bottom:8px
 .agent-message-attachment .attachment-file-icon
 {
 width:24px;
-height:24px;
-border-radius:5px
+height:30px
 }
 
 /* Overflow toggle for long attachment lists: dashed, low-key chip. */

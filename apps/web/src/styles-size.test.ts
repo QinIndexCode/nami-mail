@@ -46,6 +46,10 @@ describe("styles.css size ratchet", () => {
   // （tokens/, base/, components/, overlays/, features/ 共 29 个模块）。
   // 根 styles.css 保持纯粹的导入索引（≤ 40 行）。
   // 聚合总样式继续保持严格的防膨胀棘轮限制（FROZEN_AGGREGATED_MAX_LINES）。
+  // 2026-10-24 有记录的一次上调（18_168 → 18_173）：外部连接三步引导的
+  // 「已完成」状态_chip——.connections-step-title（标题独占省略）与
+  // .connections-step-done（pill 语境紧凑完成态，配对列表的 status_chip
+  // 色彩挂在行选择器上、在此语境不生效），净 +4 行；下轮 CSS 瘦身时应优先收回。
   // 2026-10-05 有记录的一次上调（17_600 → 17_610）：账户连接状态进行时态——
   // 侧边栏账户行同步中状态点 .status-dot.syncing（脉冲动画 + reduced-motion
   // 降级，共 10 行）；下轮 CSS 瘦身时应优先收回。
@@ -96,8 +100,70 @@ describe("styles.css size ratchet", () => {
   // overflow:hidden 与两个滚动容器，absolute 无法逃出），一律 portal 到
   // body 并由 useDialogFocus 的 portal 注册表承认，规则连同其 4 行说明一并移除。
   // 实测聚合 17_662 行（-8），阈值取实测 +12 行缓冲。
+  // 2026-10-18 有记录的一次上调（17_674 → 17_822）：右侧图标栏新增「云端同步」
+  // 面板——紧贴按钮左侧的小型状态浮层，列出仍在投递到邮件服务器的任务与近期
+  // 失败（提交/投递分离后，投递阶段在工具栏上不可见，这是它唯一的出口）。
+  // 实测聚合 17_810 行（+143），阈值取实测 +12 行缓冲。本轮 +143 行的来源
+  // （均为一个新的用户界面所必需，无 gold-plating）：
+  //   features/mail.css +138：.rail-item 定位上下文（7，含 3 行说明为何只加
+  //     position:relative——列的 align-items:center 已把盒子收成 40px 按钮）；
+  //     .cloud-sync-panel（26，含 6 行说明为何用 absolute 而非 fixed、为何不设
+  //     遮罩、为何 z-index 取 20）；面板头/标题/关闭键及悬停（29，面板内的关闭
+  //     键不能复用 .icon-button——.icon-rail 的后代选择器会把它撑到 40px）；
+  //     失败提示与重试键（25）、两个分区的容器与列表（15，分区标题复用既有
+  //     .eyebrow，未新增规则）、任务行及其三段文字（36，其中 account/detail/note
+  //     已合并为一条共用规则，行内邮箱用省略号收口）；
+  //   overlays/popups.css +5：.cloud-sync-panel.closing 的退场动画与
+  //     pointer-events:none（退场规则按惯例集中在该文件）。
+  // 下一轮 CSS 瘦身时应优先收回：先看这个旁路面板能否与发件箱状态浮层共用一套
+  // 外壳规则（两者都是「按钮左侧的列表浮层」），再合并 .cloud-sync-close 与
+  // 其他自绘的小图标键。
+  // 2026-10-20 有记录的一次下调（17_822 → 17_812）：统一全站复制按钮的反馈动画。
+  // 复制图标（账号地址、连接设置 6 处、添加账号服务配置、验证码、Agent 消息与
+  // 右键菜单）此前各自复制了一份「换成勾再换回来」的状态与动画；现收敛到
+  // components/CopyButton.tsx 与 buttons.css 的一条 .copy-button.copied 规则。
+  // 实测聚合 17_800 行，阈值取实测 +12 行缓冲。按文件计：
+  //   buttons.css +29：共享 .copy-button.copied>svg 的绿色勾与 scale-in 动画、
+  //     keyframes 与 reduced-motion 关闭（只有勾出现时动画，普通复制图标挂载
+  //     时不闪）；另含一条通用的 .secondary-button.copy-button.copied 颜色/边框
+  //     规则——选择器不限于某个页面，故与共享规则同处，而不是留在 connections.css；
+  //   accounts.css -12：删除 .accounts-copy-address svg 与 account-copy-icon-in；
+  //   agent.css -25：删除 .agent-corner-button.copy svg 的 transition、.copied 规则
+  //     与重复的 agent-copy-check keyframes（保留 overflow:hidden）；
+  //   connections.css -2：删除 :is(...) 的动画行与 .copied 颜色/边框规则（前者由
+  //     共享规则提供，后者迁入 buttons.css）。
+  // 下一轮 CSS 瘦身时应优先收回：.setup-guide-copy.copied 与共享 .copied 的绿色
+  // 处理可以合并，两者只是颜色来源不同。
+  // 同日补充：复制反馈改成双向交叉过渡——复制图标与勾同时挂载，由 .copied 切换
+  // opacity/scale，勾淡出、复制图标淡入也有过渡（原实现只给勾做了入场动画，
+  // 返回时图标瞬间替换）。buttons.css 由 29 行增至 34 行（+5），实测聚合
+  // 17_805 行，余量 7，未上调阈值。
+  // 2026-10-20 有记录的一次上调（17_812 → 17_955）：附件预览从 <iframe> 换成
+  // 组合式抽屉。净变化 = 搬移 187（mail.css）+ 23（auto-reply.css）出、
+  // 新文件 features/attachment-preview.css 的 193 行搬移基底入（+2 是它自己那层
+  // @media 包裹），再加上 N₂ = 153 行新增规则（图片/媒体/PDF/下载卡/文本页脚/
+  // 共享滚动区/焦点环——旧实现里这些由 iframe 内的浏览器渲染，没有任何 CSS）。
+  // 基底是 193 而不是计划里的 212：搬移时丢掉了两条随 iframe 一起作废的规则
+  // （.attachment-preview-frame 9 行、.attachment-preview-unsupported 及其 p
+  // 共 10 行），下载卡已由新增的 .attachment-preview-download-only /
+  // -download-reason 取代。实测聚合 17_943 行，阈值取实测 +12 行缓冲。
+  // 下一轮 CSS 瘦身时应优先收回：S3/S4 的新表面可以与现有 .attachment-card
+  // 共用外壳。
+  // 2026-10-23 S3 的一次上调（17_955 → 18_168）：四类文档表面（Office 段落与
+  // 工作表、Markdown、归档清单）此前由 <iframe> 交给浏览器排版，应用侧零 CSS。
+  // 实测聚合 18_156 行（+213，全部落在 features/attachment-preview.css），阈值
+  // 取实测 +12 行缓冲。+213 明显高于计划 §4.4 的「约 +70」估算：本文件是
+  // 「每个属性一行」的既有格式，多行块（office 18 / sheet 52 / archive 61 /
+  // markdown 79 / 注释 3）按该格式展开后就是这个量级，没有额外装饰规则。
+  // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
+  // 「带边框的面板 + 列表行」外壳。
+  // 2026-10-24 指令菜单过渡的一次上调（18_173 → 18_194）：斜杠指令与 /@ 引用
+  // 菜单补上出现/消失动画——两条基类 animation（复用既有 agent-message-in
+  // keyframes，零新增帧定义）与一条 .closing 退场规则（transition + opacity +
+  // transform + pointer-events + animation:none，共 10 行，全部在
+  // features/agent.css）。实测聚合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 17_674;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_194;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

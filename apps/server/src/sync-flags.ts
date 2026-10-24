@@ -1,10 +1,15 @@
 /**
- * Message flag operations extracted from sync.ts.
+ * The retained remote-first flag write, for the one caller that is not a user
+ * action: filter rules (`sync-filter-rules.ts`).
  *
- * This module contains single-message and batch flag update logic, including
- * IMAP STORE coordination, unread badge adjustments, and agent event
- * propagation. It depends on sync.ts for write-lock infrastructure and
- * account lookups.
+ * Everything a user initiates goes through the task layer's local-first commit
+ * (`tasks/kinds/flags.ts`) and returns before the provider answers. A filter
+ * rule runs on freshly synced mail with no user watching, so it keeps the
+ * simple shape: hold the account write slot, STORE, then mirror the confirmed
+ * flags. The batch form that used to sit next to it, and the `markMessageSeen`
+ * wrapper, had no caller left after the routes and the Agent moved to the task
+ * layer (contract §4.7 B1); both are deleted rather than kept as a second way
+ * to write flags.
  */
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
@@ -13,7 +18,7 @@ import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError } from "./message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "./message-flags.js";
 export type { MessageFlagsPatch };
-import { messageAccountId, messageAccountIds, type PendingPushRow } from "./message-queries.js";
+import { messageAccountId, type PendingPushRow } from "./message-queries.js";
 import { withAccountWriteLocks } from "./sync-locks.js";
 import { accountById } from "./account-store.js";
 
@@ -44,7 +49,7 @@ export async function updateMessageFlags(
     const { messages, blocked } = planFlagPatch(db, [messageId], patch);
     const prepared = messages[0];
     if (!prepared) throw new Error(blocked.get(messageId) ?? "Message not found.");
-    const { message, nextFlags, add, remove, seenChanged } = prepared;
+    const { message, nextFlags, add, remove } = prepared;
     // The requested state is already reflected in the last server-confirmed
     // cache. Avoid a redundant STORE command and, importantly, a second count
     // adjustment for an idempotent read/open action.
@@ -70,19 +75,11 @@ export async function updateMessageFlags(
       }
       db.transaction(() => {
         db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify([...nextFlags]), messageId);
-        if (seenChanged) {
-          // Keep the cached sidebar badge aligned with the successful remote
-          // STORE. The folder refresh remains authoritative, but it must not
-          // briefly restore an already-read message to the unread total.
-          db.prepare(`
-            UPDATE folders
-            SET unseen = CASE
-              WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-              ELSE unseen + 1
-            END
-            WHERE account_id = ? AND path = ?
-          `).run(nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-        }
+        // Flags are now the whole truth locally: the sidebar's unread number is
+        // a COUNT over this table (contract §3.6), so the successful STORE has
+        // nothing left to nudge. A folder refresh mid-flight can no longer
+        // restore an already-read message to a total, because there is no
+        // separate total to restore.
         if (agentEvents && agentLease) {
           agentEvents.messageUpsertedWithinTransaction(agentLease, messageId, {
             mailbox: message.mailbox,
@@ -111,7 +108,6 @@ type PreparedFlagMessage = {
   nextFlags: string[];
   add: string[];
   remove: string[];
-  seenChanged: boolean;
 };
 
 /** What a patch would do to a set of ids, with the reason for every id it
@@ -170,157 +166,7 @@ function planFlagPatch(db: DatabaseHandle, messageIds: readonly string[], patch:
       nextFlags: [...nextFlags],
       add,
       remove,
-      seenChanged: currentFlags.has("\\Seen") !== nextFlags.has("\\Seen"),
     });
   }
   return { messages, blocked };
-}
-
-/**
- * Applies the same flag patch to many messages using one IMAP connection per
- * account and one STORE command per mailbox, instead of one connection and one
- * command per message. Failures are per-message: the caller receives how many
- * messages were updated and how many failed, mirroring the per-id behavior of
- * the previous loop.
- */
-export async function updateMessageFlagsBatch(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageIds: readonly string[],
-  patch: MessageFlagsPatch,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentMailEvents?: AgentMailEventSink,
-): Promise<{ updated: number; failed: number; changedIds: string[] }> {
-  if (!messageIds.length) return { updated: 0, failed: 0, changedIds: [] };
-  // Only the id -> account routing is read outside the lock: it is what names
-  // the lock each group of ids waits for. The rows themselves are re-read
-  // inside it (planFlagPatch), so a batch never writes next flags computed
-  // from a snapshot another writer has already superseded.
-  const idsByAccount = new Map<string, string[]>();
-  for (const { id, account_id: accountId } of messageAccountIds(db, messageIds)) {
-    const group = idsByAccount.get(accountId) ?? [];
-    group.push(id);
-    idsByAccount.set(accountId, group);
-  }
-  const routed = [...idsByAccount.values()].reduce((total, ids) => total + ids.length, 0);
-  // Ids with no message row at all (deleted, or never in this database) cannot
-  // be updated; the rest of the accounting happens under the lock.
-  let failed = messageIds.length - routed;
-  let updated = 0;
-  const changedIds: string[] = [];
-  for (const [accountId, accountMessageIds] of idsByAccount) {
-    // The account write slot serializes the whole read-modify-write — the
-    // snapshot the next flags are computed from included — against any move or
-    // flag update in flight on the same account, mirroring the single-message
-    // `updateMessageFlags` path. Without it, a batch STORE racing a move (or a
-    // concurrent flag update) overwrites the freshly reconciled flags_json.
-    await withAccountWriteLocks([accountId], async () => {
-      const { messages, blocked } = planFlagPatch(db, accountMessageIds, patch);
-      // A row can also disappear between the routing read and this one.
-      failed += blocked.size;
-      if (!messages.length) return;
-      const account = accountById(db, accountId);
-      if (!account) {
-        failed += messages.length;
-        return;
-      }
-      const agentLease = agentMailEvents?.acquireLease(accountId);
-      const client = await imapClientForAccount(account, masterKey, accessTokenProvider);
-      let remoteSucceeded = false;
-      try {
-        await client.connect();
-        const byMailbox = new Map<string, PreparedFlagMessage[]>();
-        for (const item of messages) {
-          const group = byMailbox.get(item.message.mailbox) ?? [];
-          group.push(item);
-          byMailbox.set(item.message.mailbox, group);
-        }
-        for (const [mailbox, mailboxMessages] of byMailbox) {
-          const lock = await client.getMailboxLock(mailbox);
-          try {
-            // Messages in the same mailbox may need different flag changes
-            // (some add \\Seen, others already have it). Group by the exact
-            // flag set so each STORE command covers a uniform batch.
-            const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
-            for (const item of mailboxMessages) {
-              const key = `${item.add.join(",")}\u0000${item.remove.join(",")}`;
-              let group = byFlagGroup.get(key);
-              if (!group) {
-                group = { add: item.add, remove: item.remove, uids: [] };
-                byFlagGroup.set(key, group);
-              }
-              group.uids.push(item.message.uid);
-            }
-            for (const group of byFlagGroup.values()) {
-              if (group.add.length && group.uids.length) {
-                const added = await client.messageFlagsAdd(group.uids, group.add, { uid: true });
-                if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-              }
-              if (group.remove.length && group.uids.length) {
-                const removed = await client.messageFlagsRemove(group.uids, group.remove, { uid: true });
-                if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
-              }
-            }
-          } finally {
-            lock.release();
-          }
-        }
-        remoteSucceeded = true;
-      } catch {
-        remoteSucceeded = false;
-      } finally {
-        await safeLogout(client);
-      }
-      if (!remoteSucceeded) {
-        failed += messages.length;
-        return;
-      }
-
-      // Persist locally only after the remote STORE succeeded for every message
-      // in the account.
-      db.transaction(() => {
-        for (const item of messages) {
-          const { message } = item;
-          db.prepare("UPDATE messages SET flags_json = ? WHERE id = ?").run(JSON.stringify(item.nextFlags), message.id);
-          // Only messages that actually changed state are undo candidates;
-          // idempotent no-ops (already in the requested state) stay in `updated`.
-          if (item.add.length || item.remove.length) changedIds.push(message.id);
-          if (item.seenChanged) {
-            db.prepare(`
-              UPDATE folders
-              SET unseen = CASE
-                WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-                ELSE unseen + 1
-              END
-              WHERE account_id = ? AND path = ?
-            `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-          }
-          if (agentMailEvents && agentLease) {
-            agentMailEvents.messageUpsertedWithinTransaction(agentLease, message.id, {
-              mailbox: message.mailbox,
-              uid: message.uid,
-              remoteIdLookup: message.remote_id_lookup,
-              flags: [...item.nextFlags].sort(),
-              pendingMoveDestination: message.pending_move_destination,
-              pendingMoveState: message.pending_move_state,
-            });
-          }
-        }
-      })();
-      updated += messages.length;
-    });
-  }
-  const changedSet = new Set(changedIds);
-  return { updated, failed, changedIds: messageIds.filter((id) => changedSet.has(id)) };
-}
-
-export async function markMessageSeen(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  seen: boolean,
-  accessTokenProvider?: AccountAccessTokenProvider,
-  agentEvents?: AgentMailEventSink,
-): Promise<void> {
-  await updateMessageFlags(db, masterKey, messageId, { seen }, accessTokenProvider, agentEvents);
 }

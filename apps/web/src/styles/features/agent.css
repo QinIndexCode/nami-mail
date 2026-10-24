@@ -896,7 +896,7 @@ color:var(--text);
 opacity:1;
 animation:none
 }
-.agent-message,.agent-suggestion-card,.agent-attachment-chip,.agent-quote-preview,.agent-reference-chips,.agent-mention-menu,.agent-revoke-notice
+.agent-message,.agent-suggestion-card,.agent-attachment-chip,.agent-quote-preview,.agent-reference-chips,.agent-mention-menu,.agent-revoke-notice,.agent-slash-menu
 {
 animation:none
 }
@@ -1118,31 +1118,6 @@ white-space:nowrap
 .agent-corner-button.copy
 {
 overflow:hidden
-}
-.agent-corner-button.copy svg
-{
-transition:transform .18s cubic-bezier(.2,.8,.2,1),opacity .18s
-}
-.agent-corner-button.copy.copied svg
-{
-color:var(--success);
-animation:.18s agent-copy-check
-}
-@keyframes agent-copy-check
-{
-0%
-{
-transform:scale(.5)
-}
-60%
-{
-transform:scale(1.15)
-}
-to
-{
-transform:scale(1)
-}
-
 }
 .agent-message-content
 {
@@ -2485,7 +2460,8 @@ bottom:calc(100% + 8px);
 left:0;
 right:0;
 overflow-y:auto;
-box-shadow:var(--shadow-raised)
+box-shadow:var(--shadow-raised);
+animation:.18s cubic-bezier(.2,.8,.2,1) backwards agent-message-in
 }
 .agent-slash-item
 {
@@ -2564,7 +2540,16 @@ bottom:calc(100% + 8px);
 left:0;
 right:0;
 overflow-y:auto;
-box-shadow:var(--shadow-raised)
+box-shadow:var(--shadow-raised);
+animation:.18s cubic-bezier(.2,.8,.2,1) backwards agent-message-in
+}
+.agent-slash-menu.closing,.agent-mention-menu.closing
+{
+transition:opacity .17s ease,transform .17s cubic-bezier(.2,.8,.2,1);
+opacity:0;
+transform:translateY(8px);
+pointer-events:none;
+animation:none
 }
 .agent-mention-item
 {

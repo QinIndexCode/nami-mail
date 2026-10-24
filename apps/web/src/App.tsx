@@ -1,4 +1,5 @@
-import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { hasVisibleAttachments, visibleAttachments as visibleAttachmentParts } from "@nami/agent-contracts";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Archive,
@@ -20,7 +21,6 @@ import {
   ListFilter,
   LoaderCircle,
   Mail,
-  MailOpen,
   Menu,
   Moon,
   Paperclip,
@@ -34,12 +34,12 @@ import {
   ShieldCheck,
   SquareCheckBig,
   Star,
-  Sun, Users, Trash2, WifiOff, X,
+  Sun, Users, WifiOff, X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import { WindowBar } from "./WindowBar";
-import { api, type BatchJobSnapshot, type MoveTarget } from "./api";
+import { api, type MoveTarget } from "./api";
 import { calendarCache, contactsCache, templatesCache } from "./dialogPrefetch";
 import DatePicker from "./DatePicker";
 import { attachmentKinds, type AttachmentKind } from "./attachmentPresentation";
@@ -52,37 +52,24 @@ import { demoDataSnapshot, ensureDemoLoaded } from "./demo-loader";
 import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { mailErrorToastMessage, presentMailError, type MailErrorPresentation } from "./errorPresentation";
 import { AccountHealthBanner, accountShowsFreshness, accountStatusDotClass, useAccountHealth } from "./accountHealth";
-import { useRealtimeSync, type SyncProgressPayload } from "./realtimeSync";
+import { useAppRealtimeSync } from "./app/useAppRealtimeSync";
+import { useSyncProgressBanner } from "./app/useSyncProgressBanner";
 import { useCoalescedRefresh } from "./useCoalescedRefresh";
 import { resolveScrollAnchor, type ScrollAnchorRow } from "./scrollAnchor";
 import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActions";
+import { messageFolderContext, selectionFolderContext } from "./messageMoveActions";
 // ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
-import { collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
+import { applySeenToThread, collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import {
-  applyMessageMove,
-  applyMessageMoveConfirmation,
-  applyMessageSeenChange,
-  applyPinnedUnseenCorrections,
-  appendMessageCursorChain,
   canLoadMoreMessagePage,
   isArchivedMessage,
   matchesServerMessageQuery,
-  mergePendingArchiveMoves,
-  mergePendingLocalState,
-  mergeUnreadViewSnapshot,
-  nextMessageTotalForMove,
-  nextMessageTotalForSnapshot,
-  nextUnreadViewRecentlyReadIds,
-  revertMessageMove,
   sidebarBadgeCounts,
+  nextUnreadViewRecentlyReadIds,
   type MessageListQuery,
   type MessageListSortOrder,
-  type MutablePendingLocalState,
   type PendingArchiveMove,
-  createPendingLocalState,
-  pinFlagOverride,
-  unpinFlagOverride,
 } from "./mailListState";
 import { beginSpan, markInterval, recordCommit } from "./perfTelemetry";
 import { providerDisplayName } from "./providerOnboarding";
@@ -92,12 +79,15 @@ import { getAccountDisplayName, hydrateAccountDisplayNames, useAccountDisplayNam
 import { loadFolderDisplayMode, saveFolderDisplayMode, type FolderDisplayMode } from "./folderDisplayMode";
 import { shouldShowLoading, type MailboxSelection } from "./folderNavigation";
 import { createSettingsLoadCoordinator } from "./settingsLoadCoordinator";
-import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type OutboundAttachment, type ProviderInfo, type Stats } from "./types";
+import { defaultAppSettings, type Account, type AppSettings, type AppSettingsPatch, type Message, type OutboundAttachment, type ProviderInfo } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
+import { createMailStore, withSeenFlag, type ReconcileRunner } from "./app/mailStore";
+import { mailListScopeKey } from "./app/mailListScope";
+import { deriveDemoCounts } from "./app/demoCounts";
 import { resolveDraftBody } from "./app/draftBody";
 import { useAttachmentExports } from "./app/useAttachmentExports";
 import { useDesktopBridgeHandlers } from "./app/useDesktopBridgeHandlers";
@@ -105,6 +95,8 @@ import { resolveLocale, useI18n } from "./i18n";
 import type { AgentBootstrap } from "./agentTypes";
 import type { ReaderAiLaunchIntent } from "./readerAiActions";
 import { AppDialogs } from "./AppDialogs";
+import { CloudSyncRailItem } from "./CloudSyncRailItem";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { MailReader } from "./MailReader";
 import MessageList from "./MessageList";
 import {
@@ -113,6 +105,7 @@ import {
   formatSyncFreshness,
   isCompactMailLayout,
   buildMessageQuery,
+  messageQueryAccountScope,
   demoMessageTotal,
 
   moveActionKey,
@@ -126,11 +119,9 @@ import {
   splitQuotedMailText,
   textFromSanitizedMailHtml,
   replyBody,
-  SWITCH_FADE_MS,
-  MAIL_FADE_STAGGER_MS,
-  AGENT_FADE_STAGGER_MS,
   localizeMessageLinks,
 } from "./app/app-utils";
+import { useAgentWorkspaceTransition, type AgentPhase } from "./app/useAgentWorkspaceTransition";
 import { ensureFullMessage, mergeMessageDetail, useMessageBody } from "./app/useMessageBody";
 import { useMailTranslation } from "./app/useMailTranslation";
 import { useSplashDismiss } from "./app/useSplashDismiss";
@@ -142,17 +133,8 @@ const DemoSourceDialog = lazy(() => import("./DemoSourceDialog"));
 
 type MailView = MessageListQuery["messageView"];
 
-// Interface-switch ("fade hand-off") phases between the mail workspace and the
-// Agent workspace. Each interface fades out/in in two layers — the mail
-// sidebar and workspace leave first, then the Agent's conversation rail and
-// main panel enter (and vice versa on close). These phases only drive class
-// names; the motion itself lives in styles.css. `idle` is the settled state in
-// either direction.
-type AgentPhase = "idle" | "mail-leaving" | "agent-entering" | "agent-leaving" | "mail-entering";
-const MAIL_SWITCH_TOTAL_MS = SWITCH_FADE_MS + MAIL_FADE_STAGGER_MS;
 /** Sidebar spinner grace period: faster loads show no spinner at all. */
 const SIDEBAR_LOADING_SPINNER_DELAY_MS = 250;
-const AGENT_SWITCH_TOTAL_MS = SWITCH_FADE_MS + AGENT_FADE_STAGGER_MS;
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const demoPresentation = readDemoPresentation(window.location.search);
@@ -201,17 +183,32 @@ export default function App() {
     // through ?background=<preset> instead of relying on a demo default.
     ...(demoBackgroundPreset ? { backgroundPreset: demoBackgroundPreset } : {}),
   }));
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  // The mail list's rows, total, counters and pending overrides are one store
+  // (mailStore.ts), not five React states plus two shadowing refs. Writers say
+  // what changed about the messages; every derivation the UI reads follows.
+  // `reconcile` is a ref so it can point at the loaders declared below without
+  // rebuilding the store (which would drop the pending registry mid-operation).
+  const reconcileRunnerRef = useRef<ReconcileRunner>(async () => undefined);
+  const store = useMemo(() => createMailStore({
+    reconcile: (reason) => reconcileRunnerRef.current(reason),
+    // Only the demo fixture answers its own counts; a real session takes them
+    // from the server snapshot (contract §3.6 / I3).
+    deriveCounts: isDemo ? deriveDemoCounts : undefined,
+  }), []);
+  const mailState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  const messages = mailState.messages;
+  const messageTotal = mailState.total;
+  const stats = mailState.stats;
+  const accounts = mailState.accounts;
+  const setAccounts = store.setAccounts;
+  const setMessages = store.setMessages;
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [pendingArchiveMoves, setPendingArchiveMoves] = useState<PendingArchiveMove[]>([]);
   const [pendingMoveVerifications, setPendingMoveVerifications] = useState<string[]>([]);
-  const [messageTotal, setMessageTotal] = useState(0);
   // Where the loaded window ends in the server's list order. null means the
   // list is exhausted — the server's own signal, not a comparison against a
   // total that grows with every arriving message.
   const [messageNextCursor, setMessageNextCursor] = useState<string | null>(null);
-  const [stats, setStats] = useState<Stats>({ accounts: 0, messages: 0, unread: 0 });
   const [unreadViewRecentlyReadIds, setUnreadViewRecentlyReadIds] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The shell's modal/panel routing and the global keydown decisions live in
@@ -337,7 +334,6 @@ export default function App() {
   // The message the last shift+J/K expansion radiated from; plain J/K
   // navigation clears it so the next expansion starts from the opened row.
   const keyboardSelectionAnchorIdRef = useRef<string | null>(null);
-  const [batchJob, setBatchJob] = useState<BatchJobSnapshot | null>(null);
   const [attachmentKindFilter, setAttachmentKindFilter] = useState<AttachmentKind | undefined>(undefined);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -409,7 +405,6 @@ export default function App() {
   /** Anchors the collapsible header search box so an outside click closes it. */
   const searchWrapRef = useRef<HTMLDivElement>(null);
   const messageButtonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const messagesRef = useRef<Message[]>([]);
   // Latest accounts for callbacks that must not re-run when a refresh swaps the
   // array identity (the delivery-verification poll below restarts, and resets
   // its attempt budget, on every identity change otherwise).
@@ -417,22 +412,6 @@ export default function App() {
   accountsRef.current = accounts;
   const pendingArchiveMovesRef = useRef<PendingArchiveMove[]>([]);
   const unreadViewRecentlyReadIdsRef = useRef<ReadonlySet<string>>(new Set());
-  // Every optimistic local change a server snapshot must not overwrite: flag
-  // edits from any path (row click, reader auto-read, batch selection, the
-  // select-all-matching job) and rows the user already moved away. One registry
-  // for all of them, consulted by every snapshot merge. The previous
-  // per-feature sets left gaps between them: a delete issued while another
-  // operation was reconciling came back on that operation's reload, because the
-  // move was in no set at all.
-  const pendingLocalStateRef = useRef<MutablePendingLocalState>(createPendingLocalState());
-  /** Holds a moved row out of every snapshot until the server reports it at `destination`. */
-  const pinMovedAway = useCallback((ids: Iterable<string>, destination: string): void => {
-    if (!destination) return;
-    for (const id of ids) pendingLocalStateRef.current.movedAway.set(id, destination);
-  }, []);
-  const unpinMovedAway = useCallback((ids: Iterable<string>): void => {
-    for (const id of ids) pendingLocalStateRef.current.movedAway.delete(id);
-  }, []);
   const viewRef = useRef<MailView>("inbox");
   const lastOpenedMessageIdRef = useRef<string | null>(null);
   const settingsLoadCoordinatorRef = useRef(createSettingsLoadCoordinator());
@@ -466,84 +445,17 @@ export default function App() {
   const sidebarCounts = useMemo(() => sidebarBadgeCounts(stats), [stats]);
   useDialogFocus(state.mobileSidebar, sidebarRef);
 
-  // Block-assembly switch between the mail workspace and the Agent workspace.
-  // Opening: mail blocks leave in order, then the Agent workspace mounts and
-  // its blocks enter. Closing mirrors it. A shared ref makes the sequence
-  // re-entrant (rapid open/close cancels the previous timers) so the phase
-  // always lands on `idle` with the workspace in the requested state.
-  const agentSwitchTimersRef = useRef<number[]>([]);
-  // Mirrors `agentPhase` for the open/close controllers so they can read the
-  // current phase synchronously without being recreated on every phase change.
-  const agentPhaseRef = useRef<AgentPhase>("idle");
-  // Scroll position across the Agent round-trip: the mail column is
-  // display:none while the workspace is open, which resets the virtualized
-  // list's scroller. The offset is captured before hiding and re-applied once
-  // the column is laid out again.
-  const agentReturnScrollTopRef = useRef<number | null>(null);
   const [agentLaunchIntent, setAgentLaunchIntent] = useState<ReaderAiLaunchIntent | null>(null);
-  const clearAgentSwitchTimers = () => {
-    for (const timer of agentSwitchTimersRef.current) window.clearTimeout(timer);
-    agentSwitchTimersRef.current = [];
-  };
-  const queueAgentTimer = (run: () => void, delay: number) => {
-    agentSwitchTimersRef.current.push(window.setTimeout(run, delay));
-  };
-
-  const openAgentWorkspace = useCallback((intent?: ReaderAiLaunchIntent) => {
-    if (demoPresentation) return;
-    setAgentLaunchIntent(intent ?? null);
-    clearAgentSwitchTimers();
-    if (agentPhaseRef.current === "mail-leaving" || agentPhaseRef.current === "agent-entering") return;
-    agentReturnScrollTopRef.current = messageListRef.current?.scrollTop ?? null;
-    agentPhaseRef.current = "mail-leaving";
-    setAgentPhase("mail-leaving");
-    // Warm the lazy chunk while the mail layers fade out so the workspace is
-    // ready the moment it takes over (no Suspense spinner in the hand-off).
-    void import("./AgentWorkspace").catch(() => undefined);
-    queueAgentTimer(() => {
-      setAgentOpen(true);
-      agentPhaseRef.current = "agent-entering";
-      setAgentPhase("agent-entering");
-    }, MAIL_SWITCH_TOTAL_MS);
-    queueAgentTimer(() => {
-      agentPhaseRef.current = "idle";
-      setAgentPhase("idle");
-    }, MAIL_SWITCH_TOTAL_MS + AGENT_SWITCH_TOTAL_MS);
-  }, []);
-
-  const closeAgentWorkspace = useCallback(() => {
-    if (demoPresentation) return;
-    setAgentLaunchIntent(null);
-    clearAgentSwitchTimers();
-    if (agentPhaseRef.current === "agent-leaving" || agentPhaseRef.current === "mail-entering") return;
-    agentPhaseRef.current = "agent-leaving";
-    setAgentPhase("agent-leaving");
-    queueAgentTimer(() => {
-      setAgentOpen(false);
-      agentPhaseRef.current = "mail-entering";
-      setAgentPhase("mail-entering");
-      const savedTop = agentReturnScrollTopRef.current;
-      agentReturnScrollTopRef.current = null;
-      if (savedTop == null) return;
-      // The scroller was display:none while the Agent workspace was open, so
-      // its offset was lost. Restore once the column is laid out again (double
-      // rAF: one frame for display, one for the virtualizer's re-measure) so
-      // the user lands exactly where they left. A quick re-entry into the
-      // workspace (phase back to "mail-leaving") cancels the restore.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (agentPhaseRef.current === "mail-leaving") return;
-          const viewport = messageListRef.current;
-          if (!viewport) return;
-          viewport.scrollTop = savedTop;
-        });
-      });
-    }, AGENT_SWITCH_TOTAL_MS);
-    queueAgentTimer(() => {
-      agentPhaseRef.current = "idle";
-      setAgentPhase("idle");
-    }, AGENT_SWITCH_TOTAL_MS + MAIL_SWITCH_TOTAL_MS);
-  }, []);
+  // Opening fades the mail blocks out, mounts the Agent workspace and fades its
+  // blocks in; closing mirrors it. The hook also owns the mid-transition
+  // interruption rule and the mail list's scroll restore.
+  const { openAgentWorkspace, closeAgentWorkspace } = useAgentWorkspaceTransition({
+    demoPresentation: Boolean(demoPresentation),
+    setAgentPhase,
+    setAgentOpen,
+    setAgentLaunchIntent,
+    messageListRef,
+  });
   const applySettings = useCallback((nextSettings: AppSettings) => {
     const normalizedSettings = { ...nextSettings, locale: resolveLocale(nextSettings.locale) };
     settingsLoadCoordinatorRef.current.recordSettingsChange();
@@ -681,9 +593,6 @@ export default function App() {
     });
   }, [theme, settings.listDensity]);
   useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-  useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
@@ -691,6 +600,16 @@ export default function App() {
     pendingArchiveMovesRef.current = next;
     setPendingArchiveMoves(next);
   }, []);
+
+  // What a non-silent list load invalidates. The policy lives with the batch
+  // selection state machine, which is the only place that knows a job may be
+  // running (it must not be disarmed by a reload — see
+  // useBatchSelection.resetSelectionOnFullLoad). `load` is declared before that
+  // hook, so it reaches the policy through a ref. The scope key tells a
+  // navigation (a different list, where the old ids no longer mean anything)
+  // from a refresh of the same list (where the selection must survive).
+  const loadedListScopeRef = useRef("");
+  const fullLoadResetRef = useRef<(scopeChanged: boolean) => void>(() => {});
 
   const load = useCallback(async ({
     silent = false,
@@ -708,10 +627,24 @@ export default function App() {
     scope?: "view" | "all";
   } = {}) => {
     const requestId = ++loadRequestRef.current;
-    // A full reload re-renders a fresh view; any predicate-wide selection was
-    // scoped to the previous one.
-    setSelectAllPaged(false);
-    setBatchJob(null);
+    // Which list this load is for, and whether it differs from the one the UI is
+    // currently showing. Both are decided here but *committed* only once the
+    // snapshot is adopted: a request that fails or is superseded never becomes
+    // the list, so recording its scope would make the retry of that same scope
+    // look like a refresh and keep the previous list's selection.
+    const scopeKey = mailListScopeKey({
+      accountId, folder, search, messageView, scope, attachmentKind: attachmentKindFilter,
+      after: dateBounds.after, before: dateBounds.before,
+    });
+    const scopeChanged = loadedListScopeRef.current !== scopeKey;
+    const commitScope = () => {
+      // Silent loads (background reconcile, sync, pending-move verification)
+      // never change what the list is, so they must not touch the selection:
+      // doing so silently disarmed a predicate selection on every refresh.
+      if (silent) return;
+      loadedListScopeRef.current = scopeKey;
+      fullLoadResetRef.current(scopeChanged);
+    };
     try {
       if (!silent) setLoading(true);
       setFatalError(null);
@@ -721,78 +654,64 @@ export default function App() {
           await new Promise((resolve) => window.setTimeout(resolve, 140));
         }
         const demo = await ensureDemoLoaded();
+        const demoAccounts = demo.createDemoAccounts(locale);
+        const demoItems = demoLoadedRef.current && store.getMessages().length ? store.getMessages() : demo.demoMessages;
         const demoTotal = demoMessageTotal(
-          demoLoadedRef.current && messagesRef.current.length ? messagesRef.current : demo.demoMessages,
-          demo.createDemoAccounts(locale),
+          demoItems,
+          demoAccounts,
           { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
         );
-        if (!demoLoadedRef.current) {
-          demoLoadedRef.current = true;
-          setAccounts(demo.createDemoAccounts(locale));
-          setProviders(demo.demoProviders);
-          setMessages(demo.demoMessages);
-          setMessageNextCursor(null);
-          setStats(demo.demoStats);
-        }
+        demoLoadedRef.current = true;
+        setProviders(demo.demoProviders);
+        store.adoptSnapshot(
+          { accounts: demoAccounts, stats: demo.demoStats, items: demoItems, total: demoTotal, nextCursor: null },
+          {
+            query: { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
+            view: messageView,
+            recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+            pendingArchiveMoves: pendingArchiveMovesRef.current,
+          },
+        );
         setListSnapshotKey((value) => value + 1);
-        setMessageTotal(demoTotal);
         // The demo dataset is handed to the list whole, so there is nothing left
         // to page: the chain starts already exhausted.
         setMessageNextCursor(null);
         applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)), true);
+        commitScope();
       } else {
         const messageQuery = buildMessageQuery({ accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before });
         const [nextAccounts, nextProviders, firstPage, nextStats] = await Promise.all([
           api.accounts(),
           api.providers(),
           api.messages(messageQuery),
-          api.stats(),
+          // The badge and the rows beneath it must describe one mailbox.
+          api.stats(messageQueryAccountScope(accountId, search, scope)),
         ]);
         if (requestId !== loadRequestRef.current) return;
-        // The merge+setState section is the suspected renderer jank point on
-        // large mailboxes: it rebuilds the whole row object tree and triggers a
-        // full list commit. Network time is covered separately (slow-api).
+        // The merge section is the suspected renderer jank point on large
+        // mailboxes: it rebuilds the whole row object tree and triggers a full
+        // list commit. Network time is covered separately (slow-api).
         const finishMerge = beginSpan("list.merge");
-        const pendingMerge = mergePendingArchiveMoves(
-          firstPage.items,
-          pendingArchiveMovesRef.current,
-          nextAccounts,
-          { accountId, folder, search, messageView, searchScope: scope },
+        hydrateAccountDisplayNames(nextAccounts);
+        store.adoptSnapshot(
+          { accounts: nextAccounts, stats: nextStats, items: firstPage.items, total: firstPage.total, nextCursor: firstPage.nextCursor },
+          {
+            query: { accountId, folder, search, messageView, searchScope: scope, attachmentKind: attachmentKindFilter, after: dateBounds.after, before: dateBounds.before },
+            view: messageView,
+            recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+            pendingArchiveMoves: pendingArchiveMovesRef.current,
+          },
         );
-        const nextMessages = mergePendingLocalState(
-          mergeUnreadViewSnapshot(
-            pendingMerge.items,
-            messagesRef.current,
-            unreadViewRecentlyReadIdsRef.current,
-            messageView === "unread",
-          ),
-          messagesRef.current,
-          pendingLocalStateRef.current,
-        );
-        // The counts come from the same snapshot as the rows, so they need the
-        // same correction: a badge read before the local commit landed would
-        // otherwise flick back to the value the user just changed.
-        const counts = applyPinnedUnseenCorrections(
-          nextAccounts,
-          nextStats,
-          firstPage.items,
-          nextMessages,
-          pendingLocalStateRef.current,
-        );
-        hydrateAccountDisplayNames(counts.accounts);
-        setAccounts(counts.accounts);
+        commitScope();
+        const nextMessages = store.getMessages();
         setProviders(nextProviders);
-        messagesRef.current = nextMessages;
-        setMessages(nextMessages);
         // Same batch as the row swap: the viewport remounts here, and only
         // here, so the fade-in plays on the arriving rows.
         setListSnapshotKey((value) => value + 1);
         if (!silent) messageListRef.current?.scrollTo({ top: 0 });
-        setMessageTotal(nextMessageTotalForSnapshot(firstPage.total, pendingMerge.items.length, messageView === "unread"));
         // A full load restarts the chain at the head, so the cursor that
         // continues the list is the one this page handed out.
         setMessageNextCursor(firstPage.nextCursor);
-        setStats(counts.stats);
         setSelectedId((current) => {
           if (!current) return null;
           // A message opened from the conversation strip legitimately lives
@@ -803,12 +722,10 @@ export default function App() {
           return null;
         });
         finishMerge({ rows: nextMessages.length, silent });
-await refreshSubmissions(nextAccounts, { silent: true });
-        if (!isDemo) {
-          contactsCache.warm();
-          templatesCache.warm();
-          calendarCache.warm();
-        }
+        await refreshSubmissions(nextAccounts, { silent: true });
+        contactsCache.warm();
+        templatesCache.warm();
+        calendarCache.warm();
       }
     } catch (error) {
       if (requestId === loadRequestRef.current) {
@@ -829,7 +746,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
         }
       }
     }
-  }, [applyDemoSubmissions, locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, reportSubmissionsLoadFailure, searchScope, splashAgentDoneRef, splashAnimationDoneRef, splashDataDoneRef, splashDismissedRef, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
+  }, [applyDemoSubmissions, locale, selectedAccount, selectedFolder, debouncedQuery, refreshSubmissions, reportSubmissionsLoadFailure, searchScope, splashAgentDoneRef, splashAnimationDoneRef, splashDataDoneRef, splashDismissedRef, store, t, view, attachmentKindFilter, dateBounds.after, dateBounds.before]);
   // A batch job's poll loop keeps the closure it started with for the whole run,
   // so its final reconciliation reload would otherwise use the account/folder
   // the job started in — yanking the user back there when the job ends. Reading
@@ -904,6 +821,12 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // immediate while a long list no longer blocks the input.
   const deferredQuery = useDeferredValue(query);
   const filterQuery = useMemo<ListQueryInput>(() => ({ ...serverQuery, search: deferredQuery }), [deferredQuery, serverQuery]);
+  // What "in this view" means for local inclusion edits: a move that takes a
+  // row out of the list must shift the total by the same predicate the list was
+  // loaded with. Kept in the store so the row set and the count agree.
+  useEffect(() => {
+    store.setQuery(serverQuery);
+  }, [serverQuery, store]);
 
   const silentRefresh = useCallback(async () => {
     if (isDemo) return;
@@ -919,51 +842,22 @@ await refreshSubmissions(nextAccounts, { silent: true });
         api.accounts(),
         api.providers(),
         api.messages(messageQuery),
-        api.stats(),
+        api.stats(messageQueryAccountScope(serverQuery.accountId, serverQuery.search, serverQuery.searchScope)),
       ]);
       if (requestId !== loadRequestRef.current) return;
       const finishMerge = beginSpan("list.merge");
-      const pendingMerge = mergePendingArchiveMoves(
-        firstPage.items,
-        pendingArchiveMovesRef.current,
-        nextAccounts,
-        serverQuery,
+      hydrateAccountDisplayNames(nextAccounts);
+      store.mergeSnapshot(
+        { accounts: nextAccounts, stats: nextStats, items: firstPage.items, total: firstPage.total, nextCursor: firstPage.nextCursor },
+        {
+          query: serverQuery,
+          view,
+          recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+          pendingArchiveMoves: pendingArchiveMovesRef.current,
+        },
       );
-      const current = messagesRef.current;
-      const currentIds = new Set(current.map((item) => item.id));
-      const freshById = new Map(pendingMerge.items.map((item) => [item.id, item]));
-      const additions = pendingMerge.items.filter((item) => !currentIds.has(item.id));
-      const merged = [
-        ...additions,
-        ...current.map((item) => freshById.get(item.id) ?? item),
-      ];
-      const nextMessages = mergeUnreadViewSnapshot(
-        merged,
-        current,
-        unreadViewRecentlyReadIdsRef.current,
-        view === "unread",
-      );
-      // Reads, stars and moves that are still being confirmed by the server
-      // must not be undone by a poll snapshot that raced the optimistic local
-      // update (see pendingLocalStateRef).
-      const withLocalPending = mergePendingLocalState(nextMessages, current, pendingLocalStateRef.current);
-      const settled = view === "unread" || firstPage.total >= withLocalPending.length
-        ? withLocalPending
-        : withLocalPending.slice(0, Math.max(0, firstPage.total));
-      const counts = applyPinnedUnseenCorrections(
-        nextAccounts,
-        nextStats,
-        firstPage.items,
-        settled,
-        pendingLocalStateRef.current,
-      );
-      hydrateAccountDisplayNames(counts.accounts);
-      setAccounts(counts.accounts);
+      const settled = store.getMessages();
       setProviders(nextProviders);
-      messagesRef.current = settled;
-      setMessages(settled);
-      setMessageTotal(nextMessageTotalForSnapshot(firstPage.total, Math.max(pendingMerge.items.length, settled.length), view === "unread"));
-      setStats(counts.stats);
       // Same strip-membership witness as the load merge: silent polls must
       // keep off-list conversation members selected too.
       setSelectedId((value) => value && (settled.some((item) => item.id === value) || threadStripMembersRef.current.has(value)) ? value : null);
@@ -975,7 +869,18 @@ await refreshSubmissions(nextAccounts, { silent: true });
     } catch {
       // Silent refresh must never disturb the current list; the next tick retries.
     }
-  }, [captureScrollAnchor, refreshSubmissions, serverQuery, view]);
+  }, [captureScrollAnchor, refreshSubmissions, serverQuery, store, view]);
+  // The store's reconcile entry point: a manual request is a full load (it
+  // resets paging and the view), every background trigger is the silent merge.
+  reconcileRunnerRef.current = (reason) => reason === "manual" ? load() : silentRefresh();
+  // A batch's acceptance commits locally long before its remote push finishes,
+  // so the runner reconciles the moment it is accepted — and it has to be THIS
+  // refresh, not `load`: a full reload would collapse the loaded pages back to
+  // the first one under the user, and clear the predicate selection the bar is
+  // describing. Reading it through a ref keeps the runner from being rebuilt
+  // whenever the view underneath it changes.
+  const silentRefreshRef = useRef(silentRefresh);
+  silentRefreshRef.current = silentRefresh;
 
   // One gate for every refresh trigger (SSE events, the desktop new-mail IPC
   // bridge, the poll fallback and the Agent's mail-state changes). While the
@@ -985,23 +890,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // of queued full reloads. Foreground bursts collapse onto a trailing pass.
   const requestRefresh = useCoalescedRefresh(silentRefresh);
 
-  // Live initial/full sync progress, fed by "sync.progress" SSE frames. It
-  // drives a lightweight "syncing history" banner; the banner auto-dismisses a
-  // short beat after the last frame so a busy multi-folder download stays
-  // visible but a finished one does not linger.
-  const [syncProgress, setSyncProgress] = useState<SyncProgressPayload | null>(null);
-  const syncProgressClearTimerRef = useRef<number | null>(null);
-  const handleSyncProgress = useCallback((next: SyncProgressPayload) => {
-    if (syncProgressClearTimerRef.current !== null) {
-      window.clearTimeout(syncProgressClearTimerRef.current);
-      syncProgressClearTimerRef.current = null;
-    }
-    setSyncProgress(next);
-    syncProgressClearTimerRef.current = window.setTimeout(() => setSyncProgress(null), 1_500);
-  }, []);
-  useEffect(() => () => {
-    if (syncProgressClearTimerRef.current !== null) window.clearTimeout(syncProgressClearTimerRef.current);
-  }, []);
+  const { syncProgress, handleSyncProgress } = useSyncProgressBanner();
 
   const loadSettings = useCallback(async () => {
     if (isDemo) return;
@@ -1034,7 +923,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     void import("./ManagementDialogs");
     void import("./SendingStatusModal");
     void import("./AddAccountModal");
-    void import("./AttachmentPreviewModal");
+    void import("./AttachmentPreviewDrawer");
   };
     if (typeof window.requestIdleCallback === "function") {
       const handle = window.requestIdleCallback(warm);
@@ -1083,28 +972,26 @@ await refreshSubmissions(nextAccounts, { silent: true });
     const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
-  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime } = useRealtimeSync({
-    enabled: !isDemo,
-    pushEnabled: settings.realtimePushEnabled,
-    refreshIntervalSeconds: settings.refreshIntervalSeconds,
-    isDesktop: Boolean(desktopBridge()),
-    t,
-    showToast,
-    onRefresh: requestRefresh,
-    onSettingsChanged: loadSettings,
-    onSyncProgress: handleSyncProgress,
-  });
+  // The rail's cloud-sync panel reads from this same subscription.
+  const { connectionState: realtimeConnectionState, reconnect: reconnectRealtime, threadRefreshTick, cloudSync } =
+    useAppRealtimeSync({
+      enabled: !isDemo,
+      pushEnabled: settings.realtimePushEnabled,
+      refreshIntervalSeconds: settings.refreshIntervalSeconds,
+      isDesktop: Boolean(desktopBridge()),
+      t,
+      showToast,
+      onRefresh: requestRefresh,
+      onSettingsChanged: loadSettings,
+      onSyncProgress: handleSyncProgress,
+    });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
   // every later poll. Dropping it on unmount means a fresh mount starts from
   // server truth.
-  useEffect(() => {
-    const pending = pendingLocalStateRef;
-    return () => {
-      pending.current.flagOverrides.clear();
-      pending.current.movedAway.clear();
-    };
-  }, []);
+  useEffect(() => () => {
+    store.clearPendingTargets();
+  }, [store]);
   useEffect(() => {
     if (isDemo || !pendingMoveVerificationKey) return undefined;
     const pendingIds = pendingMoveVerificationKey.split("|").filter(Boolean);
@@ -1234,7 +1121,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
       accounts,
       filterQuery,
       unreadViewRecentlyReadIds,
-    ) && (!filterAttachments || message.hasAttachments));
+    ) && (!filterAttachments || hasVisibleAttachments(message.attachments)));
     return sortMessages(base, sortOrder, {
       messages: base,
       accountEmails: new Set(accounts.map((account) => account.email.toLowerCase())),
@@ -1315,9 +1202,9 @@ await refreshSubmissions(nextAccounts, { silent: true });
         ? t("mail.loaded", { loaded: loadedServerMessageCount, total: currentMessageTotal })
         : t("mail.recentlySynced");
 
-  // Multi-select + bulk operations live in useBatchSelection. Predicate-wide
-  // selection state (selectAllPaged/batchJob) and the delete-confirmation flag
-  // stay up here because `load` and useDialogRouting precede this call.
+  // Multi-select + bulk operations live in useBatchSelection. The predicate-wide
+  // selection flag and the delete-confirmation flag stay up here because `load`
+  // (which reads the predicate flag) and useDialogRouting precede this call.
   const {
     selectionMode,
     selectedMessageIds,
@@ -1331,6 +1218,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     selectMessageRange,
     selectAllVisibleMessages,
     exitSelectionMode,
+    resetSelectionOnFullLoad,
     applyBatchFlaggedChange,
     batchUpdateFlags,
     batchMoveMessages,
@@ -1340,9 +1228,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
     showToast,
     sortOrder,
     filteredMessages,
-    messages,
-    accounts,
-    stats,
+    store,
     loadedServerMessageCount,
     currentMessageTotal,
     searchScope,
@@ -1354,22 +1240,14 @@ await refreshSubmissions(nextAccounts, { silent: true });
     dateBounds,
     load,
     loadRef,
+    reconcileRef: silentRefreshRef,
     loadRequestRef,
-    messagesRef,
-    pendingLocalStateRef,
-    viewRef,
     selectAllPaged,
     setSelectAllPaged,
-    setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
   });
+  fullLoadResetRef.current = resetSelectionOnFullLoad;
 
   useEffect(() => {
     if (!selectedId || filteredMessages.some((message) => message.id === selectedId)) return;
@@ -1394,26 +1272,15 @@ await refreshSubmissions(nextAccounts, { silent: true });
       const nextQuery = buildMessageQuery({ ...serverQuery, cursor: messageNextCursor ?? undefined });
       const nextPage = await api.messages(nextQuery);
       if (requestId !== loadRequestRef.current) return;
-      const pendingMerge = mergePendingArchiveMoves(
-        nextPage.items,
-        pendingArchiveMovesRef.current,
-        accounts,
-        serverQuery,
-      );
-      setMessages((items) => {
-        // Paging is another place a server snapshot meets the local list, so it
-        // has to respect the same pending overrides: without this, scrolling
-        // could re-add a row the user just deleted or flip a row back to unread.
-        // The chain then appends by id, so a row the local merge put back into
-        // the window is not rendered twice.
-        const merged = mergePendingLocalState(pendingMerge.items, items, pendingLocalStateRef.current);
-        return appendMessageCursorChain(
-          { items, nextCursor: messageNextCursor },
-          { items: merged, nextCursor: nextPage.nextCursor },
-        ).items;
+      // Paging is another place a server snapshot meets the local list, so the
+      // store applies the same pending overrides and appends by id.
+      store.appendPage(nextPage, {
+        query: serverQuery,
+        view: viewRef.current,
+        recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+        pendingArchiveMoves: pendingArchiveMovesRef.current,
       });
       setMessageNextCursor(nextPage.nextCursor);
-      setMessageTotal(nextMessageTotalForSnapshot(nextPage.total, pendingMerge.items.length, viewRef.current === "unread"));
     } catch (error) {
       if (requestId === loadRequestRef.current) showToast(mailErrorToastMessage(error, undefined, t), "error");
     } finally {
@@ -1451,7 +1318,8 @@ await refreshSubmissions(nextAccounts, { silent: true });
   // this map as a final fallback, so any member the strip ever showed opens
   // even when the list window and the extras snapshot have both moved on.
   const threadStripMembersRef = useRef<ReadonlyMap<string, Message>>(new Map());
-  const [threadRefreshTick, setThreadRefreshTick] = useState(0);
+  // The strip map is a ref, so a local flag change there needs this bump to render.
+  const [, setThreadMemberRevision] = useState(0);
   const selected = filteredMessages.find((message) => message.id === selectedId)
     ?? threadExtras?.members.find((message) => message.id === selectedId)
     ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
@@ -1496,11 +1364,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
   const threadCollapsible = (selectedThread?.length ?? 0) > 4;
   const threadCollapsed = threadCollapsible && selected !== null && shouldCollapseThread(selectedThread, selected.id, threadCollapsedPref);
   const selectedIsArchived = selected ? isArchivedMessage(selected, accounts) : false;
-  // The "not spam" recovery action only applies while reading inside the
-  // account's SPECIAL-USE Junk folder.
-  const selectedIsInJunk = selected
-    ? accounts.find((account) => account.id === selected.accountId)?.folders.some((folder) => folder.specialUse === "\\Junk" && folder.path === selected.mailbox) ?? false
-    : false;
+  const selectedIsInJunk = selected ? messageFolderContext(selected, accounts) === "junk" : false;
   const selectedMovePending = selected ? selected.movePending === true || pendingArchiveMoves.some((move) => move.id === selected.id) : false;
   const selectedMoveLocationUnverified = selected?.moveLocationUnverified === true;
   const selectedRemoteActionsBlocked = selectedMovePending || selectedMoveLocationUnverified;
@@ -1529,7 +1393,7 @@ await refreshSubmissions(nextAccounts, { silent: true });
       ? (selectedReplyTarget.name || selectedReplyTarget.address)
       : selectedReplyTargetAddress ?? (selected.from.name || selected.from.address)
     : "";
-  const visibleAttachments = selected?.attachments.filter((attachment) => !attachment.related) ?? [];
+  const visibleAttachments = selected ? visibleAttachmentParts(selected.attachments) : [];
   const selectedAccountRecord = accounts.find((account) => account.id === selectedAccount);
   const localizedProviderName = (account: Pick<Account, "provider" | "providerName">) => providerDisplayName({ id: account.provider, name: account.providerName }, locale, t);
   const sentFolder = selectedAccountRecord?.folders.find((folder) => folder.specialUse === "\\Sent");
@@ -1597,10 +1461,12 @@ const emptyMessageList = useMemo(() => (query.trim()
       : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
-    // Sanitize first, then route remote images through the proxy: the reader
-    // must never reach a mail's own image host directly (that request is the
-    // open-time + read-receipt leak), while `data:`, `cid:` and the server's
-    // inline-attachment URLs stay exactly as they are.
+    // Sanitize first, then route remote images through the proxy: the renderer
+    // itself must not contact a mail's image host. The proxy request still
+    // leaves this machine at open time, so this does NOT prevent the sender
+    // from observing the open; blocking images by default or requiring
+    // per-message consent is still a product decision.
+    // `data:`, `cid:` and the server's inline-attachment URLs stay untouched.
     () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark")) : "",
     [selected?.htmlBody, theme],
   );
@@ -1655,16 +1521,16 @@ const emptyMessageList = useMemo(() => (query.trim()
     [readerTextSource, quotedExpanded],
   );
   const applyLocalSeenChange = useCallback((message: Message, nextSeen: boolean) => {
-    if (message.seen === nextSeen) return;
-    setMessages((items) => {
-      const next = applyMessageSeenChange(accounts, items, stats, message.id, nextSeen).messages;
-      messagesRef.current = next;
-      return next;
-    });
-    setAccounts((items) => applyMessageSeenChange(items, [message], stats, message.id, nextSeen).accounts);
-    setStats((current) => applyMessageSeenChange(accounts, [message], current, message.id, nextSeen).stats);
-    if (viewRef.current === "unread") setMessageTotal((total) => Math.max(0, total + (nextSeen ? -1 : 1)));
-  }, [accounts, stats]);
+    store.applySeen([message.id], nextSeen);
+    // Rows outside the loaded list are not in the store. The thread snapshot
+    // and the strip's retained map are the only copies that can hold them, so
+    // both are patched here — otherwise the open message would keep its old
+    // unread dot until the thread was fetched again.
+    const patch = applySeenToThread(threadExtras, threadStripMembersRef.current, message.id, nextSeen);
+    threadStripMembersRef.current = patch.strip;
+    if (patch.extras !== threadExtras) setThreadExtras(patch.extras);
+    if (patch.changed) setThreadMemberRevision((value) => value + 1);
+  }, [store, threadExtras]);
 
   const openMessage = useCallback(async (message: Message) => {
     // The preview pane is rendered inside the reader, so it may only describe
@@ -1713,33 +1579,24 @@ const emptyMessageList = useMemo(() => (query.trim()
     setSelectedId(message.id);
     setRecipientDetailsOpen(false);
     setReaderMoreOpen(false);
-    if (!message.seen && !pendingLocalStateRef.current.flagOverrides.has(message.id)) {
-      pinFlagOverride(pendingLocalStateRef.current, message.id);
+    if (!message.seen && !store.getState().pendingTargets.flagOverrides.has(message.id)) {
+      store.pinFlags([message.id]);
       updateUnreadViewRecentlyRead(message, true);
       applyLocalSeenChange(message, true);
-      // A message opened from the conversation strip may only exist in the
-      // server-resolved thread extras (outside the loaded view); keep its
-      // read state in sync there too, or the strip's unread dot would stick.
-      const patchThreadExtrasSeen = (seen: boolean) => setThreadExtras((current) => current
-        ? { ...current, members: current.members.map((member) => member.id === message.id ? { ...member, seen } : member) }
-        : current);
-      patchThreadExtrasSeen(true);
       if (isDemo) {
-        unpinFlagOverride(pendingLocalStateRef.current, message.id);
-        patchThreadExtrasSeen(true);
+        store.unpinFlags([message.id]);
       } else {
         void api.markSeen(message.id, true).catch((error: unknown) => {
-          const readMessage = { ...message, seen: true, flags: [...new Set([...message.flags, "\\Seen"])] };
+          const readMessage = withSeenFlag(message, true);
           updateUnreadViewRecentlyRead(readMessage, false);
           applyLocalSeenChange(readMessage, false);
-          patchThreadExtrasSeen(false);
           showToast(t("mail.error.markRead", { message: mailErrorToastMessage(error, t("mail.error.markReadFallback"), t) }), "error");
         }).finally(() => {
-          unpinFlagOverride(pendingLocalStateRef.current, message.id);
+          store.unpinFlags([message.id]);
         });
       }
     }
-  }, [accounts, actions, applyLocalSeenChange, showToast, t, updateUnreadViewRecentlyRead]);
+  }, [accounts, actions, applyLocalSeenChange, showToast, store, t, updateUnreadViewRecentlyRead]);
   // Stable identity for the agent transcript's "open referenced message" handler:
   // it reaches memoised AgentMessageRow, where a per-render arrow re-parses every historic message.
   const openMessageRef = useRef(openMessage);
@@ -1754,7 +1611,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       return;
     }
     closeAgentWorkspace();
-    const known = messagesRef.current.find((item) => item.id === messageId);
+    const known = store.getMessages().find((item) => item.id === messageId);
     if (known) {
       if (isDemo) threadStripMembersRef.current = new Map([[known.id, known]]);
       void openMessageRef.current(known);
@@ -1772,7 +1629,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       return;
     }
     void api.message(messageId).then((fetched) => openMessageRef.current(fetched)).catch((error: unknown) => showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error"));
-  }, [closeAgentWorkspace, locale, showToast, t]);
+  }, [closeAgentWorkspace, locale, setMessages, showToast, store, t]);
 
   const closeReader = useCallback((restoreFocus = false) => {
     const messageId = lastOpenedMessageIdRef.current;
@@ -1949,53 +1806,26 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!isDemo) loadRequestRef.current += 1;
     const requestAtStart = loadRequestRef.current;
     setMessageAction(target);
-    let revert = (): void => undefined;
+    const destination = demoMoveDestination(accounts, selected.accountId, target);
+    // Hold the row out of every snapshot for the whole round-trip. Another
+    // operation finishing triggers a reload, and a server snapshot taken
+    // before this move commits still lists the row in its source mailbox —
+    // re-adding it is the "the deleted mail came back" bug.
+    store.pinMovedAway([selected.id], destination);
+    // A reload that landed mid-flight already holds server truth (the message
+    // restored at its source); walk the optimistic state back only while it is
+    // still in effect, and restore the total only while this request's epoch is
+    // the live one.
+    const revert = (): void => {
+      store.restoreMove(selected.id, selected, destination, { adjustTotal: loadRequestRef.current === requestAtStart });
+    };
     try {
-      const currentQuery: MessageListQuery = serverQuery;
-      const destination = demoMoveDestination(accounts, selected.accountId, target);
-      // Hold the row out of every snapshot for the whole round-trip. Another
-      // operation finishing triggers a reload, and a server snapshot taken
-      // before this move commits still lists the row in its source mailbox —
-      // re-adding it is the "the deleted mail came back" bug.
-      pinMovedAway([selected.id], destination);
       // Optimistic: predict the destination with the same folder resolution
-      // the server uses, then apply the move locally before the round-trip.
-      const optimisticSnapshot = destination && destination !== selected.mailbox
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).messages[0]
-        : undefined;
-      const optimisticAccounts = optimisticSnapshot
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).accounts
-        : null;
-      const optimisticStats = optimisticSnapshot
-        ? applyMessageMove(accounts, [selected], stats, selected.id, destination).stats
-        : null;
-      let wasIncluded = false;
-      let remainsIncluded = false;
-      if (optimisticSnapshot) {
-        wasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
-        remainsIncluded = matchesServerMessageQuery(optimisticSnapshot, accounts, currentQuery);
-        // Sync the ref synchronously (like load) so a fast failure can gate
-        // its rollback on the exact optimistic state it must reverse.
-        messagesRef.current = applyMessageMove(accounts, messagesRef.current, stats, selected.id, destination).messages;
-        setMessages(messagesRef.current);
-        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, destination).accounts);
-        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, destination).stats);
-        setMessageTotal((total) => nextMessageTotalForMove(total, wasIncluded, remainsIncluded));
-      }
-      revert = () => {
-        if (!optimisticSnapshot || !optimisticAccounts || !optimisticStats) return;
-        // A reload that landed mid-flight already holds server truth (the
-        // message restored at its source); leave it alone in that case.
-        if (!messagesRef.current.some((item) => item.id === selected.id && item.mailbox === destination)) return;
-        const restored = revertMessageMove(optimisticAccounts, messagesRef.current, optimisticStats, selected, destination);
-        messagesRef.current = restored.messages;
-        setMessages(restored.messages);
-        setAccounts(restored.accounts);
-        setStats(restored.stats);
-        if (loadRequestRef.current === requestAtStart) {
-          setMessageTotal((total) => nextMessageTotalForMove(total, remainsIncluded, wasIncluded));
-        }
-      };
+      // the server uses, then apply the move locally before the round-trip. The
+      // store shifts the total by the rows whose membership in the current
+      // query actually changed.
+      const optimistic = Boolean(destination && destination !== selected.mailbox);
+      if (optimistic) store.applyMove([selected.id], destination);
       const move = isDemo
         ? { destination, uid: undefined, refreshPending: false, uncertain: false, ok: true, locationUnverified: false }
         : await api.moveMessage(selected.id, target);
@@ -2015,39 +1845,25 @@ const emptyMessageList = useMemo(() => (query.trim()
         showToast(t("mail.error.move"), "error");
         return;
       }
-      if (optimisticSnapshot && move.destination === destination) {
+      if (optimistic && move.destination === destination) {
         // Confirmed: refine the optimistic copy with the server's mapped UID
         // and any pending/location state.
-        const refined = applyMessageMoveConfirmation(messagesRef.current, selected.id, move.uid, move.refreshPending, move.locationUnverified);
-        messagesRef.current = refined;
-        setMessages(refined);
-      } else if (!optimisticSnapshot && move.destination && move.destination !== selected.mailbox) {
+        store.confirmMove(selected.id, {
+          mappedUid: move.uid,
+          movePending: move.refreshPending,
+          moveLocationUnverified: move.locationUnverified,
+        });
+      } else if (!optimistic && move.destination && move.destination !== selected.mailbox) {
         // No predictable destination (e.g. the provider exposes no archive
         // folder locally): apply the move only after the server confirms it.
-        setMessages((items) => {
-          const next = applyMessageMove(accounts, items, stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).messages;
-          messagesRef.current = next;
-          return next;
+        store.applyMove([selected.id], move.destination, {
+          mappedUid: move.uid,
+          movePending: move.refreshPending,
+          moveLocationUnverified: move.locationUnverified,
         });
-        setAccounts((items) => applyMessageMove(items, [selected], stats, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).accounts);
-        setStats((current) => applyMessageMove(accounts, [selected], current, selected.id, move.destination, move.uid, move.refreshPending, move.locationUnverified).stats);
       }
-      const movedSnapshot = optimisticSnapshot ?? applyMessageMove(
-        accounts,
-        [selected],
-        stats,
-        selected.id,
-        move.destination,
-        move.uid,
-        move.refreshPending,
-        move.locationUnverified,
-      ).messages[0];
+      const movedSnapshot = store.getMessages().find((item) => item.id === selected.id);
       if (movedSnapshot) {
-        if (!optimisticSnapshot) {
-          const fallbackWasIncluded = matchesServerMessageQuery(selected, accounts, currentQuery);
-          const fallbackRemainsIncluded = matchesServerMessageQuery(movedSnapshot, accounts, currentQuery);
-          setMessageTotal((total) => nextMessageTotalForMove(total, fallbackWasIncluded, fallbackRemainsIncluded));
-        }
         if (!isDemo && target === "archive" && move.refreshPending) {
           replacePendingArchiveMoves([
             ...pendingArchiveMovesRef.current.filter((pending) => pending.id !== selected.id),
@@ -2089,7 +1905,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       revert();
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
-      unpinMovedAway([selected.id]);
+      store.unpinMovedAway([selected.id]);
       setMessageAction(null);
     }
   };
@@ -2113,10 +1929,8 @@ const emptyMessageList = useMemo(() => (query.trim()
     const nextFlagged = !selected.flagged;
     setMessageFlagging(true);
     // Optimistic and pinned like every other flag edit: the star shows at once,
-    // and a refresh racing the round-trip cannot restore the old flags. This
-    // path previously did neither, so a star could flip back and leave
-    // messagesRef behind the rendered state.
-    pinFlagOverride(pendingLocalStateRef.current, selected.id);
+    // and a refresh racing the round-trip cannot restore the old flags.
+    store.pinFlags([selected.id]);
     applyBatchFlaggedChange([selected.id], nextFlagged);
     try {
       if (!isDemo) await api.updateMessageFlags(selected.id, { flagged: nextFlagged });
@@ -2126,15 +1940,15 @@ const emptyMessageList = useMemo(() => (query.trim()
       applyBatchFlaggedChange([selected.id], selected.flagged);
       showToast(mailErrorToastMessage(error, t("mail.error.updateStar"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, selected.id);
+      store.unpinFlags([selected.id]);
       setMessageFlagging(false);
     }
   };
 
   const toggleSelectedSeen = async () => {
-    if (!selected || selectedRemoteActionsBlocked || pendingLocalStateRef.current.flagOverrides.has(selected.id)) return;
+    if (!selected || selectedRemoteActionsBlocked || store.getState().pendingTargets.flagOverrides.has(selected.id)) return;
     const nextSeen = !selected.seen;
-    pinFlagOverride(pendingLocalStateRef.current, selected.id);
+    store.pinFlags([selected.id]);
     setMessageFlagging(true);
     updateUnreadViewRecentlyRead(selected, nextSeen);
     applyLocalSeenChange(selected, nextSeen);
@@ -2142,12 +1956,12 @@ const emptyMessageList = useMemo(() => (query.trim()
       if (!isDemo) await api.updateMessageFlags(selected.id, { seen: nextSeen });
       showToast(nextSeen ? t("mail.action.markedRead") : t("mail.action.markedUnread"));
     } catch (error) {
-      const changedMessage = { ...selected, seen: nextSeen, flags: nextSeen ? [...new Set([...selected.flags, "\\Seen"])] : selected.flags.filter((flag) => flag !== "\\Seen") };
+      const changedMessage = withSeenFlag(selected, nextSeen);
       updateUnreadViewRecentlyRead(changedMessage, selected.seen);
       applyLocalSeenChange(changedMessage, selected.seen);
       showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");
     } finally {
-      unpinFlagOverride(pendingLocalStateRef.current, selected.id);
+      store.unpinFlags([selected.id]);
       setMessageFlagging(false);
     }
   };
@@ -2178,11 +1992,7 @@ const emptyMessageList = useMemo(() => (query.trim()
     isDemo,
     t,
     showToast,
-    accounts,
-    messages,
-    stats,
-    filteredMessages,
-    filterQuery,
+    store,
     viewRef,
     messageFlagging,
     messageAction,
@@ -2190,16 +2000,9 @@ const emptyMessageList = useMemo(() => (query.trim()
     setMessageAction,
     batchBusy,
     applyBatchFlaggedChange,
-    pendingLocalStateRef,
-    messagesRef,
     loadRequestRef,
     load,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
+    reconcile: () => silentRefreshRef.current(),
     applyLocalSeenChange,
     updateUnreadViewRecentlyRead,
     setSelectedId,
@@ -2235,29 +2038,19 @@ const emptyMessageList = useMemo(() => (query.trim()
   });
 
   const removeAccountFromView = useCallback((accountId: string) => {
-    const account = accounts.find((item) => item.id === accountId);
     const removesSelectedAccount = selectedAccount === accountId;
     const removesSelectedMessage = messages.some((message) => message.id === selectedId && message.accountId === accountId);
-    const inboxFolders = account?.folders.filter((folder) => folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") ?? [];
-    const removedMessageCount = inboxFolders.reduce((total, folder) => total + folder.total, 0);
-    const removedUnreadCount = inboxFolders.reduce((total, folder) => total + folder.unseen, 0);
     const removedMessageIds = new Set(messages.filter((message) => message.accountId === accountId).map((message) => message.id));
     if (removedMessageIds.size) {
       const nextRecentlyRead = new Set([...unreadViewRecentlyReadIdsRef.current].filter((id) => !removedMessageIds.has(id)));
       unreadViewRecentlyReadIdsRef.current = nextRecentlyRead;
       setUnreadViewRecentlyReadIds(nextRecentlyRead);
     }
-    setAccounts((items) => items.filter((account) => account.id !== accountId));
-    setMessages((items) => items.filter((message) => message.accountId !== accountId));
-    setStats((value) => ({
-      accounts: Math.max(0, value.accounts - 1),
-      messages: Math.max(0, value.messages - removedMessageCount),
-      unread: Math.max(0, value.unread - removedUnreadCount),
-    }));
-    if (isDemo) {
-      const removedVisibleMessages = messages.filter((message) => message.accountId === accountId).length;
-      setMessageTotal((total) => Math.max(0, total - removedVisibleMessages));
-    } else {
+    // Account, its rows, and the snapshot counters that described it leave
+    // together; the store owns all three so no reader can see a half-removed
+    // account.
+    store.removeAccount(accountId);
+    if (!isDemo) {
       const nextAccountId = removesSelectedAccount ? "all" : selectedAccount;
       const nextFolder = removesSelectedAccount ? "" : selectedFolder;
       void load({ silent: true, accountId: nextAccountId, folder: nextFolder });
@@ -2270,14 +2063,14 @@ const emptyMessageList = useMemo(() => (query.trim()
       setSelectedId(null);
       setRecipientDetailsOpen(false);
     }
-  }, [accounts, load, messages, selectedAccount, selectedFolder, selectedId]);
+  }, [load, messages, selectedAccount, selectedFolder, selectedId, store]);
 
   const updateAccountSignatureInState = useCallback((accountId: string, signature: string) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, signature } : account));
-  }, []);
+  }, [setAccounts]);
   const updateAccountDisplayNameInState = useCallback((accountId: string, displayName: string | null) => {
     setAccounts((items) => items.map((account) => account.id === accountId ? { ...account, displayName } : account));
-  }, []);
+  }, [setAccounts]);
 
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -2359,7 +2152,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       showToast(mailErrorToastMessage(error, t("mail.error.openNew"), t), "error");
       void load({ silent: true });
     }
-  }, [load, openMessage, showToast, t]);
+  }, [load, openMessage, setMessages, showToast, t]);
 
   /**
    * Enter the loading phase for a sidebar navigation — but only when the target
@@ -2403,12 +2196,31 @@ const emptyMessageList = useMemo(() => (query.trim()
     if (!isDemo || !demoLoadedRef.current) return;
     void (async () => {
       const demo = await ensureDemoLoaded();
-      setAccounts(demo.createDemoAccounts(locale));
-      setMessages(demo.demoMessages);
-      setStats(demo.demoStats);
+      const demoAccounts = demo.createDemoAccounts(locale);
+      const currentQuery = store.getQuery();
+      const currentView = viewRef.current;
+      const demoTotal = demoMessageTotal(demo.demoMessages, demoAccounts, {
+        accountId: currentQuery.accountId,
+        folder: currentQuery.folder,
+        search: currentQuery.search,
+        messageView: currentView,
+        searchScope: currentQuery.searchScope ?? "view",
+        attachmentKind: currentQuery.attachmentKind,
+        after: currentQuery.after,
+        before: currentQuery.before,
+      });
+      store.adoptSnapshot(
+        { accounts: demoAccounts, stats: demo.demoStats, items: demo.demoMessages, total: demoTotal, nextCursor: null },
+        {
+          query: currentQuery,
+          view: currentView,
+          recentlyReadIds: unreadViewRecentlyReadIdsRef.current,
+          pendingArchiveMoves: pendingArchiveMovesRef.current,
+        },
+      );
       applyDemoSubmissions(sortSubmissions(demo.createDemoSubmissions(locale)));
     })();
-  }, [applyDemoSubmissions, locale]);
+  }, [applyDemoSubmissions, locale, store]);
 
   // Demo mode surfaces a realistic auto-reply confirmation so the product
   // preview shows the pending-draft review card without a live agent.
@@ -2503,9 +2315,9 @@ const emptyMessageList = useMemo(() => (query.trim()
         case "close_mobile_sidebar": actions.closeMobileSidebar(); return;
         // Drives the same state as the preview's own onClose path (the X
         // button / requestClose tail both end in closeAttachmentPreview →
-        // setAttachmentPreview(null)). Normally AttachmentPreviewModal's
+        // setAttachmentPreview(null)). Normally AttachmentPreviewDrawer's
         // capture listener handles Escape first; this case is the shell
-        // fallback (e.g. while the lazy modal is still mounting).
+        // fallback (e.g. while the lazy drawer chunk is still loading).
         case "close_attachment_preview": actions.closeAttachmentPreview(); return;
         case "close_reader": closeReader(true); return;
         case "focus_search": searchInputRef.current?.focus(); return;
@@ -2879,31 +2691,24 @@ const emptyMessageList = useMemo(() => (query.trim()
                 </span>
               )}
             </div>
-            <div className="list-toolbar selection-toolbar" aria-hidden={!selectionMode}>
-              <button className="selection-select-all" type="button" onClick={selectAllVisibleMessages} disabled={!filteredMessages.length}>{selectAllPaged ? t("mail.selection.selectAllMatching", { count: currentMessageTotal }) : t("mail.selection.selectAll")}</button>
-              <span className="selection-count">{batchJob ? t("mail.selection.batchProcessing", { done: batchJob.done, total: batchJob.total || currentMessageTotal }) : batchBusy ? t("mail.selection.busy") : t("mail.selection.count", { count: selectAllPaged ? currentMessageTotal : selectedMessageIds.size })}</span>
-              <div className="selection-actions">
-                <IconButton label={t("mail.action.markRead")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: true }, "mail.selection.markedRead")} disabled={!selectedMessageIds.size}><MailOpen size={15} /></IconButton>
-                <IconButton label={t("mail.action.markUnread")} className="selection-action" onClick={() => void batchUpdateFlags({ seen: false }, "mail.selection.markedUnread")} disabled={!selectedMessageIds.size}><Mail size={15} /></IconButton>
-                <IconButton label={t("mail.action.star")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: true }, "mail.selection.starred")} disabled={!selectedMessageIds.size}><Star size={15} /></IconButton>
-                <IconButton label={t("mail.action.unstar")} className="selection-action" onClick={() => void batchUpdateFlags({ flagged: false }, "mail.selection.unstarred")} disabled={!selectedMessageIds.size}><Star size={15} fill="none" /></IconButton>
-                <span className="toolbar-divider" aria-hidden="true" />
-                <IconButton label={t("mail.action.archive")} className="selection-action" onClick={() => void batchMoveMessages("archive")} disabled={!selectedMessageIds.size}><Archive size={15} /></IconButton>
-                <IconButton label={t("mail.action.reportSpam")} className="selection-action" onClick={() => void batchMoveMessages("junk")} disabled={!selectedMessageIds.size}><ShieldCheck size={15} /></IconButton>
-                <IconButton
-                  label={t("mail.action.moveToTrash")}
-                  className="selection-action selection-action-danger"
-                  onClick={() => {
-                    resetBatchDeleteConfirmClosing();
-                    setPendingBatchDelete(true);
-                  }}
-                  disabled={!selectedMessageIds.size && !selectAllPaged}
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              </div>
-              <button className="selection-done" type="button" onClick={exitSelectionMode} disabled={batchBusy}>{t("mail.selection.done")}</button>
-            </div>
+            <SelectionToolbar
+              visible={selectionMode}
+              selectAllPaged={selectAllPaged}
+              selectedCount={selectedMessageIds.size}
+              selectableCount={filteredMessages.length}
+              matchingCount={currentMessageTotal}
+              busy={batchBusy}
+              folderContext={selectionFolderContext(selectedFolderRecord?.specialUse, view === "archived", Boolean(query.trim() && searchScope === "all"))}
+              onSelectAll={selectAllVisibleMessages}
+              onSetSeen={(seen) => void batchUpdateFlags({ seen }, seen ? "mail.selection.markedRead" : "mail.selection.markedUnread")}
+              onSetFlagged={(flagged) => void batchUpdateFlags({ flagged }, flagged ? "mail.selection.starred" : "mail.selection.unstarred")}
+              onMove={(target) => void batchMoveMessages(target)}
+              onTrash={() => {
+                resetBatchDeleteConfirmClosing();
+                setPendingBatchDelete(true);
+              }}
+              onDone={exitSelectionMode}
+            />
           </div>
 
           <Profiler id="MessageList" onRender={onMessageListRender}>
@@ -3025,7 +2830,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           openAttachmentPreview={openAttachmentPreview}
         />
         </div>
-        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} initialPrompt={agentLaunchIntent?.prompt} initialAutoSend={agentLaunchIntent?.autoSend} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
+        {agentOpen && <Suspense fallback={<div className="agent-workspace-loading" role="status"><LoaderCircle className="spin" size={20} /><span>{t("agent.loading")}</span></div>}><AgentWorkspace accounts={accounts} messages={messages} currentMessage={selected ?? undefined} initialPrompt={agentLaunchIntent?.prompt} initialAutoSend={agentLaunchIntent?.autoSend} initialNewConversation={Boolean(agentLaunchIntent)} restoreFocusRef={agentLaunchButtonRef} demoMode={isDemo} overlayOpen={state.settingsOpen || Boolean(demoSource)} providerListVersion={agentProviderListVersion} onOpenModelSettings={() => actions.openSettingsTo("models")} preloadedBootstrap={preloadedAgentBootstrap ?? undefined} agentAccessLevel={settings.agentAccessLevel} onAgentAccessLevelChange={(level) => { void updateSettings({ agentAccessLevel: level }); }} onMailStateChanged={() => { requestRefresh(); }} onClose={() => {
           closeAgentWorkspace();
           // Refresh so the translation panel picks up provider changes made in the workspace.
           if (!isDemo) void api.agentBootstrap().then((value) => { const capped: AgentBootstrap = { ...value, conversations: value.conversations.slice(0, 50) }; setPreloadedAgentBootstrap(capped); setAgentProviderSnapshot(capped); }).catch(() => undefined);
@@ -3034,6 +2839,7 @@ const emptyMessageList = useMemo(() => (query.trim()
         <aside className="icon-rail" aria-label={t("navigation.management")}>
           <IconButton label={t("settings.title")} onClick={() => { actions.closeMobileSidebar(); actions.openSettings(); }}><Settings size={18} /></IconButton>
           <IconButton label={t("sending.title")} className={submissionAttentionCount ? "attention" : ""} onClick={() => { actions.closeMobileSidebar(); actions.openSendingStatus(); void refreshSubmissions(accounts, { silent: true }); }}><ListChecks size={18} />{submissionOutstandingCount > 0 && <span className="rail-badge" aria-hidden="true">{submissionOutstandingCount}</span>}</IconButton>
+          <CloudSyncRailItem tasks={cloudSync} t={t} locale={locale} />
           <span className="icon-rail-divider" aria-hidden="true" />
           <IconButton label={t("calendar.title")} onClick={() => { actions.closeMobileSidebar(); actions.openCalendar(); if (!isDemo) calendarCache.warm(); }}><Calendar size={18} /></IconButton>
           <IconButton label={t("settings.contacts.title")} onClick={() => { actions.closeMobileSidebar(); actions.openContacts(); if (!isDemo) contactsCache.warm(); }}><Users size={18} /></IconButton>
@@ -3058,7 +2864,6 @@ const emptyMessageList = useMemo(() => (query.trim()
         dismissToast={dismissToast}
         handleAccountAdded={handleAccountAdded}
         load={load}
-        setThreadRefreshTick={setThreadRefreshTick}
         setMessages={setMessages}
         setSelectedId={setSelectedId}
         applySettings={applySettings}

@@ -52,6 +52,10 @@ jobs:
       # build has no use for.
       - name: Install the build dependencies
         run: npm ci --ignore-scripts
+      # The web build guards on the generated pdf.js assets (cmaps, fonts,
+      # wasm); they are not tracked in git, so materialize them before the
+      # site build.
+      - run: npm run assets:pdfjs
       - name: Build the site and interactive demo
         run: node scripts/build-site.mjs
       - name: Setup Pages

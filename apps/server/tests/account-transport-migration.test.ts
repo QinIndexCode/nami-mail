@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
+import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
 import { openDatabase } from "../src/db.js";
 import { updateAccountDisplayName } from "../src/account-store.js";
+import { prepareDump } from "./helpers/legacy-store.js";
 
 describe("account transport migration", () => {
   const temporaryDirectories: string[] = [];
@@ -132,7 +133,35 @@ describe("account transport migration", () => {
     temporaryDirectories.push(directory);
     const databasePath = path.join(directory, "nami-mail.db");
     const legacy = new Database(databasePath);
-    legacy.exec(`
+    // The account comes along with the folder: a legacy file with a folder cache
+    // got there by connecting an account first. The rebuilt `folders` declares
+    // the same foreign key the old table did, so a fixture that skipped the
+    // account would describe a database the application cannot produce, and the
+    // failure would be about that constraint rather than about the migration.
+    prepareDump(legacy, `
+      CREATE TABLE accounts (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        provider TEXT NOT NULL,
+        provider_name TEXT NOT NULL,
+        encrypted_password TEXT NOT NULL,
+        imap_host TEXT NOT NULL,
+        imap_port INTEGER NOT NULL,
+        imap_secure INTEGER NOT NULL,
+        smtp_host TEXT NOT NULL,
+        smtp_port INTEGER NOT NULL,
+        smtp_secure INTEGER NOT NULL,
+        username_mode TEXT NOT NULL DEFAULT 'email',
+        status TEXT NOT NULL DEFAULT 'connected',
+        last_error TEXT,
+        last_synced_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO accounts (
+        id, email, provider, provider_name, encrypted_password,
+        imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure, created_at
+      ) VALUES ('account-1', 'legacy@example.test', 'custom', 'Custom', 'encrypted',
+        'imap.example.test', 993, 1, 'smtp.example.test', 465, 1, '2026-07-19T00:00:00.000Z');
       CREATE TABLE folders (
         account_id TEXT NOT NULL,
         path TEXT NOT NULL,

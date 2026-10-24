@@ -1,4 +1,5 @@
 # External Mail Interface
+<!-- shipped-as: v0.5.1 -->
 
 [Simplified Chinese](EXTERNAL-MAIL-INTERFACE.zh-CN.md) | [Documentation](README.en.md) | [CLI](cli/README.en.md) | [MCP](mcp/README.en.md)
 

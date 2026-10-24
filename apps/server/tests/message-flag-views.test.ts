@@ -47,7 +47,7 @@ describe("starred and unread flag indexes", () => {
     uidSequence = 0;
     db = openDatabase(":memory:");
     insertAccount(db, "account-1");
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES ('account-1', 'INBOX', 'Inbox', '\\Inbox', 0, 0, '1')").run();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES ('account-1', 'INBOX', 'Inbox', '\\Inbox', '1')").run();
     for (let index = 0; index < 40; index += 1) {
       const flags: string[] = [];
       if (index % 3 === 0) flags.push("\\Flagged");

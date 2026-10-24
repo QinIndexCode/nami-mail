@@ -48,8 +48,10 @@ describe("message list paging wiring", () => {
     const body = functionBody(read("App.tsx"), "loadMore");
     expect(body).toContain("cursor: messageNextCursor ?? undefined");
     expect(body).toContain("setMessageNextCursor(nextPage.nextCursor)");
-    // The chain's own dedupe, so a redelivered row cannot render twice.
-    expect(body).toContain("appendMessageCursorChain");
+    // The chain's own dedupe, so a redelivered row cannot render twice. It
+    // lives in the store now, which is the one place a page meets the list.
+    expect(body).toContain("store.appendPage(");
+    expect(read(path.join("app", "mailStore.ts"))).toContain("appendMessageCursorChain");
   });
 
   it("sends no page number to the list endpoint anywhere in the renderer", () => {
@@ -73,8 +75,11 @@ describe("message list paging wiring", () => {
 
   it("leaves the total in place for the counts the header shows", () => {
     // `total` still drives the header badge and "select all matching"; only the
-    // load-more gate stopped trusting it.
-    expect(read("App.tsx")).toContain("nextMessageTotalForSnapshot(firstPage.total");
+    // load-more gate stopped trusting it. A full load hands the server's total
+    // to the store, which owns the pinned-row correction that used to be
+    // applied at the call site.
+    expect(read("App.tsx")).toContain("store.adoptSnapshot(");
+    expect(read(path.join("app", "mailStore.ts"))).toContain("nextMessageTotalForSnapshot(");
   });
 
   it("describes the page as the server defines it", () => {

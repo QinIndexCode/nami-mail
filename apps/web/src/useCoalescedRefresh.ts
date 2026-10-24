@@ -44,7 +44,17 @@ export function useCoalescedRefresh(
   const lastCompletedAtRef = useRef(0);
   const trailingTimerRef = useRef<number | null>(null);
 
-  const drain = useCallback(() => {
+  const drain = useCallback((force = false) => {
+    // A new pass may only start while the window is visible. The request path
+    // checks this too, but a trailing timer armed in the foreground (or an
+    // in-flight pass finishing after the window hides) re-enters here directly;
+    // without this guard those paths would reopen the background work that
+    // requestRefresh just deferred. The dirty flag stays set so the visibility
+    // listener still performs exactly one catch-up.
+    if (document.hidden) {
+      dirtyRef.current = true;
+      return;
+    }
     const now = Date.now();
     const msSinceLast = now - lastCompletedAtRef.current;
 
@@ -56,8 +66,10 @@ export function useCoalescedRefresh(
     }
     // Too soon after the last completed refresh: remember the request and arm a
     // single trailing timer at the oldest convenient fire time instead of
-    // bursting now.
-    if (msSinceLast < minIntervalMs) {
+    // bursting now. The visibility catch-up passes `force`: the user has just
+    // looked at the window, so the one deferred request must land now rather
+    // than wait out a window meant to absorb foreground bursts.
+    if (!force && msSinceLast < minIntervalMs) {
       dirtyRef.current = true;
       if (trailingTimerRef.current === null) {
         const wait = Math.max(0, minIntervalMs - msSinceLast);
@@ -69,7 +81,11 @@ export function useCoalescedRefresh(
       return;
     }
 
-    // Run now.
+    // Run now. A timer armed for this same pending request is moot.
+    if (trailingTimerRef.current !== null) {
+      window.clearTimeout(trailingTimerRef.current);
+      trailingTimerRef.current = null;
+    }
     dirtyRef.current = false;
     runningRef.current = true;
     Promise.resolve()
@@ -100,7 +116,7 @@ export function useCoalescedRefresh(
     const onVisibility = () => {
       if (document.hidden) return;
       if (dirtyRef.current && !runningRef.current) {
-        drain();
+        drain(true);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);

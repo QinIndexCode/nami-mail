@@ -1,10 +1,11 @@
 /**
  * Message move operations extracted from sync.ts.
  *
- * This module contains every public and private function related to moving
- * messages between IMAP folders: single-message moves, batch moves via
- * aggregated IMAP MOVE commands, and the UIDPLUS / pending-reconciliation
- * persistence helpers shared by both paths.
+ * This module contains the moving itself: single-message moves, batch moves
+ * via aggregated IMAP MOVE commands, and the UIDPLUS / pending-reconciliation
+ * persistence helpers shared by both paths. What a target names and how a name
+ * or path resolves to a provider folder lives in `move-destinations.ts`, which
+ * the task layer also asks without issuing a move.
  *
  * The module imports write-lock infrastructure and account state accessors
  * from sync.ts but does not depend on syncAccount itself, keeping the
@@ -12,12 +13,19 @@
  */
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
 import type { DatabaseHandle } from "./db.js";
-import { friendlyMailError, imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { moveErrorMessage, type BatchMessageMoveOutcome } from "./batch-move-outcome.js";
+import {
+  MOVE_FOLDER_UNAVAILABLE_ERROR,
+  moveTargets,
+  resolveFolderDestination,
+  resolveMoveDestination,
+  type MessageMoveTarget,
+} from "./move-destinations.js";
+import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import {
   MAILBOX_SYNCING_ERROR,
   MAIL_MOVE_IN_FLIGHT_ERROR,
-  MOVE_LOCATION_UNVERIFIED_ERROR,
   PENDING_MOVE_RECONCILIATION_ERROR,
   moveActionBlockedError,
 } from "./message-storage.js";
@@ -31,50 +39,16 @@ import {
   withAccountWriteLocks,
 } from "./sync-locks.js";
 import { accountById } from "./account-store.js";
+import { isRecoverableStaleMove, recoverStaleMoveIntent } from "./move-recovery.js";
+import { UID_GENERATION_CHANGED_ERROR, liveUidValidity, moveAcceptanceEvidence, partitionRefusedByGeneration, refuseRebuiltMailbox, type AcceptedUidGeneration } from "./mailbox-generation.js";
 import {
   cachedDestinationCandidateUid,
   moveStatements,
   pendingMoveUid,
   removeTrashSystemViewMirrors,
-  updateFolderCountsForMove,
   type MoveDestination,
   type MoveDuplicateRow,
 } from "./sync-move-statements.js";
-
-// ---------------------------------------------------------------------------
-// Move-target definitions
-// ---------------------------------------------------------------------------
-
-export type MessageMoveTarget = "archive" | "trash" | "junk" | "inbox";
-
-const moveTargets: Record<MessageMoveTarget, { specialUses: string[]; unavailableMessage: string }> = {
-  archive: {
-    // Some providers expose their archive view as \All. MOVE removes the source
-    // mailbox membership and is therefore the provider-supported archive action.
-    specialUses: ["\\Archive", "\\All"],
-    unavailableMessage: "这个邮箱没有提供可用的归档文件夹。",
-  },
-  trash: {
-    specialUses: ["\\Trash"],
-    unavailableMessage: "这个邮箱没有提供可用的废纸篓文件夹。",
-  },
-  junk: {
-    // The provider's canonical spam folder; some providers expose it under a
-    // localized path, so resolve by SPECIAL-USE only.
-    specialUses: ["\\Junk"],
-    unavailableMessage: "这个邮箱没有提供可用的垃圾邮件文件夹。",
-  },
-  inbox: {
-    // The "not spam" recovery path restores a misclassified message to the
-    // real INBOX regardless of the account's folder naming.
-    specialUses: ["\\Inbox"],
-    unavailableMessage: "这个邮箱没有提供可用的收件箱。",
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Public move result types
-// ---------------------------------------------------------------------------
 
 export type MessageMoveResult = {
   accountId: string;
@@ -111,10 +85,8 @@ export async function moveMessageToFolder(
   const moveBlockedError = moveActionBlockedError(message);
   if (moveBlockedError && !isRecoverableStaleMove(message)) throw new Error(moveBlockedError);
   if (message.mailbox === folderPath) throw new Error("邮件已经在该文件夹中。");
-  const folder = db.prepare(`
-    SELECT path, special_use FROM folders WHERE account_id = ? AND path = ?
-  `).get(message.account_id, folderPath) as MoveDestination | undefined;
-  if (!folder) throw new Error("目标文件夹不存在或不可用。");
+  const folder = resolveFolderDestination(db, message.account_id, folderPath);
+  if (!folder) throw new Error(MOVE_FOLDER_UNAVAILABLE_ERROR);
   return moveMessageCore(db, masterKey, messageId, folder, accessTokenProvider, agentEvents, options);
 }
 
@@ -123,53 +95,15 @@ export type MoveMessageOptions = {
   client?: Awaited<ReturnType<typeof imapClientForAccount>>;
   /** Overrides how long the move waits for a running sync pass (tests). */
   syncWaitMs?: number;
+  /**
+   * The generation the caller froze when it accepted this move. Omitted, the
+   * cache's current value is used instead -- correct for an immediate move,
+   * because the account's write slot keeps a sync from rewriting `folders`
+   * between the read and the lock. A queued move passes its acceptance-time
+   * value; `null` (froze none) is refused, not back-filled.
+   */
+  expectedUidValidity?: string | null;
 };
-
-/**
- * Only an 'intent' left behind by an interrupted transfer can be re-probed
- * against the source mailbox and retried. A 'confirmed' move and an
- * unverified location stay blocked until a sync reconciles the target.
- */
-function isRecoverableStaleMove(message: { pending_move_state: string | null; uid: number }): boolean {
-  return message.pending_move_state === "intent" && message.uid > 0;
-}
-
-/**
- * Proves whether the source UID of a stale 'intent' is still live. Present:
- * the interrupted MOVE never executed, so the intent is discarded for a fresh
- * attempt (true). Absent: the MOVE did happen and reconciliation owns the
- * outcome (false).
- */
-async function recoverStaleMoveIntent(
-  db: DatabaseHandle,
-  masterKey: Buffer,
-  messageId: string,
-  message: { account_id: string; mailbox: string; uid: number },
-  accessTokenProvider?: AccountAccessTokenProvider,
-  sharedClient?: Awaited<ReturnType<typeof imapClientForAccount>>,
-): Promise<boolean> {
-  const account = accountById(db, message.account_id);
-  if (!account) return false;
-  const client = sharedClient ?? (await imapClientForAccount(account, masterKey, accessTokenProvider));
-  const ownsClient = !sharedClient;
-  try {
-    if (ownsClient) await client.connect();
-    const lock = await client.getMailboxLock(message.mailbox);
-    try {
-      for await (const item of client.fetch([message.uid], { uid: true }, { uid: true })) {
-        if (item.uid === message.uid) {
-          moveStatements(db).clearMoveIntent.run(messageId);
-          return true;
-        }
-      }
-    } finally {
-      lock.release();
-    }
-    return false;
-  } finally {
-    if (ownsClient) await safeLogout(client);
-  }
-}
 
 export async function moveMessage(
   db: DatabaseHandle,
@@ -207,6 +141,29 @@ export async function moveMessage(
   );
 }
 
+/**
+ * Runs a move on a destination the caller has already resolved. The batch
+ * fallback uses it so an explicit folder and a named target share one path, and
+ * so a row carrying the batch's own acceptance-time goal reaches
+ * `moveMessageCore`, which is where that goal is claimed. The public single-
+ * message entries keep their own pre-checks: a reconciling move must be
+ * reported before the destination lookup can fail for an unrelated reason.
+ */
+async function moveEntryToDestination(
+  db: DatabaseHandle,
+  masterKey: Buffer,
+  messageId: string,
+  accountId: string,
+  destination: MoveDestination,
+  accessTokenProvider?: AccountAccessTokenProvider,
+  agentEvents?: AgentMailEventSink,
+  options?: MoveMessageOptions,
+): Promise<MessageMoveResult> {
+  return withAccountWriteLocks([accountId], () =>
+    moveMessageCore(db, masterKey, messageId, destination, accessTokenProvider, agentEvents, options),
+  );
+}
+
 type MoveMessageFields = {
   account_id: string;
   mailbox: string;
@@ -215,37 +172,19 @@ type MoveMessageFields = {
   remote_id_lookup: string | null;
   pending_move_destination: string | null;
   pending_move_state: string | null;
+  /**
+   * The generation of `mailbox` as the cache recorded it. Read in the same
+   * statement as the row, so it is the generation this UID was last written
+   * under -- falling back to it is the best evidence an immediate move has.
+   */
+  origin_uid_validity?: string | null;
 };
 
 /**
- * Resolves the provider folder a move target maps to, or null when the
- * account has no usable folder for the target. A message that already lives
- * in the resolved folder is handled as an idempotent no-op by the callers.
- * Exported for batch-job undo, which must know the job's target folder to
- * avoid dragging manually re-moved messages back.
- */
-export function resolveMoveDestination(
-  db: DatabaseHandle,
-  accountId: string,
-  target: MessageMoveTarget,
-): MoveDestination | null {
-  const specialUses = moveTargets[target].specialUses;
-  // Only the `?` count varies in this statement, so it is compiled once per
-  // width per connection (see `moveStatements`). The special-use names stay
-  // bound, the precedence and the `IN` order are the SQL the uncached path
-  // issued, and `.get()` still reads the folders row *now* — only the compile
-  // is shared, never the result.
-  const destination = moveStatements(db).destinationBySpecialUseCount(specialUses.length)
-    .get(accountId, ...specialUses) as MoveDestination | undefined;
-  return destination ?? null;
-}
-
-/**
  * Persists the UIDPLUS-confirmed outcome of a provider MOVE: the row is
- * rebound to the exact destination UID, duplicate destination rows from a
- * cached \All copy are dropped, and folder counts are adjusted. Shared by
- * single-message moves and aggregated batch moves so both keep identical
- * intent/UIDPLUS semantics.
+ * rebound to the exact destination UID and duplicate destination rows from a
+ * cached \All copy are dropped. Shared by single-message moves and aggregated
+ * batch moves so both keep identical intent/UIDPLUS semantics.
  */
 function applyMoveConfirmedUidPlus(
   db: DatabaseHandle,
@@ -264,10 +203,9 @@ function applyMoveConfirmedUidPlus(
     // row ids disappeared, and by then the DELETE would have already removed
     // every one of them.
     const duplicateDestinationRows = statements.uidPlusDuplicateRows.all(message.account_id, destination.path, destinationUid, messageId) as MoveDuplicateRow[];
-    const removedDestinationRow = statements.uidPlusRemoveDestinationRows.run(message.account_id, destination.path, destinationUid, messageId);
+    statements.uidPlusRemoveDestinationRows.run(message.account_id, destination.path, destinationUid, messageId);
     const updated = statements.uidPlusConfirm.run(destination.path, destinationUid, destination.special_use === "\\All" ? 1 : null, messageId);
     if (updated.changes !== 1) throw new Error("Move intent was not available for UIDPLUS reconciliation.");
-    updateFolderCountsForMove(statements, message, destination, removedDestinationRow.changes > 0);
     if (destination.special_use === "\\Trash") {
       removeTrashSystemViewMirrors(statements, message, messageId, agentEvents, agentLease);
     }
@@ -323,9 +261,9 @@ function applyMovePendingReconciliation(
     const duplicateDestinationRows = message.remote_id_lookup
       ? statements.reconcileDuplicateRows.all(message.account_id, destination.path, message.remote_id_lookup, messageId) as MoveDuplicateRow[]
       : [];
-    const removedDestinationRows = message.remote_id_lookup
-      ? statements.reconcileRemoveDestinationRows.run(message.account_id, destination.path, message.remote_id_lookup, messageId)
-      : { changes: 0 };
+    if (message.remote_id_lookup) {
+      statements.reconcileRemoveDestinationRows.run(message.account_id, destination.path, message.remote_id_lookup, messageId);
+    }
     const localPendingUid = pendingMoveUid(statements, message.account_id, message.mailbox, message.uid);
     const confirmed = statements.reconcileConfirm.run(
       localPendingUid,
@@ -336,7 +274,6 @@ function applyMovePendingReconciliation(
       messageId,
     );
     if (confirmed.changes !== 1) throw new Error("Move intent was not available for pending reconciliation.");
-    updateFolderCountsForMove(statements, message, destination, removedDestinationRows.changes > 0);
     if (destination.special_use === "\\Trash") {
       removeTrashSystemViewMirrors(statements, message, messageId, agentEvents, agentLease);
     }
@@ -368,6 +305,18 @@ function applyMovePendingReconciliation(
     refreshPending: message.remote_id_lookup !== null,
     locationUnverified: message.remote_id_lookup === null,
   };
+}
+
+/**
+ * True when the row carries this move's own acceptance-time goal: a destination
+ * a local-first job wrote when the user confirmed the selection, not yet
+ * claimed as an intent. `moveActionBlockedError` exists to stop a *user* action
+ * from hijacking somebody's pending move; the worker that owns the goal has to
+ * get past its own record, and only for the destination it was accepted for —
+ * a goal pointing elsewhere is a newer user decision and still blocks.
+ */
+function ownsMoveGoal(message: MoveMessageFields, destination: MoveDestination): boolean {
+  return message.pending_move_state === null && message.pending_move_destination === destination.path;
 }
 
 async function moveMessageCore(
@@ -411,7 +360,11 @@ async function moveMessageCore(
     // have reached the provider. Prove whether the source UID is still live
     // before either retrying the move or leaving reconciliation in charge;
     // the probe reuses the connection the retry will move on.
-    let moveBlockedError = moveActionBlockedError(message);
+    // A local-first job's own acceptance-time goal is not "another move in
+    // progress": the job owns that record and claims it below, instead of
+    // blocking on its own bookkeeping.
+    const claimedGoal = ownsMoveGoal(message, destination);
+    let moveBlockedError = claimedGoal ? null : moveActionBlockedError(message);
     if (moveBlockedError === PENDING_MOVE_RECONCILIATION_ERROR && isRecoverableStaleMove(message)) {
       if (!options?.client) {
         ownedClient = await imapClientForAccount(account, masterKey, accessTokenProvider);
@@ -433,7 +386,11 @@ async function moveMessageCore(
     // The intent is durable before any provider command. If the process exits
     // after the command is accepted but before the response is persisted, sync
     // can either prove the source still exists or reconcile the exact target.
-    const beganIntent = statements.beginMoveIntent.run(destination.path, intentCandidateUid, destination.special_use, messageId);
+    // A goal the job wrote at acceptance is claimed through the statement that
+    // admits it; anything else keeps the original "no destination yet" claim.
+    const beganIntent = claimedGoal
+      ? statements.claimMoveGoal.run(destination.path, intentCandidateUid, destination.special_use, messageId, destination.path)
+      : statements.beginMoveIntent.run(destination.path, intentCandidateUid, destination.special_use, messageId);
     if (beganIntent.changes !== 1) throw new Error(PENDING_MOVE_RECONCILIATION_ERROR);
     intentClaimed = true;
 
@@ -448,6 +405,13 @@ async function moveMessageCore(
     }
     const lock = await client.getMailboxLock(message.mailbox);
     try {
+      // Nothing has been sent yet, so clearing the intent is the whole rollback.
+      try {
+        refuseRebuiltMailbox(db, message.account_id, message.mailbox, client, options?.expectedUidValidity);
+      } catch (error) {
+        clearMoveIntent.run(messageId);
+        throw error;
+      }
       moveAttempted = true;
       const moved = await client.messageMove(message.uid, destination.path, { uid: true });
       if (!moved) {
@@ -500,29 +464,8 @@ async function moveMessageCore(
 // Batch moves
 // ---------------------------------------------------------------------------
 
-export type BatchMessageMoveOutcome = {
-  updated: number;
-  failed: number;
-  failures: Array<{ id: string; message: string }>;
-  pendingAccounts: Set<string>;
-};
-
-const knownLocalMoveErrors = new Set([
-  "Message not found.",
-  "Account not found.",
-  "邮件服务器未确认移动操作，请稍后重试。",
-  "这个邮箱没有提供可用的归档文件夹。",
-  "这个邮箱没有提供可用的废纸篓文件夹。",
-  "目标文件夹不存在或不可用。",
-  "邮件已经在该文件夹中。",
-  PENDING_MOVE_RECONCILIATION_ERROR,
-  MOVE_LOCATION_UNVERIFIED_ERROR,
-]);
-
-function moveErrorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return knownLocalMoveErrors.has(message) ? message : friendlyMailError(error);
-}
+// The outcome shape lives with the error vocabulary it is reported with.
+export type { BatchMessageMoveOutcome } from "./batch-move-outcome.js";
 
 /**
  * Moves every entry of one (account, source mailbox) group with a single
@@ -546,6 +489,8 @@ async function moveMessagesInOneCommand(
   accessTokenProvider: AccountAccessTokenProvider | undefined,
   agentEvents: AgentMailEventSink | undefined,
   client: Awaited<ReturnType<typeof imapClientForAccount>>,
+  /** Acceptance-time generations, keyed by message id (see `batchMoveMessages`). */
+  acceptedGenerations?: ReadonlyMap<string, AcceptedUidGeneration>,
 ): Promise<{ updated: number; failures: Array<{ id: string; message: string }>; pendingAccounts: Set<string> }> {
   const outcome = { updated: 0, failures: [] as Array<{ id: string; message: string }>, pendingAccounts: new Set<string>() };
   const accountId = entries[0]?.account_id;
@@ -558,6 +503,10 @@ async function moveMessagesInOneCommand(
   markAccountMoving(accountId);
   const statements = moveStatements(db);
   const clearMoveIntent = statements.clearMoveIntent;
+  // Every claimed entry remembers whether it came from the job's own
+  // acceptance-time goal: those rows already left their source folder when the
+  // selection was accepted, so the confirm step must not count that departure
+  // a second time.
   const claimed: Array<MoveMessageFields & { id: string }> = [];
   let commandAttempted = false;
   try {
@@ -572,7 +521,10 @@ async function moveMessagesInOneCommand(
       // A stale 'intent' (an earlier MOVE whose response was lost) may never
       // have reached the provider; probe the source UID on the shared
       // connection before either retrying or leaving reconciliation in charge.
-      let moveBlockedError = moveActionBlockedError(entry);
+      // A row carrying this job's own acceptance-time goal is not blocked by
+      // its own record; it is claimed through the statement that admits it.
+      const claimedGoal = ownsMoveGoal(entry, destination);
+      let moveBlockedError = claimedGoal ? null : moveActionBlockedError(entry);
       if (moveBlockedError === PENDING_MOVE_RECONCILIATION_ERROR && isRecoverableStaleMove(entry)) {
         const recovered = await recoverStaleMoveIntent(db, masterKey, entry.id, entry, accessTokenProvider, client);
         if (recovered) moveBlockedError = null;
@@ -592,7 +544,9 @@ async function moveMessagesInOneCommand(
       // exits after the command is accepted but before the response is
       // persisted, sync can either prove the source still exists or reconcile
       // the exact target.
-      const beganIntent = statements.beginMoveIntent.run(destination.path, intentCandidateUid, destination.special_use, entry.id);
+      const beganIntent = claimedGoal
+        ? statements.claimMoveGoal.run(destination.path, intentCandidateUid, destination.special_use, entry.id, destination.path)
+        : statements.beginMoveIntent.run(destination.path, intentCandidateUid, destination.special_use, entry.id);
       if (beganIntent.changes !== 1) {
         outcome.failures.push({ id: entry.id, message: PENDING_MOVE_RECONCILIATION_ERROR });
         continue;
@@ -603,6 +557,19 @@ async function moveMessagesInOneCommand(
 
     const lock = await client.getMailboxLock(claimed[0]!.mailbox);
     try {
+      // The generation check (see `mailbox-generation.ts`): under this lock and
+      // before the command, because the live value only means something once the
+      // mailbox is selected. Nothing was sent for the refused ids.
+      const refused = partitionRefusedByGeneration(claimed, liveUidValidity(client), acceptedGenerations);
+      if (refused.length > 0) {
+        for (const entry of refused) {
+          clearMoveIntent.run(entry.id);
+          outcome.failures.push({ id: entry.id, message: UID_GENERATION_CHANGED_ERROR });
+        }
+        // Also the runner's "kick a sync" channel: a pass is what fixes this.
+        outcome.pendingAccounts.add(accountId);
+        if (claimed.length === 0) return outcome;
+      }
       commandAttempted = true;
       const moved = await client.messageMove(claimed.map((entry) => entry.uid), destination.path, { uid: true });
       if (!moved) {
@@ -668,17 +635,28 @@ async function moveMessagesInOneCommand(
  * intent/UIDPLUS semantics are unchanged; failures are reported individually
  * instead of being swallowed.
  *
+ * A selection is either a named target or an explicit folder path. Both are
+ * resolved once per group, and the path form is validated against each group's
+ * own account, so one selection can span accounts without leaking a folder
+ * name across them.
+ *
  * A caller running many batches in a row passes the `connections` cache it
  * owns, paying one connect per account for the whole run instead of per batch.
+ *
+ * `acceptedGenerations` carries what each id's acceptance froze (the `move`
+ * task's `task_items`). An id missing from it is judged by the cache -- the
+ * right evidence for an immediate call -- while one the task accepted without
+ * freezing a generation is refused instead.
  */
 export async function batchMoveMessages(
   db: DatabaseHandle,
   masterKey: Buffer,
   ids: string[],
-  target: MessageMoveTarget,
+  selection: MessageMoveTarget | { folderPath: string },
   accessTokenProvider?: AccountAccessTokenProvider,
   agentEvents?: AgentMailEventSink,
   connections?: Map<string, Awaited<ReturnType<typeof imapClientForAccount>>>,
+  acceptedGenerations?: ReadonlyMap<string, AcceptedUidGeneration>,
 ): Promise<BatchMessageMoveOutcome> {
   const outcome: BatchMessageMoveOutcome = {
     updated: 0,
@@ -711,6 +689,10 @@ export async function batchMoveMessages(
   try {
     for (const group of groups.values()) {
       const accountId = group[0]!.account_id;
+      // Resolved before the guarded block and kept for the per-entry fallback:
+      // a group-level failure after resolution still knows where each entry was
+      // headed. Only a failure during resolution itself leaves it null.
+      let destination: MoveDestination | null = null;
       try {
         const account = accountById(db, accountId);
         if (!account) {
@@ -720,16 +702,23 @@ export async function batchMoveMessages(
           }
           continue;
         }
-        const destination = resolveMoveDestination(db, accountId, target);
+        destination = typeof selection === "string"
+          ? resolveMoveDestination(db, accountId, selection)
+          : resolveFolderDestination(db, accountId, selection.folderPath);
         if (!destination) {
-          const unavailable = moveTargets[target].unavailableMessage;
+          const unavailable = typeof selection === "string"
+            ? moveTargets[selection].unavailableMessage
+            : MOVE_FOLDER_UNAVAILABLE_ERROR;
           for (const entry of group) {
             outcome.failed += 1;
             outcome.failures.push({ id: entry.id, message: unavailable });
           }
           continue;
         }
-        if (destination.path === group[0]!.mailbox) {
+        // A local binding after the guard: the callback below is a closure, and
+        // a closure does not preserve the narrowing of the outer `let`.
+        const resolved = destination;
+        if (resolved.path === group[0]!.mailbox) {
           // Idempotent no-op: the whole group already lives in the target
           // folder (e.g. a second delete from the Trash view). Count every
           // entry as moved so the renderer clears them from the view.
@@ -749,18 +738,38 @@ export async function batchMoveMessages(
         // already in flight on the same account instead of failing the whole
         // group with a busy error.
         const groupOutcome = await withAccountWriteLocks([accountId], () =>
-          moveMessagesInOneCommand(db, masterKey, group, destination, accessTokenProvider, agentEvents, client),
+          moveMessagesInOneCommand(db, masterKey, group, resolved, accessTokenProvider, agentEvents, client, acceptedGenerations),
         );
         outcome.updated += groupOutcome.updated;
         outcome.failed += groupOutcome.failures.length;
         outcome.failures.push(...groupOutcome.failures);
         for (const pending of groupOutcome.pendingAccounts) outcome.pendingAccounts.add(pending);
-      } catch {
+      } catch (error) {
         // Fall back to per-message moves so a group-level failure (e.g. a
-        // guard error) keeps the previous per-message granularity.
+        // guard error) keeps the previous per-message granularity. A failure
+        // before the destination was resolved has nothing to fall back to, so
+        // its error is the only thing to report per entry.
+        if (!destination) {
+          for (const entry of group) {
+            outcome.failed += 1;
+            outcome.failures.push({ id: entry.id, message: moveErrorMessage(error) });
+          }
+          continue;
+        }
         for (const entry of group) {
           try {
-            const result = await moveMessage(db, masterKey, entry.id, target, accessTokenProvider, agentEvents, { client: clientsByAccount.get(accountId) });
+            // One move at a time: the acceptance evidence must be carried, or a queued id is judged by the cache.
+            const evidence = moveAcceptanceEvidence(entry, acceptedGenerations);
+            const result = await moveEntryToDestination(
+              db,
+              masterKey,
+              entry.id,
+              accountId,
+              destination,
+              accessTokenProvider,
+              agentEvents,
+              { client: clientsByAccount.get(accountId), ...(evidence.source === "accepted" ? { expectedUidValidity: evidence.value } : {}) },
+            );
             outcome.updated += 1;
             if (result.refreshPending) outcome.pendingAccounts.add(accountId);
           } catch (entryError) {

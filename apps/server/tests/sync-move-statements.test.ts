@@ -228,7 +228,7 @@ describe("move statement reuse", () => {
     // caller must never receive a statement whose width does not match the
     // special uses it is about to bind.
     const statements = createMoveStatements(db);
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES ('account-1', 'Trash', 'Trash', '\\Trash', 0, 0)").run();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES ('account-1', 'Trash', 'Trash', '\\Trash')").run();
 
     expect(statements.destinationBySpecialUseCount(1).get("account-1", "\\Trash"))
       .toEqual({ path: "Trash", special_use: "\\Trash" });

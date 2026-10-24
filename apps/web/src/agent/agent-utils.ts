@@ -260,7 +260,7 @@ export function lastMessageIsStreaming(conversation: AgentConversation): boolean
   return Boolean(last && last.role === "assistant" && last.state === "streaming");
 }
 
-export function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
+function applyRevokedMarks(conversation: AgentConversation): AgentConversation {
   return mergeRevokedMarks(conversation, readRevokedIds(conversation.id));
 }
 
@@ -295,7 +295,7 @@ export function mergeRevokedMarks(
  * that was followed by a successful assistant turn is outdated and is no longer
  * shown.
  */
-export function purgeStaleErrors(conversation: AgentConversation): AgentConversation {
+function purgeStaleErrors(conversation: AgentConversation): AgentConversation {
   const messages = conversation.messages;
   return {
     ...conversation,
@@ -308,29 +308,23 @@ export function purgeStaleErrors(conversation: AgentConversation): AgentConversa
   };
 }
 
+/**
+ * The view every fetched snapshot is adopted through. Stale failure rows are
+ * dropped first (otherwise an outdated error resurfaces next to a successful
+ * reply), then revoked marks are merged (otherwise a revoked row reappears).
+ * Adoption paths must not compose those two steps themselves: leaving one out
+ * is exactly how both bugs came back before.
+ */
+export function conversationView(conversation: AgentConversation): AgentConversation {
+  return applyRevokedMarks(purgeStaleErrors(conversation));
+}
+
 // ---------------------------------------------------------------------------
 // Citation / text helpers
 // ---------------------------------------------------------------------------
 
 export function sourceLabel(citation: AgentCitation): string {
   return citation.sender ? `${citation.sender} · ${citation.subject}` : citation.subject;
-}
-
-/** Copies text to the clipboard, falling back to a hidden textarea + execCommand
- *  when the async Clipboard API is unavailable (non-secure contexts). */
-export async function copyToClipboard(content: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(content);
-  } catch {
-    const input = document.createElement("textarea");
-    input.value = content;
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.append(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
-  }
 }
 
 /**

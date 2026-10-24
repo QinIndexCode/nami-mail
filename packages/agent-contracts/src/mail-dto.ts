@@ -39,6 +39,34 @@ export const messageAttachmentSchema = z.object({
 });
 export type MessageAttachment = z.infer<typeof messageAttachmentSchema>;
 
+/**
+ * The single definition of "an attachment the user can see".
+ *
+ * `related` marks a part that belongs to the HTML body: a `multipart/related`
+ * inline image, a signature logo, or a tracking pixel. The reader lists only
+ * non-related parts, so every derived attachment signal — the list's
+ * `hasAttachments`, `messages.has_attachments`, the attachment-kind column,
+ * the Attachments view and its count, and filter rules — must be computed from
+ * this predicate (or from metadata already reduced by it). Counting related
+ * parts is what makes a message show a paperclip and then open with no
+ * attachment section.
+ */
+export function isVisibleAttachment(attachment: { readonly related?: boolean }): boolean {
+  return attachment.related !== true;
+}
+
+/** The subset the reader renders, in stored order. */
+export function visibleAttachments<T extends { readonly related?: boolean }>(attachments: readonly T[]): T[] {
+  return attachments.filter(isVisibleAttachment);
+}
+
+/** True when the list contains at least one part the reader would render. */
+export function hasVisibleAttachments(
+  attachments: readonly { readonly related?: boolean }[] | null | undefined,
+): boolean {
+  return (attachments ?? []).some(isVisibleAttachment);
+}
+
 export const folderSchema = z.object({
   path: z.string(),
   name: z.string(),

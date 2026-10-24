@@ -12,6 +12,12 @@ let demoResolved: Demo | null = null;
 export function ensureDemoLoaded(): Promise<Demo> {
   demoPromise ??= import("./demo").then((module) => {
     demoResolved = module;
+    // Without this call the fixture byte-source would be enabled by a module
+    // level side effect in demo.ts — which a static importer (CalendarDialog's
+    // `demoTranslate`) would trigger even in real mode, hijacking every preview.
+    // Registering here, on the demo-only dynamic-import path, keeps the proxy
+    // equal to demo mode exactly.
+    module.registerDemoAttachmentProvider();
     return module;
   });
   return demoPromise;

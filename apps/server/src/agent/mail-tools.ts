@@ -46,6 +46,7 @@ import {
   type AgentError,
 } from "@nami/agent-contracts";
 import type { AgentTool, AgentToolExecutionContext, ToolExecutionOutcome } from "@nami/agent-core";
+import { scopedAccountIds } from "./tool-scope.js";
 import {
   deleteAccountConfirmationPreview,
   deleteDraftConfirmationPreview,
@@ -118,10 +119,6 @@ type MoveMessageOutput = z.infer<typeof externalMoveMailOutputSchema>;
 type SetFlagOutput = z.infer<typeof externalSetFlagOutputSchema>;
 type SendMailOutput = z.infer<typeof externalSendMailOutputSchema>;
 type SearchMessagesOutput = z.infer<typeof searchMessagesOutputSchema>;
-
-function scopedAccountIds(context: AgentToolExecutionContext): readonly string[] {
-  return [...new Set(context.accountIds.map((accountId) => accountId.trim()).filter(Boolean))];
-}
 
 function scopedMessageIds(context: AgentToolExecutionContext): readonly string[] | undefined {
   return context.allowedMessageIds === undefined ? undefined : [...new Set(context.allowedMessageIds)];
@@ -624,7 +621,7 @@ function summarizeMailTool(mailApplication: MailApplicationService): AgentTool<z
     descriptor: {
       name: "mail.summarize",
       title: "Summarize mail messages",
-      description: "Fetches up to 10 recent messages matching the optional filters and returns a compact digest of each: subject, sender, sentAt and a bounded plain-text excerpt. Prefer this over messages.list + messages.get when the user asks for a summary, overview or digest of their mail. Returns truncated=true when more messages matched than the limit.",
+      description: "Fetches up to 10 recent messages matching the optional filters and returns a compact digest of each: subject, sender, sentAt and a bounded plain-text excerpt. Prefer this over messages.list + messages.get when the user asks for a summary, overview or digest of their mail. Returns truncated=true and a nextCursor when more messages matched than the limit; pass that value back as cursor to continue.",
       category: "messages",
       executionMode: "read",
       requiredScopes: ["read:messages"],
@@ -645,7 +642,7 @@ function summarizeMailTool(mailApplication: MailApplicationService): AgentTool<z
         ...(input.sender ? { sender: input.sender } : {}),
         ...(input.after ? { after: input.after } : {}),
         ...(input.before ? { before: input.before } : {}),
-        limit: input.limit,
+        ...(input.cursor ? { cursor: input.cursor } : {}), limit: input.limit,
       };
       const listed = await fromMailApplication(context, () => mailApplication.listMessages(scopedContext(context), query));
       if (!listed.ok) return listed;
@@ -669,7 +666,7 @@ function summarizeMailTool(mailApplication: MailApplicationService): AgentTool<z
           excerpt: clipped(view.text, externalSummarizeExcerptCharacters),
         });
       }
-      return { ok: true, value: { messages, truncated: listed.value.items.length > input.limit } };
+      return { ok: true, value: { messages, truncated: listed.value.nextCursor !== undefined, ...(listed.value.nextCursor === undefined ? {} : { nextCursor: listed.value.nextCursor }) } };
     },
   };
 }

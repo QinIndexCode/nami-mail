@@ -1,6 +1,5 @@
 import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import fs from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { migrateAccountCredentialStorage, migrateKnownProviderUsernameCredentials } from "./account-credentials.js";
@@ -17,6 +16,7 @@ import { EncryptedAgentMemoryStore } from "./agent/memory.js";
 import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
 import { AutoReplyEngine, registerAutoReplyEngine, type AutoReplyUiEvent } from "./agent/auto-reply.js";
 import { AccountLifecycleStore } from "./agent/lifecycle.js";
+import { AgentMailChangeBridge } from "./agent/mail-change-bridge.js";
 import { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import { SqliteMailApplicationService } from "./agent/sqlite-mail-application-service.js";
 import { closeActiveEventStreams } from "./routes/events.js";
@@ -57,19 +57,23 @@ import { startCacheCleanupTimer } from "./image-proxy.js";
 import { flushMeta } from "./image-cache-index.js";
 import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
+import { ensureDatabaseEncrypted } from "./database-encryption.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
 import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
 import { serverLog, setServerLogger } from "./logging.js";
 import { OAuthService } from "./oauth.js";
 import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
+import { hasStoredCustomBackground } from "./background-image.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
-import { restoreScheduledSubmissionAttachments, submitDueScheduledSubmissions } from "./scheduled-send.js";
+import { restoreScheduledSubmissionAttachments } from "./scheduled-send.js";
 import { releaseDueSnoozedMessages } from "./snooze.js";
+import { acceptFlagsTask, acceptMoveTask, acceptPreparedSendTask, type CommitTaskDeps, type MoveTaskDestination } from "./tasks/index.js";
+import type { MessageFlagsPatch } from "./message-flags.js";
 import { syncAccount, type NewInboxMessage } from "./sync.js";
-import { scheduleSentSubmissionVerification } from "./sync-sent-verify.js";
 import { clearAccountSyncState } from "./sync-locks.js";
 import type { AccountRecord, RuntimeContext } from "./types.js";
+import type { ProviderFactory } from "./provider/types.js";
 
 export type RunningServer = {
   app: FastifyInstance;
@@ -153,6 +157,12 @@ export type ServerRuntimeOptions = {
    * write already goes through.
    */
   onSettingsChanged?: () => void;
+  /**
+   * Replaces ImapFlow/Nodemailer construction for this process (architecture
+   * contract §4.4). Absent in every current host, which keeps the real factory;
+   * a test or embedded runtime passes a fake to run the mail paths offline.
+   */
+  providers?: ProviderFactory;
 };
 
 export type SyncScheduler = {
@@ -355,7 +365,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let agentService: AgentService | undefined;
   let autoReplyEngine: AutoReplyEngine | undefined;
   const translationAbortController = new AbortController();
-  const scheduledSendAbortController = new AbortController();
   // Shutdown signal for the runtime's own sync passes (poll + IDLE). Aborting
   // it makes an in-flight pass unwind through SyncAbortedError instead of
   // holding the socket open until the whole mailbox is read.
@@ -368,12 +377,38 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   };
 
   try {
-    const database = openDatabase(config.databasePath);
-    db = database;
-    noteStartupPhase("server:open-database");
     const runtimeMasterKey = options.masterKey ? Buffer.from(options.masterKey) : loadOrCreateMasterKey(config.masterKeyPath);
     if (runtimeMasterKey.length !== 32) throw new Error("Master key must be exactly 32 bytes.");
     masterKey = runtimeMasterKey;
+    // The store is sealed before it is opened, never after: the conversion
+    // rewrites the file, so no connection may hold a handle on it yet. This is
+    // also why the key is resolved ahead of `openDatabase` -- opening without it
+    // would read the encrypted pages as garbage.
+    const encryptionOutcome = ensureDatabaseEncrypted(config.databasePath, runtimeMasterKey);
+    if (encryptionOutcome.status === "recovered") {
+      // Loud on purpose: this only happens after a conversion crashed with the
+      // plaintext original already destroyed, and the user should know the store
+      // they are looking at is the copy that survived.
+      serverLog.warn(
+        { ...encryptionOutcome },
+        "Nami Mail adopted the sealed store left by an interrupted encryption conversion",
+      );
+    }
+    if (encryptionOutcome.status === "quarantined") {
+      // Louder by comparison: the surviving copy of an interrupted conversion
+      // would not open with this key, so it was preserved beside the store (the
+      // `.unreadable` file) instead of deleted, and the app is starting on a
+      // fresh, empty database. Only the master key that sealed the copy (or a
+      // backup of the whole data directory from before the key change) can
+      // recover it -- staying quiet here would look exactly like data loss.
+      serverLog.warn(
+        { status: encryptionOutcome.status },
+        "Nami Mail could not open the surviving database copy with the current master key; it was preserved beside the new store and the app starts empty",
+      );
+    }
+    const database = openDatabase(config.databasePath, { encryptionKey: runtimeMasterKey });
+    db = database;
+    noteStartupPhase("server:open-database");
     // Legacy credentials are rewrapped before OAuth, sync scheduling, Fastify
     // routes, or any mail client can initiate a network connection.
     migrateAccountCredentialStorage(database, runtimeMasterKey);
@@ -391,18 +426,47 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       });
     }
     const backgroundDirectory = path.join(path.dirname(config.databasePath), "backgrounds");
-    const customBackgroundPattern = /^custom-background-[a-f0-9-]+\.(jpg|png|webp)$/;
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
     const agentSourceEvents = new AgentSourceEventOutbox(database, runtimeMasterKey, agentLifecycle);
     const agentMailEvents = new AgentMailStateEvents(runtimeMasterKey, agentLifecycle, agentSourceEvents);
+    // An Agent write commits mail rows on behalf of a client that is not the
+    // browser, so the browser has no local optimistic state to show and no way
+    // to hear about it before the next poll. The bridge forwards the sink calls
+    // unchanged and emits a coalesced `mail-changed` after the commit.
+    const agentMailChanges = new AgentMailChangeBridge(agentMailEvents, serverEvents);
     const oauthService = new OAuthService(database, runtimeMasterKey);
+    // `buildApp` constructs the scheduler, which is after this service because
+    // the Agent needs its mail application at construction time. The closure is
+    // the seam: it reads the deps once `onTaskSchedulerReady` has handed them
+    // over, and refuses before that instead of falling back to inline SMTP.
+    let taskDeps: CommitTaskDeps | undefined;
     const mailApplication = new SqliteMailApplicationService({
       db: database,
       masterKey: runtimeMasterKey,
       oauthService,
-      agentMailEvents,
+      agentMailEvents: agentMailChanges,
       syncMessageLimit: getSyncMessageLimit(database),
       outboundAttachmentDirectory: outboundAttachmentDirectory({}),
+      acceptPreparedSend: (input) => {
+        if (!taskDeps) throw new Error("Agent submissions cannot be accepted before the task scheduler is built.");
+        return acceptPreparedSendTask(taskDeps, input);
+      },
+      acceptFlags: (input: { messageIds: readonly string[]; patch: MessageFlagsPatch }) => {
+        if (!taskDeps) throw new Error("Agent flag writes cannot be accepted before the task scheduler is built.");
+        return acceptFlagsTask(
+          {
+            db: taskDeps.db,
+            masterKey: taskDeps.masterKey,
+            scheduler: taskDeps.scheduler,
+            agentEvents: agentMailChanges,
+          },
+          input,
+        );
+      },
+      acceptMove: (input: { messageIds: readonly string[]; destination: MoveTaskDestination }) => {
+        if (!taskDeps) throw new Error("Agent moves cannot be accepted before the task scheduler is built.");
+        return acceptMoveTask(taskDeps, input);
+      },
     });
     noteStartupPhase("server:mail-application");
     agentService = new AgentService({
@@ -411,7 +475,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       lifecycle: agentLifecycle,
       sourceEvents: agentSourceEvents,
       mailApplication,
-      hasCustomBackground: (filename) => Boolean(filename && customBackgroundPattern.test(filename) && fs.existsSync(path.join(backgroundDirectory, filename))),
+      hasCustomBackground: (filename) => hasStoredCustomBackground({ backgroundDirectory }, filename),
       onSettingsChanged: () => emitSettingsChanged(serverEvents),
       ...(options.desktopConfirmation ? { desktopConfirmation: options.desktopConfirmation } : {}),
       ...(options.externalConfirmation ? { externalConfirmation: options.externalConfirmation } : {}),
@@ -522,30 +586,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       }
       broadcastNewInboxMessages(newInboxMessages);
       broadcastSyncedAccounts(accounts, results);
-      // Submit scheduled sends whose time has arrived through the outbox queue.
-      try {
-        const outcome = await submitDueScheduledSubmissions(database, runtimeMasterKey, {
-          outboundAttachmentDirectory: outboundDirectory,
-          accessTokenProvider: oauthService,
-          agentMailEvents,
-          scheduleSentVerification: (submissionId) => {
-            scheduleSentSubmissionVerification(database, runtimeMasterKey, submissionId, oauthService, {
-              abortSignal: scheduledSendAbortController.signal,
-              onDeferred: (error) => {
-                serverLog.info({ submissionId }, "Scheduled-send Sent verification deferred", error);
-              },
-            });
-          },
-          onFailure: (submissionId, error) => {
-            serverLog.error({ submissionId }, "Scheduled send failed", error);
-          },
-        });
-        if (outcome.submitted || outcome.failed) {
-          serverLog.info({ ...outcome }, "Scheduled send pass completed");
-        }
-      } catch (error) {
-        serverLog.error({}, "Scheduled-send pass failed", error);
-      }
     };
 
     idleWatcher = createIdleWatcher({
@@ -596,13 +636,30 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         if (enabled) void idleWatcher?.ensureAccounts();
         else void idleWatcher?.close();
       },
+      // The scheduler's `snooze` runner releases a message the same way the sync
+      // pass's reconciliation does; sharing `broadcastNewInboxMessages` keeps the
+      // renderer's toast/badge path identical for both.
+      onSnoozeReleased: async (message: NewInboxMessage) => {
+        if (options.onNewInboxMessages) {
+          try {
+            await options.onNewInboxMessages([message]);
+          } catch (error) {
+            serverLog.warn({ accountId: message.accountId }, "Snooze release notification failed", error);
+          }
+        }
+        broadcastNewInboxMessages([message]);
+      },
       ...(options.listExternalPairings ? { listExternalPairings: options.listExternalPairings } : {}),
       ...(options.revokeExternalPairing ? { revokeExternalPairing: options.revokeExternalPairing } : {}),
+      ...(options.providers ? { providers: options.providers } : {}),
     };
     const fastify = await buildApp(runtimeContext, {
       localApiAccessToken: options.localApiAccessToken?.trim() || config.localApiAccessToken || undefined,
       translationAbortSignal: translationAbortController.signal,
       onStartupTiming: options.onStartupTiming,
+      onTaskSchedulerReady: (scheduler) => {
+        taskDeps = { db: database, masterKey: runtimeMasterKey, scheduler };
+      },
     });
     app = fastify;
     // Background modules log through the facade; from here on their lines carry
@@ -618,7 +675,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
 
     await fastify.listen({ host: config.host, port: config.port });
     noteStartupPhase("server:listen");
-    startCacheCleanupTimer();
+    startCacheCleanupTimer(runtimeMasterKey);
     const address = fastify.server.address();
     if (!address || typeof address === "string") {
       throw new Error("Nami Mail local service did not provide a TCP address.");
@@ -639,7 +696,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     const close = () => {
       closePromise ??= (async () => {
         translationAbortController.abort();
-        scheduledSendAbortController.abort();
         syncAbortController.abort();
         // Stop routing background logs into an app that is being torn down; the
         // facade falls back to stderr for anything that still reports.
@@ -670,7 +726,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             // is rebuildable — `listUnindexedFiles` reclaims whatever it does
             // not describe on the next start.
             try {
-              flushMeta();
+              flushMeta(runtimeMasterKey);
             } catch (error) {
               serverLog.warn({ error }, "Image cache index could not be written back on shutdown");
             }

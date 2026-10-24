@@ -67,7 +67,7 @@ describe("web.search tool", () => {
   });
 
   it("fetches DuckDuckGo Lite and parses titled results with real URLs", async () => {
-    fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => htmlSample }));
+    fetchMock = vi.fn(async () => new Response(htmlSample));
     vi.stubGlobal("fetch", fetchMock);
     const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "nami mail", maxResults: 5 });
@@ -89,7 +89,7 @@ describe("web.search tool", () => {
   });
 
   it("caps results at maxResults", async () => {
-    fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => htmlSample }));
+    fetchMock = vi.fn(async () => new Response(htmlSample));
     vi.stubGlobal("fetch", fetchMock);
     const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "anything", maxResults: 1 });
@@ -99,7 +99,7 @@ describe("web.search tool", () => {
   });
 
   it("returns an empty result set with a note when no links are parsed", async () => {
-    fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => "<html><body>no results here</body></html>" }));
+    fetchMock = vi.fn(async () => new Response("<html><body>no results here</body></html>"));
     vi.stubGlobal("fetch", fetchMock);
     const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "unlikely", maxResults: 5 });
@@ -110,7 +110,7 @@ describe("web.search tool", () => {
   });
 
   it("maps a refused response and network errors to a retryable failure", async () => {
-    fetchMock = vi.fn(async () => ({ ok: false, status: 403, text: async () => "blocked" }));
+    fetchMock = vi.fn(async () => new Response("blocked", { status: 403 }));
     vi.stubGlobal("fetch", fetchMock);
     const tool = createSearchTools()[0]!;
     const outcome = await tool.execute(context(), { query: "test" });
@@ -139,6 +139,25 @@ describe("web.search tool", () => {
     if (outcome.ok) return;
     expect(outcome.error.code).toBe("CANCELLED");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("abandons a response larger than the body cap", async () => {
+    const chunk = new Uint8Array(512 * 1024);
+    const cancel = vi.fn();
+    fetchMock = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        for (let index = 0; index < 8; index += 1) controller.enqueue(chunk);
+      },
+      cancel,
+    })));
+    vi.stubGlobal("fetch", fetchMock);
+    const tool = createSearchTools()[0]!;
+    const outcome = await tool.execute(context(), { query: "test" });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error.code).toBe("TOOL_EXECUTION_FAILED");
+    expect(outcome.error.retryable).toBe(true);
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("rejects empty queries through the input schema", () => {

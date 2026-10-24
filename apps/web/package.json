@@ -5,21 +5,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
+    "predev": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
+    "prebuild": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run"
+    "pretest": "node ../../scripts/copy-pdfjs-assets.mjs --ensure",
+    "test": "vitest run",
+    "sync:brand-icons": "node scripts/sync-brand-icons.mjs"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
     "@tanstack/react-virtual": "^3.14.13",
-    "dompurify": "^3.4.15",
+    "dompurify": "^3.4.17",
     "jszip": "^3.10.2",
     "lucide-react": "^1.52.0",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-file-icon": "^1.6.0",
     "react-markdown": "10.1.0",
     "remark-gfm": "4.0.1"
   },

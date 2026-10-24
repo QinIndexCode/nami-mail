@@ -4,7 +4,7 @@
 
 Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档；界面语言包和文档翻译的维护规则见[本地化说明](LOCALIZATION.zh-CN.md)。
 
-> **External Mail v1：已配对、本机、只读。** CLI 和 MCP 通过仅当前 Windows 用户可访问的 Broker 访问 Nami Mail；它们不复用本机 Fastify token，不提供 HTTP/SQLite 回退，也不会写入邮件。可选的免费翻译和 AI 翻译保持独立，仅可在界面中主动、可选使用。
+> **External Mail v1：已配对、本机，默认只读。** CLI 和 MCP 通过仅当前 Windows 用户可访问的 Broker 访问 Nami Mail；它们不复用本机 Fastify token，不提供 HTTP/SQLite 回退。默认档位不开放 7 个写工具，只有在桌面设置中提升到 `send-confirmed`（每次写入弹一次桌面确认）或 `full-access`（自动执行）后才会写入。可选的免费翻译和 AI 翻译保持独立，仅可在界面中主动、可选使用。
 
 ## 使用 Nami Mail
 
@@ -37,7 +37,15 @@ Nami Mail 当前发布 Windows x64 桌面版。本页按任务整理公开文档
 - [Windows 发布指南](RELEASING.zh-CN.md)：维护者的签名、Release 和真实更新验证步骤。
 - [Agent 开发实施计划](development/implementation-plan.zh-CN.md)：模块职责、分期、验收与回滚边界。
 - [交互约定](INTERACTION.zh-CN.md)：多选收尾、乐观更新、即时反馈与快照合并的跨模块规则。
-- [大文件拆分计划](REFACTORING-PLAN.zh-CN.md)：四个大文件已测绘的接缝、推进顺序与验证门禁。
+- [大文件拆分计划（已归档）](development/REFACTORING-PLAN.archive.zh-CN.md)：2026-09 的接缝测绘快照，行号与规模数字已作废，仅保留拆分方法论。
+- [已知限制与取舍](development/known-limitations.zh-CN.md)：已核实的能力边界、刻意不做的取舍和未完成项的唯一清单。
+- [决策记录](development/decisions/README.zh-CN.md)：已生效的结构性取舍——当时的问题、选了哪条路、放弃了什么。
+- 归档开发记录（保留发布、不参与导航）：[Agent 自动回复与长期记忆实施计划](development/auto-reply-plan-progress.archive.zh-CN.md)、[RAG 词法索引持久化计划](development/rag-index-plan-progress.archive.zh-CN.md)。
+
+## 路线图与站点
+
+- [路线图（未排期的 backlog）](ROADMAP.zh-CN.md)：已确认但尚未排期的功能与性能项；已排期项见 CHANGELOG 的 `[Unreleased]` 区块。
+- [官网与交互演示](WEBSITE.zh-CN.md)：`site/` 静态站点、演示数据边界与本地构建方式。
 
 ## 语言与版本
 

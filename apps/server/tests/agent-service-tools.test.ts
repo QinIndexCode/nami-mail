@@ -189,16 +189,6 @@ function internalRuntime(service: AgentService) {
   };
 }
 
-/**
- * The best-effort first-turn title generator is a provider call on this same
- * seam, told apart by its request id. These cases are about the tool loop, so
- * the tail is answered with nothing: it must add neither a request to the
- * recorded calls nor a `title` event to the emitted stream.
- */
-function isAuxiliaryChatRequest(request: { requestId: string }): boolean {
-  return request.requestId.startsWith("title-");
-}
-
 async function streamWithAgent(
   service: AgentService,
   conversation: ReturnType<AgentService["createConversation"]>,
@@ -247,7 +237,6 @@ function startDraftConfirmationRun(
   const providerRequests: ProviderChatRequest[] = [];
   vi.spyOn(internals.rag, "search").mockResolvedValue([]);
   vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-    if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
     const { chat } = request;
     providerRequests.push(chat);
     if (providerRequests.length === 1) {
@@ -705,7 +694,6 @@ describe("AgentService model tool loop", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         if (providerRequests.length === 1) {
@@ -771,7 +759,6 @@ describe("AgentService model tool loop", () => {
         },
       });
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         if (providerRequests.length === 1) {
@@ -819,7 +806,6 @@ describe("AgentService model tool loop", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         if (providerRequests.length === 1) {
@@ -891,7 +877,6 @@ describe("AgentService model tool loop", () => {
       let localRequests = 0;
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         if (chat.providerId === value.provider.id) {
           localRequests += 1;
@@ -968,7 +953,6 @@ describe("AgentService model tool loop", () => {
       let cloudTurns = 0;
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         if (chat.providerId !== cloudProvider.id) return;
         cloudTurns += 1;
@@ -1023,8 +1007,7 @@ describe("AgentService model tool loop", () => {
       const internals = internalRuntime(value.service);
       let chatTurns = 0;
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         chatTurns += 1;
         if (chatTurns > 1) {
           yield { type: "text_delta", delta: "Chat continues without tools." };
@@ -1071,8 +1054,7 @@ describe("AgentService model tool loop", () => {
       const internals = internalRuntime(value.service);
       let readonlyTurns = 0;
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         readonlyTurns += 1;
         if (readonlyTurns > 1) {
           yield { type: "text_delta", delta: "Read-only answer without the write tool." };
@@ -1134,7 +1116,6 @@ describe("AgentService model tool loop", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         if (providerRequests.length === 1) {
@@ -1285,8 +1266,7 @@ describe("AgentService model tool loop", () => {
     try {
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         yield {
           type: "tool_call",
           call: {
@@ -1343,8 +1323,7 @@ describe("AgentService model tool loop", () => {
     const value = fixture();
     try {
       const internals = internalRuntime(value.service);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         yield { type: "status", phase: "model", message: "Drafting the reply", eventId: "e1", requestId: "r1", sequence: 0, emittedAt: timestamp };
         yield { type: "text_delta", delta: "Hello ", eventId: "e2", requestId: "r1", sequence: 1, emittedAt: timestamp };
         yield { type: "text_delta", delta: "world", eventId: "e3", requestId: "r1", sequence: 2, emittedAt: timestamp };
@@ -1372,7 +1351,6 @@ describe("AgentService chat mode", () => {
       const providerRequests: ProviderChatRequest[] = [];
       const ragSearch = vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "text_delta", delta: "Chat mode reply without mail context." };
@@ -1417,7 +1395,6 @@ describe("AgentService chat mode", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "text_delta", delta: "Agent reply." };
@@ -1447,7 +1424,6 @@ describe("AgentService chat mode", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "text_delta", delta: "Agent reply." };
@@ -1480,7 +1456,6 @@ describe("AgentService chat mode", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "text_delta", delta: "Agent reply." };
@@ -1564,7 +1539,6 @@ describe("AgentService chat mode", () => {
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "completed", reason: "stop" };
@@ -1624,7 +1598,6 @@ describe("AgentService chat mode", () => {
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         yield { type: "completed", reason: "stop" };

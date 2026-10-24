@@ -28,10 +28,12 @@ import {
 } from "./desktop-behaviors.mjs";
 // The tray icon, badge, menu and visibility flag live here now (see tray.mts).
 import { createTrayController, loadDesktopIcon } from "./tray.mjs";
+import { createGuiActivationWiring, installOpenUrlHandling } from "./gui-activation-wiring.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { installDesktopRuntimeDiagnostics } from "./desktop-runtime-diagnostics.mjs";
-import { openInBrowser as openExternalUrl, isHttpUrl } from "./desktop-external-open.mjs";
+import { openInBrowser as openExternalUrl } from "./desktop-external-open.mjs";
+import { installNavigationGuards, installRendererPermissionPolicy } from "./window-hardening.mjs";
 import { isCustomNotificationSound, playCustomNotificationSound, warmUpNotificationSoundPlayer } from "./desktop-notification-sound.mjs";
 import {
   getClosePromptSmokeSession,
@@ -195,8 +197,6 @@ let localApiAccessToken: string | undefined;
 let desktopUpdater: DesktopUpdater | undefined;
 let rendererCacheCleanup: RendererCacheCleanupResult | undefined;
 let localApiCachePolicyInstalled = false;
-/** A mailto URL received (macOS open-url) before the window existed. */
-let pendingMailtoUrl: string | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
 // Desktop-only behaviors (tray badge, login item, global shortcut) live in
@@ -566,6 +566,19 @@ const trayController = createTrayController({
   showError: (title, message) => dialog.showErrorBox(title, message),
 });
 
+// Queue second-launch compose requests until the current app document can receive IPC.
+const guiActivation = createGuiActivationWiring({
+  hasMainWindow: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+  waitForBoot: () => desktopBootPromise ?? Promise.resolve(),
+  createMainWindow: async () => { await createMainWindow(); await startDesktopUpdaterIfNeeded(); },
+  focusMainWindow: () => trayController.focusWindow(),
+  deliverCompose: (mailtoUrl) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("nami:compose-new", mailtoUrl);
+  },
+  onError: (error) => console.error("Nami Mail could not activate its main window for a second launch.", error),
+  launchMailtoUrl: extractMailtoUrl(process.argv),
+});
+
 async function rememberCloseBehavior(closeBehavior: CloseBehavior): Promise<void> {
   if (!localServer) throw new Error("Nami Mail local service is not available.");
   await localServer.updateSettings({ closeBehavior });
@@ -805,24 +818,6 @@ function isCurrentRenderer(event: Electron.IpcMainEvent | Electron.IpcMainInvoke
     && frame === window.webContents.mainFrame
     && isLocalAppUrl(frame.url),
   );
-}
-
-// The renderer is a trusted local UI, but an unhandled permission request
-// defaults to granted in Electron. Deny everything outside this short
-// allowlist so compromised or misbehaving content cannot reach cameras,
-// microphones, geolocation or other device surfaces through the session.
-// clipboard-sanitized-write backs the "copy" affordances in the UI;
-// notifications lets the web-side notification path request permission, while
-// the mail client itself uses the native main-process Notification API.
-const rendererPermissionAllowlist = new Set(["clipboard-sanitized-write", "notifications"]);
-
-function installRendererPermissionPolicy(): void {
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(rendererPermissionAllowlist.has(permission));
-  });
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
-    return rendererPermissionAllowlist.has(permission);
-  });
 }
 
 function checkForUpdatesAfterExternalTrigger(): void {
@@ -1105,14 +1100,16 @@ async function createMainWindowShell(): Promise<void> {
     if (!smokeResultPath || !["warning", "error"].includes(event.level)) return;
     noteDesktopSmokeDiagnostic(`Renderer ${event.level}: ${event.message}`);
   });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isHttpUrl(url)) void openInBrowser(url);
-    return { action: "deny" };
-  });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (isLocalAppUrl(url)) return;
-    event.preventDefault();
-    if (isHttpUrl(url)) void openInBrowser(url);
+  // The renderer is a trusted local UI, but navigation is still an escape
+  // hatch: window.open, redirects and cross-origin navigation must not turn the
+  // shell into a browser for arbitrary content. The policy lives in
+  // window-hardening.mjs so it is unit-tested without an Electron runtime; this
+  // call wires it to the window. The origin is resolved lazily because the shell
+  // is created before the local service, and `undefined` (origin not known yet)
+  // makes the guards fail closed.
+  installNavigationGuards(mainWindow.webContents, {
+    openInBrowser,
+    appOrigin: () => (localServer ? new URL(localServer.url).origin : undefined),
   });
   mainWindow.once("ready-to-show", () => {
     // Purely diagnostic since the shell shows itself at creation: the
@@ -1125,7 +1122,10 @@ async function createMainWindowShell(): Promise<void> {
   mainWindow.on("close", handleMainWindowClose);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
+    guiActivation.notifyWindowClosed();
   });
+  // Readiness returns only when the app URL (not the splash) finishes loading.
+  guiActivation.watchWindowDocument(mainWindow, isLocalAppUrl);
   // The frameless window has no OS caption buttons, so the renderer tracks the
   // maximize state itself to swap the maximize/restore glyphs.
   mainWindow.on("maximize", () => mainWindow?.webContents.send("nami:window-maximized-changed", true));
@@ -1141,7 +1141,11 @@ async function createMainWindowShell(): Promise<void> {
 // once the local service is listening. The splash phase consumed the first
 // ready-to-show (the window is already visible by then), so the real app's
 // first paint is recorded at did-finish-load here.
-async function loadMainWindowApp(): Promise<void> {
+function loadMainWindowApp(): Promise<void> {
+  return guiActivation.loadAppDocument(runMainWindowAppLoad);
+}
+
+async function runMainWindowAppLoad(): Promise<void> {
   if (!mainWindow) throw new Error("Nami Mail window shell was not created.");
   if (!localServer) throw new Error("Nami Mail local service was not started.");
   // CSS image loads do not pass through the renderer's fetch wrapper. The
@@ -1161,16 +1165,6 @@ async function loadMainWindowApp(): Promise<void> {
     // Demo mode fills the mail list with real message rows so the smoke can
     // measure scroll/layout cost on the actual list instead of an empty one.
     appUrl.searchParams.set("demo", "1");
-  }
-  // A cold start or a pre-window open-url hand-off queues one mailto compose.
-  // did-finish-load fires after the renderer bundle ran, so the web app's
-  // subscription is already registered by the time the event is sent.
-  const coldMailtoUrl = pendingMailtoUrl ?? extractMailtoUrl(process.argv);
-  pendingMailtoUrl = undefined;
-  if (coldMailtoUrl) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      mainWindow?.webContents.send("nami:compose-new", coldMailtoUrl);
-    });
   }
   // did-finish-load fires after the renderer bundle ran and the app mounted;
   // it precedes the splash dismissal (which waits for the first data load).
@@ -1235,7 +1229,7 @@ async function processAgentPairingRequest(requestId: string): Promise<void> {
     await dialog.showMessageBox(window, {
       type: "info",
       title: "NamiMail Agent",
-      message: "Connect a mail account before approving external Agent access.",
+      message: nativeCopy("externalPairNoAccounts"),
       buttons: ["OK"],
     });
     await recordPairingFailure(requestId);
@@ -1245,17 +1239,24 @@ async function processAgentPairingRequest(requestId: string): Promise<void> {
   const decision = await dialog.showMessageBox(window, {
     type: "question",
     title: "NamiMail Agent",
-    message: isRevocation
-      ? `Revoke external access for profile “${request.profile}”?`
-      : `Allow external read-only access for profile “${request.profile}”?`,
+    message: nativeCopy(
+      isRevocation ? "externalPairRevokeMessage" : "externalPairAllowMessage",
+      { profile: request.profile },
+    ),
     detail: isRevocation
-      ? `Profile fingerprint: ${fingerprint}\n\nThe profile will no longer be able to read mail through NamiMail.`
+      ? [
+        nativeCopy("externalPairAllowFingerprint", { fingerprint }),
+        nativeCopy("externalPairRevokeEffect"),
+      ].join("\n\n")
       : [
-        `Profile fingerprint: ${fingerprint}`,
-        `Authorized account snapshot: ${accountIds.length} connected account${accountIds.length === 1 ? "" : "s"}.`,
-        "The external interface can only list or read bounded mail data. It cannot send, move, delete, or change mail.",
+        nativeCopy("externalPairAllowFingerprint", { fingerprint }),
+        nativeCopy("externalPairAllowAccounts", { count: accountIds.length }),
+        nativeCopy("externalPairAllowBoundary"),
       ].join("\n\n"),
-    buttons: [isRevocation ? "Revoke access" : "Allow read-only access", "Cancel"],
+    buttons: [
+      nativeCopy(isRevocation ? "externalPairRevokeButton" : "externalPairAllowButton"),
+      nativeCopy("externalPairCancel"),
+    ],
     defaultId: 1,
     cancelId: 1,
     noLink: true,
@@ -1520,7 +1521,7 @@ async function boot(): Promise<void> {
   await writeDesktopSmokeProgress("waiting-for-electron-ready");
   await app.whenReady();
   desktopDiagnostics.recordStartupTiming("electron-ready");
-  installRendererPermissionPolicy();
+  installRendererPermissionPolicy(session.defaultSession);
   // Prime the notification-sound pipeline early: generate the WAV files and
   // pre-start the OS player so the first real notification does not pay a
   // multi-second player cold start (and any tmp-dir failure shows up in the
@@ -2061,24 +2062,32 @@ if (desktopCliArguments !== undefined) {
     return desktopUpdater?.installDownloadedUpdate() ?? { accepted: false };
   });
   app.on("second-instance", (_event, commandLine) => {
-    void recordSingleInstanceSmokeActivation(commandLine);
+    void recordSingleInstanceSmokeActivation(commandLine).catch((error) => {
+      console.error("Nami Mail could not record the second-instance smoke activation.", error);
+    });
     const mailtoUrl = extractMailtoUrl(commandLine);
     if (mailtoUrl) {
       desktopHostMode = "gui";
-      void (async () => {
-        if (!mainWindow && localServer) {
-          await createMainWindow();
-          await startDesktopUpdaterIfNeeded();
-        }
-        trayController.focusWindow();
-        mainWindow?.webContents.send("nami:compose-new", mailtoUrl);
-      })();
+      // The coordinator decides whether this can be delivered now; activate()
+      // waits for boot and the current window's app document when it cannot.
+      guiActivation.queueMailto(mailtoUrl);
+      void guiActivation.activate();
       return;
     }
     const pairingRequests = readAgentPairingRequestIds(commandLine);
     if (pairingRequests.length) {
       desktopHostMode = "gui";
-      void ensureMainWindowForAgentPairing().then(() => scheduleAgentPairingRequests(pairingRequests));
+      void (async () => {
+        try {
+          // Pairing may arrive before boot finished; ensureMainWindowForAgentPairing
+          // cannot create a window until the local service exists.
+          await desktopBootPromise;
+          await ensureMainWindowForAgentPairing();
+          scheduleAgentPairingRequests(pairingRequests);
+        } catch (error) {
+          console.error("Nami Mail could not open the window for an Agent pairing request.", error);
+        }
+      })();
       return;
     }
     if (commandLine.includes("--agent-host")) {
@@ -2093,13 +2102,7 @@ if (desktopCliArguments !== undefined) {
       return;
     }
     desktopHostMode = "gui";
-    void (async () => {
-      if (!mainWindow && localServer) {
-        await createMainWindow();
-        await startDesktopUpdaterIfNeeded();
-      }
-      trayController.focusWindow();
-    })();
+    void guiActivation.activate();
   });
   app.on("window-all-closed", () => {
     // While shutdown teardown is in flight the window is deliberately
@@ -2107,18 +2110,7 @@ if (desktopCliArguments !== undefined) {
     // must not quit the app until the local service finished closing.
     if (desktopHostMode === "gui" && !isQuitting) app.quit();
   });
-  app.on("open-url", (event, url) => {
-    event.preventDefault();
-    const mailtoUrl = extractMailtoUrl([url]);
-    if (!mailtoUrl) return;
-    if (mainWindow) {
-      trayController.focusWindow();
-      mainWindow.webContents.send("nami:compose-new", mailtoUrl);
-    } else {
-      // macOS can deliver open-url before `ready`; createMainWindow drains it.
-      pendingMailtoUrl = mailtoUrl;
-    }
-  });
+  installOpenUrlHandling(app, guiActivation);
   app.on("before-quit", (event) => {
     desktopAgentBrokerRecoveryGate = "closed";
     desktopDiagnostics.recordStartupTiming("quit-requested");

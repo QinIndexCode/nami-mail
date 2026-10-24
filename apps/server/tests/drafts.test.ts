@@ -84,7 +84,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("creates RFC 822 content and appends it to the provider Drafts mailbox", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
 
     const result = await saveDraft(db, Buffer.alloc(32, 7), account, {
@@ -122,7 +122,10 @@ describe("IMAP draft saving", () => {
       account_id: account.id,
       mailbox: "Drafts",
       uid: 55,
-      has_attachments: 1,
+      // The row stores no attachment metadata until the appended copy syncs
+      // (APPEND assigns the MIME part ids), so the flag stays 0: a marker the
+      // reader cannot back with an attachment card is the reported mismatch.
+      has_attachments: 0,
     });
     expect(stored?.payload).toMatchObject({
       messageId: result.messageId,
@@ -143,7 +146,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("can replace a just-created draft through the returned local id", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     client.append
       .mockResolvedValueOnce({ destination: "Drafts", uid: 55 })
@@ -167,7 +170,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("validates a replacement draft before APPEND can create a remote copy", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
 
     await expect(saveDraft(db, Buffer.alloc(32, 7), account, {
@@ -182,7 +185,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("resolves a stable local id with an exact Message-ID lookup when UIDPLUS is unavailable", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     let searchedMessageId = "";
     client.append.mockResolvedValueOnce({ destination: "Drafts" });
@@ -206,7 +209,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("treats a UIDPLUS-free append without an exact local identity as non-retryable", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     client.append.mockResolvedValueOnce({ destination: "Drafts" });
     client.search.mockResolvedValueOnce(false);
@@ -222,7 +225,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("does not begin an IMAP draft operation after cancellation", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     const controller = new AbortController();
     controller.abort();
@@ -239,7 +242,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("reports an uncertain outcome when cancellation races an in-flight IMAP APPEND", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     const controller = new AbortController();
     let startAppend: (() => void) | undefined;
@@ -264,7 +267,7 @@ describe("IMAP draft saving", () => {
   });
 
   it("does not report success when IMAP rejects the append", async () => {
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     client.append.mockResolvedValueOnce(false);
 
@@ -279,7 +282,7 @@ describe("IMAP draft saving", () => {
 
   it("replaces an existing draft only after the new RFC 822 message was appended", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
@@ -303,7 +306,7 @@ describe("IMAP draft saving", () => {
 
   it("keeps the original local draft when IMAP cannot confirm deletion", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
@@ -321,7 +324,7 @@ describe("IMAP draft saving", () => {
 
   it("keeps the local record when cancellation races a confirmed draft deletion", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
@@ -349,7 +352,7 @@ describe("IMAP draft saving", () => {
 
   it("writes an Agent deletion event in the same local transaction after the server confirms draft deletion", async () => {
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (
@@ -376,7 +379,7 @@ describe("IMAP draft saving", () => {
   it("keeps a replacement warning safe when old-draft cleanup has a transport failure", async () => {
     const now = new Date().toISOString();
     const secret = "do-not-return-this-secret";
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, 0, 0)")
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
       .run(account.id, "Drafts", "Drafts", "\\Drafts");
     db.prepare(`
       INSERT INTO messages (

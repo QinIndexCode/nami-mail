@@ -92,7 +92,7 @@ it("Anthropic provider converts history to Messages API format and streams text 
   assert.equal(body.stream, true);
   assert.deepEqual(body.messages, [{ role: "user", content: [{ type: "text", text: "Find invoices" }] }]);
   assert.deepEqual(body.tools, [{
-    name: "messages.search",
+    name: "messages_search",
     description: "Search indexed mail.",
     input_schema: { type: "object", additionalProperties: true },
   }]);
@@ -141,7 +141,7 @@ it("Anthropic provider extracts system prompts, tool results, and merges adjacen
   assert.deepEqual(body.messages, [
     {
       role: "assistant",
-      content: [{ type: "tool_use", id: "toolu_a", name: "messages.search", input: { query: "x" } }],
+      content: [{ type: "tool_use", id: "toolu_a", name: "messages_search", input: { query: "x" } }],
     },
     {
       role: "user",

@@ -1,28 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, type BatchJobCreatePayload, type BatchJobQuery, type BatchJobSnapshot, type MoveTarget } from "../api";
+import { api, type BatchJobCreatePayload, type BatchJobQuery, type MoveTarget } from "../api";
 import { createBatchJobRunner, type BatchJobRunOptions } from "../batchJobRunner";
 import { beginSpan } from "../perfTelemetry";
 import { useDismissTransition } from "../hooks/useDismissTransition";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { mailErrorToastMessage } from "../errorPresentation";
 import {
-  applyBatchSeenChange as applyBatchSeenChangeState,
-  mergeRolledBackMessages,
-  applyMessageMove,
-  pinFlagOverride,
-  unpinFlagOverride,
   type MessageListQuery,
   type MessageListSortOrder,
-  type MutablePendingLocalState,
 } from "../mailListState";
 import { demoMoveDestination, moveActionKey } from "./app-utils";
+import type { MailStore } from "./mailStore";
 import type { useToastQueue } from "../notifications/useToastQueue";
 import type { Translate } from "../i18n";
 import type { AttachmentKind } from "../attachmentPresentation";
-import type { Account, Message, Stats } from "../types";
+import type { Message } from "../types";
 
 type ShowToast = ReturnType<typeof useToastQueue>["showToast"];
 type MailView = MessageListQuery["messageView"];
+
+/**
+ * The most ids one batch request may carry. The server's `batchMessageIdsSchema`
+ * rejects anything longer outright (apps/server/src/schemas.ts), so the renderer
+ * splits an explicit selection at this boundary instead of sending a request
+ * that is refused as invalid.
+ *
+ * Deliberately not 100: one request is one local commit and one account-write-slot
+ * acquisition, and paying that per hundred messages is what made a large
+ * selection wait behind a running sync. A selection that fits stays one request.
+ */
+const SERVER_BATCH_ID_LIMIT = 5000;
 
 export interface BatchSelectionLoadOptions {
   silent?: boolean;
@@ -34,9 +41,7 @@ export interface BatchSelectionOptions {
   showToast: ShowToast;
   sortOrder: MessageListSortOrder;
   filteredMessages: Message[];
-  messages: Message[];
-  accounts: Account[];
-  stats: Stats;
+  store: MailStore;
   loadedServerMessageCount: number;
   currentMessageTotal: number;
   searchScope: "view" | "all";
@@ -46,32 +51,31 @@ export interface BatchSelectionOptions {
   view: MailView;
   attachmentKindFilter: AttachmentKind | undefined;
   dateBounds: { after: string | undefined; before: string | undefined };
-  /** List load; awaited as the reconciliation barrier after a batch lands. */
+  /**
+   * List load. Still the barrier after a FAILED batch (the server's rollback
+   * may live on pages the incremental merge never re-reads); a successful one
+   * reconciles instead, so it cannot reset paging.
+   */
   load: (options?: BatchSelectionLoadOptions) => Promise<void>;
   /** Latest `load`, read through a ref so a running job reloads the list on screen. */
   loadRef: { current: (options?: BatchSelectionLoadOptions) => Promise<void> };
+  /**
+   * The pagination-preserving silent refresh, read through a ref so a running
+   * job reconciles against the list on screen without rebuilding the runner
+   * (which would abandon its poll loop) every time the view changes.
+   */
+  reconcileRef: { current: () => Promise<void> | void };
   /** Monotonic epoch of list loads; bumped to invalidate in-flight refreshes. */
   loadRequestRef: { current: number };
-  messagesRef: { current: Message[] };
-  pendingLocalStateRef: { current: MutablePendingLocalState };
-  /** Live view, read through a ref for the unread-view badge correction. */
-  viewRef: { current: MailView };
   /**
    * Predicate-wide selection and the batch banner state live in App because
    * `load` (declared earlier) resets both on every full switch.
    */
   selectAllPaged: boolean;
   setSelectAllPaged: (value: boolean) => void;
-  setBatchJob: (job: BatchJobSnapshot | null) => void;
   /** Delete-confirmation dialog flag lives in App ahead of useDialogRouting. */
   pendingBatchDelete: boolean;
   setPendingBatchDelete: (value: boolean) => void;
-  pinMovedAway: (ids: Iterable<string>, destination: string) => void;
-  unpinMovedAway: (ids: Iterable<string>) => void;
-  setMessages: (updater: Message[] | ((items: Message[]) => Message[])) => void;
-  setAccounts: (updater: Account[] | ((items: Account[]) => Account[])) => void;
-  setStats: (updater: Stats | ((current: Stats) => Stats)) => void;
-  setMessageTotal: (updater: number | ((total: number) => number)) => void;
 }
 
 export interface BatchSelection {
@@ -87,6 +91,25 @@ export interface BatchSelection {
   selectMessageRange: (ids: string[]) => void;
   selectAllVisibleMessages: () => void;
   exitSelectionMode: () => void;
+  /**
+   * A non-silent list load. `scopeChanged` says whether the load is for a
+   * different list (folder/account/view/search/filter) or a refresh of the one
+   * on screen. A different list invalidates the whole selection: the ids were
+   * chosen in a view that is gone, and leaving them armed would let the next
+   * batch act on rows the user can no longer see. A same-list refresh keeps the
+   * explicit ids -- a manual refresh must not cost the user a selection -- and
+   * drops only the predicate, which is scoped to the result set being replaced.
+   *
+   * Silent loads never call this at all: they cannot change what the list is.
+   *
+   * A batch's own state deliberately does NOT go with it: a delivery does not
+   * stop when the list reloads, and the runner owns its deadlines and pins. The
+   * only thing a full load used to disturb was the snapshot that kept the bar's
+   * actions inert, which the commit-first rule removed (contract §二十六) — the
+   * create round trip is what guards against a second batch now, and it is over
+   * long before a load could land inside it.
+   */
+  resetSelectionOnFullLoad: (scopeChanged: boolean) => void;
   applyBatchFlaggedChange: (ids: readonly string[], flagged: boolean) => void;
   batchUpdateFlags: (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => Promise<void>;
   batchMoveMessages: (target: MoveTarget) => Promise<void>;
@@ -99,9 +122,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     showToast,
     sortOrder,
     filteredMessages,
-    messages,
-    accounts,
-    stats,
+    store,
     loadedServerMessageCount,
     currentMessageTotal,
     searchScope,
@@ -113,26 +134,20 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     dateBounds,
     load,
     loadRef,
+    reconcileRef,
     loadRequestRef,
-    messagesRef,
-    pendingLocalStateRef,
-    viewRef,
     selectAllPaged,
     setSelectAllPaged,
-    setBatchJob,
     pendingBatchDelete,
     setPendingBatchDelete,
-    pinMovedAway,
-    unpinMovedAway,
-    setMessages,
-    setAccounts,
-    setStats,
-    setMessageTotal,
   } = options;
 
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<ReadonlySet<string>>(() => new Set());
   const [batchBusy, setBatchBusy] = useState(false);
+  // Monotonic batch identity. Overlapping batches are legitimate; completion
+  // handling compares against this so only the newest one retires shared state.
+  const batchOperationRef = useRef(0);
   const { closing: batchDeleteConfirmClosing, requestClose: requestBatchDeleteConfirmClose, reset: resetBatchDeleteConfirmClosing } = useDismissTransition(
     useCallback(() => setPendingBatchDelete(false), [setPendingBatchDelete]),
   );
@@ -197,9 +212,17 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
     setSelectAllPaged(false);
-    setBatchJob(null);
     setPendingBatchDelete(false);
-  }, [setBatchJob, setPendingBatchDelete, setSelectAllPaged]);
+  }, [setPendingBatchDelete, setSelectAllPaged]);
+
+  const resetSelectionOnFullLoad = useCallback((scopeChanged: boolean) => {
+    // The predicate selection was scoped to the result set being replaced.
+    setSelectAllPaged(false);
+    // A different list is a different selection domain. Keeping ids chosen in
+    // the old view would leave them armed for a batch that acts on rows the
+    // user can no longer see.
+    if (scopeChanged) exitSelectionMode();
+  }, [exitSelectionMode, setSelectAllPaged]);
 
   // The current view expressed as a server-side filter scope for predicate
   // batch operations. Mirrors buildMessageQuery so the job touches exactly
@@ -234,46 +257,30 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
   }, [attachmentKindFilter, dateBounds, debouncedQuery, isDemo, searchScope, selectAllPaged, selectedAccount, selectedFolder, view]);
 
   // Batch job state machine lives in batchJobRunner.ts (unit-tested there);
-  // the caller wires the React-side callbacks: snapshot/busy state, toasts,
-  // reload.
+  // the caller wires the React-side callbacks: busy state, toasts, reload and
+  // the acceptance-time reconcile. Each batch carries its own release callback
+  // because batches overlap — a runner-level slot would let one batch's
+  // settlement consume another batch's pins.
   const batchJobRunner = useMemo(() => createBatchJobRunner({
     showToast,
     t,
     reload: (opts) => loadRef.current(opts),
+    reconcile: () => reconcileRef.current(),
     exitSelectionMode,
-    onSnapshot: setBatchJob,
     onBusy: setBatchBusy,
-  }), [exitSelectionMode, loadRef, setBatchJob, showToast, t]);
+  }), [exitSelectionMode, loadRef, reconcileRef, showToast, t]);
 
   const startBatchJob = useCallback((payload: BatchJobCreatePayload, opts: BatchJobRunOptions) => {
     batchJobRunner.start(payload, opts);
   }, [batchJobRunner]);
 
   const applyBatchSeenChange = useCallback((ids: readonly string[], seen: boolean) => {
-    const result = applyBatchSeenChangeState(accounts, messages, stats, ids, seen);
-    messagesRef.current = result.messages;
-    setMessages(result.messages);
-    setAccounts(result.accounts);
-    setStats(result.stats);
-    if (viewRef.current === "unread" && result.changedCount) {
-      setMessageTotal((total) => Math.max(0, total + (seen ? -result.changedCount : result.changedCount)));
-    }
-  }, [accounts, messages, messagesRef, setAccounts, setMessageTotal, setMessages, setStats, stats, viewRef]);
+    store.applySeen(ids, seen);
+  }, [store]);
 
   const applyBatchFlaggedChange = useCallback((ids: readonly string[], flagged: boolean) => {
-    setMessages((items) => {
-      const selected = new Set(ids);
-      const next = items.map((item) => {
-        if (!selected.has(item.id) || item.flagged === flagged) return item;
-        const flags = new Set(item.flags);
-        if (flagged) flags.add("\\Flagged");
-        else flags.delete("\\Flagged");
-        return { ...item, flagged, flags: [...flags] };
-      });
-      messagesRef.current = next;
-      return next;
-    });
-  }, [messagesRef, setMessages]);
+    store.applyFlag(ids, flagged);
+  }, [store]);
 
   const batchUpdateFlags = async (patch: { seen?: boolean; flagged?: boolean }, successKey: string) => {
     const ids = [...selectedMessageIds];
@@ -285,11 +292,21 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     // cannot flip the rows back mid-batch.
     const affectedIds = selectionJobQuery ? filteredMessages.map((message) => message.id) : ids;
     if (!affectedIds.length && !selectionJobQuery) return;
+    // Pins are counted holders, and this operation is ONE holder per id: it
+    // releases exactly what it took, exactly once. Releasing twice would drop
+    // the holder of an overlapping batch that is still in flight.
+    const held = new Set<string>();
     const pin = (list: readonly string[]) => {
-      for (const id of list) pinFlagOverride(pendingLocalStateRef.current, id);
+      for (const id of list) {
+        store.pinFlags([id]);
+        held.add(id);
+      }
     };
     const unpin = (list: readonly string[]) => {
-      for (const id of list) unpinFlagOverride(pendingLocalStateRef.current, id);
+      for (const id of list) {
+        if (!held.delete(id)) continue;
+        store.unpinFlags([id]);
+      }
     };
     // Predicate scope: the server resolves every matching id behind a job (the
     // local list only holds a page of them).
@@ -302,11 +319,20 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
         // The action is done, so the selection has no further purpose; leaving
         // it armed means the next click on any row fires another batch.
         exitOnSuccess: true,
-        onSettled: () => unpin(affectedIds),
+        // Before the settling reload, not after it: the reload must be free to
+        // show the server's rollback for rows whose push was refused. `unpin`
+        // is holder-counted and idempotent, so an overlapping batch that still
+        // holds the same ids keeps its share.
+        onDeliverySettled: () => unpin(affectedIds),
       });
       return;
     }
     setBatchBusy(true);
+    // Every batch carries its own identity. Overlapping batches are possible —
+    // the toolbar stays interactive while a request is in flight — so a batch
+    // that finishes must only report ITS work as done: an older completion may
+    // neither clear the busy flag nor drop the selection a newer action owns.
+    const operationId = ++batchOperationRef.current;
     pin(ids);
     // Telemetry: the optimistic apply runs on the main thread for every
     // selected row and the chunk loop paces server work — both are the
@@ -323,39 +349,65 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
       if (!isDemo) {
         // One request = one local commit = milliseconds. The IMAP STORE is
         // pushed server-side by the durable write-behind queue, so the
-        // response never queues behind a running sync or batch.
-        const result = await api.batchUpdateMessageFlags(ids, patch);
-        if (result.failed) {
+        // response never queues behind a running sync or batch. Only the
+        // request size is bounded, so a selection past the cap is split into
+        // requests of exactly the cap: a flag commit is local work with no
+        // per-command failure to bound, so there is nothing to gain from
+        // chunking it any finer than the server's own limit.
+        let updated = 0;
+        let failed = 0;
+        const failedIds: string[] = [];
+        for (let offset = 0; offset < ids.length; offset += SERVER_BATCH_ID_LIMIT) {
+          const result = await api.batchUpdateMessageFlags(ids.slice(offset, offset + SERVER_BATCH_ID_LIMIT), patch);
+          updated += result.updated;
+          failed += result.failed;
+          for (const failure of result.failures ?? []) failedIds.push(failure.id);
+        }
+        if (failed) {
           applied = false;
-          // The rows the server refused never got their optimistic flags. Drop
-          // their pins *before* the reconciling reload so it restores the
-          // server's truth for them instead of re-applying the optimistic value.
-          unpin((result.failures ?? []).map((failure) => failure.id));
-          showToast(t("mail.selection.partialFailure", { done: result.updated, failed: result.failed }), "error");
+          // Drop the pins *before* the reconciling reload so it restores the
+          // server's truth for the refused rows instead of re-applying the
+          // optimistic value. The server reports per-id failures when it can;
+          // when it does not, no row may keep an unconfirmed value, so every
+          // pin of this batch drops and the reload settles all of them.
+          unpin(failedIds.length ? failedIds : ids);
+          showToast(t("mail.selection.partialFailure", { done: updated, failed }), "error");
         }
       }
-      showToast(t(successKey, { count: ids.length }));
+      // A partial failure already reported itself; claiming success on top of
+      // it would be the last word the user sees.
+      if (applied) showToast(t(successKey, { count: ids.length }));
     } catch (error) {
       // The server owns the authoritative flags; reload to restore truth.
       applied = false;
       showToast(mailErrorToastMessage(error, t("mail.error.batchUpdate"), t), "error");
     } finally {
       finishBatch({ count: ids.length });
-      // The reconciling reload doubles as the pin barrier: it bumps the load
-      // epoch (discarding any in-flight stale refresh) and lands a server
-      // snapshot taken after the local commit. Only then may pins drop.
+      // Which refresh follows depends on whether the write landed. On success
+      // the local values ARE the committed truth, so the pagination-preserving
+      // reconcile is enough: it merges the server's first page and counters into
+      // the loaded window, while a full `load` would replace the window with the
+      // first page and reset the cursor, dropping the pages the user scrolled in.
+      // On failure the server owns the authoritative flags (and may have refused
+      // rows on pages this merge never re-reads), so the full reload stays — it
+      // is also the pin barrier: a rejected write must not outlive it.
+      if (!applied) unpin(ids);
       try {
-        await load({ silent: true });
+        if (applied) await reconcileRef.current();
+        else await load({ silent: true });
       } catch {
-        // load handles its own errors; pins still clear below.
+        // The refresh handles its own errors; the pins still clear below.
       }
       unpin(ids);
       // The action landed and the list is reconciled, so the selection is spent:
       // drop it (and leave multi-select) rather than leaving rows armed for an
       // accidental second batch. A failed action keeps the selection so the user
-      // can retry it.
-      if (applied) exitSelectionMode();
-      setBatchBusy(false);
+      // can retry it. Both wait for the newest batch: an older one finishing
+      // must not retire a selection its successor is still using.
+      if (batchOperationRef.current === operationId) {
+        if (applied) exitSelectionMode();
+        setBatchBusy(false);
+      }
     }
   };
 
@@ -363,12 +415,39 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     const ids = [...selectedMessageIds];
     if (!ids.length && !selectAllPaged) return;
     if (batchBusy) showToast(t("mail.action.queued"), "info");
-    // Predicate scope: server moves every matching id behind a job.
+    // Predicate scope: the server moves every matching id behind a job, and —
+    // like the flag path above — its acceptance commits locally, so the rows on
+    // screen leave now instead of when IMAP confirms. The pending destination IS
+    // the destination as far as every reader is concerned: the job row records
+    // the goal for the whole selection (not just the page the renderer holds) in
+    // one transaction, so a message is out of this view from the moment the
+    // create resolves.
     if (selectionJobQuery) {
-      startBatchJob({ kind: "move", target, query: selectionJobQuery }, { successKey: moveActionKey(target, true), exitOnSuccess: true });
+      const movedIds = filteredMessages.map((message) => message.id);
+      // Invalidate any in-flight reload so it cannot resurrect the removed rows
+      // from pre-acceptance server state, and hold them out of every snapshot
+      // that starts afterwards too — a background refresh or a poll tick lands
+      // between this click and the acceptance.
+      loadRequestRef.current += 1;
+      for (const message of filteredMessages) {
+        store.pinMovedAway([message.id], demoMoveDestination(store.getState().accounts, message.accountId, target));
+      }
+      store.removeMessages(movedIds);
+      // A pin may outlive the acceptance and the local commit, never the
+      // delivery: the messages the server gave back are reported in the source
+      // folder again, and a pin still holding them would hide exactly the rows a
+      // partial-failure toast tells the user to look for. This batch's own
+      // callback is what releases them, immediately before its reconciling
+      // reload — the reload that must see the restored rows.
+      startBatchJob({ kind: "move", target, query: selectionJobQuery }, {
+        successKey: moveActionKey(target, true),
+        exitOnSuccess: true,
+        onDeliverySettled: () => store.unpinMovedAway(movedIds),
+      });
       return;
     }
     setBatchBusy(true);
+    const operationId = ++batchOperationRef.current;
     // The selection leaves the list and the toolbar immediately; failures are
     // rolled back (re-inserted and re-selected) once the server responds.
     exitSelectionMode();
@@ -377,61 +456,33 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     let settleFailed = false;
     try {
       if (isDemo) {
-        setMessages((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = next.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(accounts, next, stats, id, destination).messages;
-          }
-          messagesRef.current = next;
-          return next;
-        });
-        setAccounts((items) => {
-          let next = items;
-          for (const id of ids) {
-            const current = messages.find((item) => item.id === id);
-            if (!current) continue;
-            const destination = demoMoveDestination(accounts, current.accountId, target);
-            next = applyMessageMove(next, [current], stats, id, destination).accounts;
-          }
-          return next;
-        });
-        setStats((current) => {
-          let next = current;
-          for (const id of ids) {
-            const msg = messages.find((item) => item.id === id);
-            if (!msg) continue;
-            const destination = demoMoveDestination(accounts, msg.accountId, target);
-            next = applyMessageMove(accounts, [msg], next, id, destination).stats;
-          }
-          return next;
-        });
+        for (const id of ids) {
+          const current = store.getMessages().find((item) => item.id === id);
+          if (!current) continue;
+          const destination = demoMoveDestination(store.getState().accounts, current.accountId, target);
+          store.applyMove([id], destination);
+        }
       } else {
         // Optimistic: drop the selection from the list immediately; whatever
         // the server cannot move is rolled back into the list at its sorted
         // position, re-selected, and explained in the toast.
         const selectedSet = new Set(ids);
-        const snapshots = messagesRef.current.filter((item) => selectedSet.has(item.id));
+        const snapshots = store.getMessages().filter((item) => selectedSet.has(item.id));
         const snapshotById = new Map<string, Message>(snapshots.map((item) => [item.id, item]));
-        const inViewById = new Map<string, boolean>(ids.map((id) => [id, filteredMessages.some((item) => item.id === id)]));
-        const inViewCount = ids.reduce((count, id) => count + (inViewById.get(id) ? 1 : 0), 0);
         // Invalidate any in-flight reload so it cannot resurrect the removed
         // rows from pre-move server state.
         loadRequestRef.current += 1;
         const requestAtStart = loadRequestRef.current;
-        messagesRef.current = messagesRef.current.filter((item) => !selectedSet.has(item.id));
-        setMessages(messagesRef.current);
+        const currentAccounts = store.getState().accounts;
+        store.removeMessages(ids);
         // The epoch bump only discards requests that were already in flight.
         // Hold the rows out of every snapshot that starts afterwards too — a
         // reload triggered by another operation finishing, or a poll tick —
         // until the server reports them at the destination.
         for (const id of ids) {
           const snapshot = snapshotById.get(id);
-          if (snapshot) pinMovedAway([id], demoMoveDestination(accounts, snapshot.accountId, target));
+          if (snapshot) store.pinMovedAway([id], demoMoveDestination(currentAccounts, snapshot.accountId, target));
         }
-        if (inViewCount) setMessageTotal((total) => Math.max(0, total - inViewCount));
 
         const rollback = (failedIds: ReadonlySet<string>) => {
           const failed = ids
@@ -439,29 +490,32 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
             .map((id) => snapshotById.get(id))
             .filter((message): message is Message => Boolean(message));
           if (failed.length) {
-            setMessages((items) => {
-              const next = mergeRolledBackMessages(items, failed, sortOrder);
-              messagesRef.current = next;
-              return next;
-            });
-          }
-          // A reload that landed mid-flight already owns the authoritative
-          // total (which still includes the failed messages); only restore
-          // the optimistic decrement when it is still the live value.
-          if (loadRequestRef.current === requestAtStart) {
-            const restoredInView = ids.reduce((count, id) => count + (failedIds.has(id) && inViewById.get(id) ? 1 : 0), 0);
-            if (restoredInView) setMessageTotal((total) => total + restoredInView);
+            // A reload that landed mid-flight already owns the authoritative
+            // total (which still includes the failed messages); only restore
+            // the optimistic decrement when it is still the live value.
+            store.restoreMessages(failed, sortOrder, { adjustTotal: loadRequestRef.current === requestAtStart });
           }
           if (failed.length) {
-            setSelectionMode(true);
-            setSelectedMessageIds(new Set(failedIds));
+            // Re-arming the failed rows is this batch's own business: an older
+            // move must not take the selection away from a batch the user
+            // started afterwards, which is why this is the one state write the
+            // liveness check gates.
+            if (batchOperationRef.current === operationId) {
+              setSelectionMode(true);
+              setSelectedMessageIds(new Set(failedIds));
+            }
           }
         };
 
-        // The server caps a single batch at 100 ids; split large selections
-        // into chunks exactly like batchUpdateFlags so moves never fail with
-        // a 400 for size alone. The counters live outside the try so the
-        // catch can distinguish processed chunks from unprocessed ones.
+        // The server accepts up to SERVER_BATCH_ID_LIMIT ids per request, but a
+        // move is split far below that on purpose. A flag commit is local
+        // bookkeeping; a move is a real MOVE per (account, mailbox) group, each
+        // one taking the account's write lock, so the chunk size is what decides
+        // how many messages a refused or lost command can strand at once and how
+        // long those locks are held (a group that fails falls back to
+        // per-message moves, which strands less still). The counters live outside
+        // the try so the catch can distinguish processed chunks from unprocessed
+        // ones.
         const CHUNK_SIZE = 100;
         let updated = 0;
         let failed = 0;
@@ -486,12 +540,14 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
             showToast(`${t("mail.selection.partialFailure", { done: updated, failed })}${detail}`, "error");
             return;
           }
-          // The list already reflects the move; reload to reconcile the
-          // server-side truth (mapped UIDs, folder counts). Await it: the pins
-          // are released in the `finally` below, and dropping them before this
-          // snapshot lands would let an older in-flight refresh re-add the rows
-          // — the same barrier order batchUpdateFlags uses.
-          await load({ silent: true });
+          // The list already reflects the move, and the route committed it
+          // locally before answering; reconcile merges the server's first page
+          // (mapped UIDs, folder counts) into the loaded window. Await it: the
+          // pins are released in the `finally` below, and dropping them before
+          // this snapshot lands would let an older in-flight refresh re-add the
+          // rows — the same barrier order batchUpdateFlags uses. A full `load`
+          // here would also collapse the paging the user already scrolled in.
+          await reconcileRef.current();
         } catch (error) {
           // A mid-stream failure leaves earlier chunks moved server-side; roll
           // back only the unprocessed remainder plus any recorded failures,
@@ -500,6 +556,11 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
           const unreconciled = new Set(ids.slice(processed));
           for (const id of failedIds) unreconciled.add(id);
           rollback(unreconciled);
+          // Release the destination pins for the rows going back into the list
+          // BEFORE the reconciling reload: a pinned id is dropped from any
+          // snapshot that still reports it at the old mailbox, so reloading
+          // first would re-remove the very rows this rollback restored.
+          store.unpinMovedAway([...unreconciled]);
           await load({ silent: true });
           showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
         }
@@ -508,8 +569,10 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     } catch (error) {
       showToast(mailErrorToastMessage(error, t("mail.error.move"), t), "error");
     } finally {
-      unpinMovedAway(ids);
-      setBatchBusy(false);
+      store.unpinMovedAway(ids);
+      // Only the newest batch retires the busy flag; an older move finishing
+      // must not report a newer action as done.
+      if (batchOperationRef.current === operationId) setBatchBusy(false);
     }
   };
 
@@ -526,6 +589,7 @@ export function useBatchSelection(options: BatchSelectionOptions): BatchSelectio
     selectMessageRange,
     selectAllVisibleMessages,
     exitSelectionMode,
+    resetSelectionOnFullLoad,
     applyBatchFlaggedChange,
     batchUpdateFlags,
     batchMoveMessages,

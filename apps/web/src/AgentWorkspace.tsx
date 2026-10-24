@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
   Brain,
@@ -6,7 +6,6 @@ import {
   Check,
   CircleAlert,
   ClipboardList,
-  Copy,
   Eye,
   FileDown,
   FileText,
@@ -18,7 +17,6 @@ import {
   PanelLeftClose,
   Pencil,
   Plus,
-  Quote,
   Reply,
   Search,
   SquareCheck,
@@ -37,6 +35,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api, ApiError } from "./api";
+import { mergeConversationList } from "./agent/conversationListMerge";
 
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
 import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
@@ -54,13 +53,15 @@ import type {
 import { agentScopeFor, sameAgentScope, scopeTargetForConversation, type AgentScopeTarget } from "./agentContext";
 import { buildAcceptFilter, isSupportedFile, processFile, AttachmentFileIconBadge, formatMessageAttachments, type ProcessedFile } from "./fileProcessor";
 import { triggerBlobDownload } from "./attachmentZip";
-import type { Account, AgentAccessLevel, Message } from "./types";
+import type { AgentAccessLevel } from "./types";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { useDismissTransition } from "./hooks/useDismissTransition";
+import { ComposerMenus } from "./agent/ComposerMenus";
 import { configuredProviderId, resolveConversationProvider } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
+import AgentTranscriptContextMenu from "./agent/AgentTranscriptContextMenu";
 
 import { AgentConfirmationCard } from "./agent/AgentConfirmationCard";
 import { AgentScrubberBar, RevokeNotice } from "./agent/AgentSmallComponents";
@@ -88,10 +89,8 @@ import {
   readLastActiveConversationId,
   saveLastActiveConversationId,
   lastMessageIsUnanswered,
-  applyRevokedMarks,
-  purgeStaleErrors,
+  conversationView,
   sourceLabel,
-  copyToClipboard,
   dedupeCitations,
   truncateForPreview,
   truncateForContext,
@@ -104,34 +103,8 @@ import { useMountedVisible } from "./hooks/useMountedVisible";
 import { createDemoConversation } from "./agent/agent-demo-data";
 import { keepAheadTranscript, useAgentSession } from "./agent/useAgentSession";
 import { useInitialPrompt } from "./agent/useInitialPrompt";
-
-type AgentWorkspaceProps = {
-  accounts: Account[];
-  messages: Message[];
-  currentMessage?: Message;
-  initialPrompt?: string;
-  initialAutoSend?: boolean;
-  onClose: () => void;
-  onOpenMessage: (messageId: string) => void;
-  restoreFocusRef?: RefObject<HTMLElement | null>;
-  demoMode?: boolean;
-  preloadedBootstrap?: AgentBootstrap;
-  /** True while an App overlay (the settings modal) covers the workspace, so the
-   *  workspace's focus trap stands down and the overlay's Escape routing wins. */
-  overlayOpen?: boolean;
-  /** Bumped by App when the settings models panel edited the provider list. */
-  providerListVersion?: number;
-  /** Opens the settings models category WITHOUT closing the workspace (a live
-   *  run keeps streaming behind the modal). */
-  onOpenModelSettings?: () => void;
-  /** Agent permission level, persisted in app settings. */
-  agentAccessLevel?: AgentAccessLevel;
-  /** Persists a newly selected Agent permission level. */
-  onAgentAccessLevelChange?: (level: AgentAccessLevel) => void;
-  /** Notified when an agent tool mutates primary mail state (flags, moves) so
-   *  the mail list can refresh instead of lagging behind the conversation. */
-  onMailStateChanged?: () => void;
-};
+import { AgentTranscriptSkeleton } from "./agent/AgentTranscriptSkeleton";
+import type { AgentWorkspaceProps } from "./agent/AgentWorkspaceProps";
 
 
 /**
@@ -142,13 +115,16 @@ type AgentWorkspaceProps = {
  * native buttons, so Enter/Space activate them without extra wiring.
  */
 
-export default function AgentWorkspace({ accounts, currentMessage, initialPrompt, initialAutoSend = false, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
+export default function AgentWorkspace({ accounts, currentMessage, initialPrompt, initialAutoSend = false, initialNewConversation = false, onClose, onOpenMessage, restoreFocusRef, demoMode = false, overlayOpen = false, providerListVersion = 0, onOpenModelSettings, preloadedBootstrap, agentAccessLevel = "send-confirmed", onAgentAccessLevelChange, onMailStateChanged }: AgentWorkspaceProps) {
   const { locale, t } = useI18n();
   const demoPresentation = useMemo(() => demoMode ? readDemoPresentation(window.location.search) : null, [demoMode]);
   const [bootstrap, setBootstrap] = useState<AgentBootstrap | null>(null);
-  const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>([]);
+  // The splash snapshot lets the list render before the bootstrap resolves.
+  const [conversations, setConversations] = useState<AgentBootstrap["conversations"]>(() => preloadedBootstrap?.conversations ?? []);
   const [active, setActive] = useState<AgentConversation | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !preloadedBootstrap);
+  // Separate from the bootstrap so the transcript restore does not gate the sidebar.
+  const [restoringConversation, setRestoringConversation] = useState(() => Boolean(!demoMode && preloadedBootstrap?.conversations.length));
   const [loadError, setLoadError] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [composer, setComposer] = useState(() => initialPrompt ?? "");
@@ -306,6 +282,11 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   // Monotonic token for conversation-selection races: a stale fetch abandoned
   // after a newer selection bumps the counter.
   const selectionTokenRef = useRef(0);
+  // Keeps a retry from blanking an already-rendered list.
+  const hasConversationsRef = useRef(Boolean(preloadedBootstrap?.conversations.length));
+  useEffect(() => {
+    hasConversationsRef.current = conversations.length > 0;
+  }, [conversations]);
   // Serialises concurrent conversation creation so a double-send out of an
   // empty (or scope-switched) workspace yields a single record, not one orphan
   // per concurrent send.
@@ -372,8 +353,10 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   const filteredConversations = useMemo(() => {
     const query = conversationSearch.trim().toLocaleLowerCase(locale);
     if (!query) return conversations;
-    return conversations.filter((conversation) => `${conversation.title} ${conversation.preview}`.toLocaleLowerCase(locale).includes(query));
-  }, [conversationSearch, conversations, locale]);
+    // A conversation has no title until its first turn writes one, so search
+    // matches the same placeholder the sidebar shows.
+    return conversations.filter((conversation) => `${conversation.title || t("agent.conversation.newTitle")} ${conversation.preview}`.toLocaleLowerCase(locale).includes(query));
+  }, [conversationSearch, conversations, locale, t]);
 
   // Conversations the user is deleting right now: local rows are dropped
   // optimistically while the server delete is still in flight. Any concurrent
@@ -388,50 +371,35 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   // dropped out of the sidebar (the "conversation flashes away" bug). This set
   // exempts exactly those locally-created rows from being dropped.
   const createdThisSessionRef = useRef<Set<string>>(new Set());
+  // Monotonic token for sidebar refreshes: a response that started before a
+  // newer one must not apply, or a slow snapshot can overwrite fresher titles.
+  const conversationsRequestRef = useRef(0);
 
   const refreshConversations = useCallback(async (query = "") => {
     if (demoMode) {
       setConversations([]);
       return;
     }
-    const response = await api.agentConversations(query ? new URLSearchParams({ query }).toString() : "");
-    setConversations((current) => {
-      // When searching, the server result is authoritative for that scope — but
-      // it must still not surface a row whose delete is in flight.
-      if (query) return response.items.filter((item) => !pendingDeleteIdsRef.current.has(item.id));
-      // Otherwise merge instead of blindly replacing: a profile may have just
-      // been created / its turn may still be mid-write, so a server snapshot
-      // can momentarily omit it and replacing wholesale would flash a
-      // disappearing sidebar row. Adopt server rows, but only keep a
-      // local-only row when it is at least as fresh as the newest server row
-      // (a brand-new / in-flight profile). Anything older — e.g. one deleted
-      // here or on another device — is left to the server's authoritative
-      // result so it can never resurrect.
-      //
-      // A locally-deleted row is the one exception to "adopt server rows": the
-      // server delete may not have committed yet, so its snapshot can still
-      // carry the row. Filter those out so an optimistic delete cannot flicker
-      // back into view until the server confirms the removal.
-      const pending = pendingDeleteIdsRef.current;
-      const newestServer = response.items[0]?.updatedAt ?? "";
-      const serverById = new Map(response.items
-        .filter((item) => !pending.has(item.id))
-        .map((item) => [item.id, item]));
-      const merged = [...serverById.values()];
-      for (const item of current) {
-        if (pending.has(item.id)) continue;
-        if (!serverById.has(item.id)) {
-          // A row the server snapshot does not (yet) carry. Keep it when it was
-          // created this session OR it is at least as fresh as the newest server
-          // row; drop it otherwise so an old row deleted on another device
-          // cannot resurrect.
-          const newThisSession = createdThisSessionRef.current.has(item.id);
-          const freshEnough = (item.updatedAt ?? "").localeCompare(newestServer) >= 0;
-          if (newThisSession || freshEnough) merged.push(item);
-        }
-      }
-      return merged.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-    });
+    const request = ++conversationsRequestRef.current;
+    let response: Awaited<ReturnType<typeof api.agentConversations>>;
+    try {
+      response = await api.agentConversations(query ? new URLSearchParams({ query }).toString() : "");
+    } catch {
+      // Sidebar refresh is background housekeeping. A failed list read must not
+      // escape to its caller: the stream path awaits this inside its own try,
+      // where a rejection would be reported as an Agent turn failure (and, for
+      // a background run, persisted as a bogus error row). The next poll or
+      // settlement retries; the list keeps what it had.
+      return;
+    }
+    if (request !== conversationsRequestRef.current) return;
+    setConversations((current) => mergeConversationList({
+      current,
+      serverItems: response.items,
+      pendingDeleteIds: pendingDeleteIdsRef.current,
+      createdThisSession: createdThisSessionRef.current,
+      query,
+    }));
   }, [demoMode]);
 
   // Streaming conversation state machine (session lifecycle + stream pipeline +
@@ -529,7 +497,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   }, []);
 
   const loadBootstrap = useCallback(async () => {
-    setLoading(true);
+    // A retry keeps an already-rendered list instead of blanking it.
+    setLoading(!hasConversationsRef.current);
     setLoadError(null);
     if (demoMode) {
       // Demo mode still renders the full provider + permission UI, so the
@@ -562,6 +531,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       if (sitePreview) setScopeTarget(scopeTargetForConversation(demoConversation.scope, accounts));
       setConversations([{ id: demoConversation.id, title: demoConversation.title, preview: demoConversation.preview, updatedAt: demoConversation.updatedAt }]);
       setProviderId("demo-ollama");
+      setRestoringConversation(false);
       setLoading(false);
       return;
     }
@@ -570,23 +540,28 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       const value = preloadedBootstrap ?? await api.agentBootstrap();
       setBootstrap(value);
       setConversations(value.conversations);
+      hasConversationsRef.current = value.conversations.length > 0;
+      // Release the sidebar before the transcript restore below, which can sit
+      // behind a busy server for a whole request timeout.
+      setLoading(false);
       setProviderId((current) => {
         const currentProvider = value.providers.find((provider) => provider.id === current && provider.configured);
         return currentProvider?.id ?? configuredProviderId(value.providers, value.defaultProviderId);
       });
-      // Resolve the initial conversation before clearing loading so the view
-      // never flashes a blank "new conversation" state before restoring the
-      // last active (or newest) conversation. `loading` gates only the empty
-      // transcript state, not the history list, so the sidebar stays usable
-      // while the transcript underneath loads.
+      // The empty state stays hidden while this second request is in flight.
+      // Reader actions are about the mail in front of the user, not the chat
+      // left open: skip the restore so the auto-send creates a conversation in
+      // the mail's scope instead of appending to (or interrupting) that chat.
       const lastActiveId = readLastActiveConversationId();
-      const initialTarget = value.conversations.some((item) => item.id === lastActiveId)
-        ? lastActiveId!
-        : value.conversations[0]?.id;
+      const lastActiveIsKnown = value.conversations.some((item) => item.id === lastActiveId);
+      const initialTarget = initialNewConversation ? undefined : lastActiveIsKnown ? lastActiveId! : value.conversations[0]?.id;
+      setRestoringConversation(Boolean(initialTarget));
       if (initialTarget) {
-        try {
-          const conversation = await api.agentConversation(initialTarget);
-          setActive(applyRevokedMarks(purgeStaleErrors(conversation)));
+        // A newer selection supersedes this restore; its snapshot must not hijack it.
+        const token = ++selectionTokenRef.current;
+        const adoptConversation = (conversation: AgentConversation) => {
+          activeIdRef.current = conversation.id;
+          setActive(conversationView(conversation));
           // Resolve the conversation's model exactly like switching to it: the
           // provider recorded on the conversation (kept authoritative by the
           // server-side model pin) wins, then the default.
@@ -594,12 +569,35 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
           if (!enteringFromMessageRef.current) {
             setScopeTarget(scopeTargetForConversation(conversation.scope, accounts));
           }
-        } catch {
-          // Loading the recovered conversation failed — fall back to the blank
-          // state (loading cleared below); the user can retry by clicking a row.
+        };
+        try {
+          const conversation = await api.agentConversation(initialTarget);
+          if (token === selectionTokenRef.current) adoptConversation(conversation);
+        } catch (error) {
+          if (token === selectionTokenRef.current) {
+            // A last-active id deleted elsewhere falls through to the newest
+            // remaining conversation; other failures are surfaced, since a
+            // blank transcript with no explanation reads as "nothing here".
+            const fallbackId = value.conversations.find((item) => item.id !== initialTarget)?.id;
+            if (error instanceof ApiError && error.status === 404 && fallbackId) {
+              try {
+                const fallback = await api.agentConversation(fallbackId);
+                if (token === selectionTokenRef.current) adoptConversation(fallback);
+              } catch (fallbackError) {
+                if (token === selectionTokenRef.current) {
+                  setLoadError(fallbackError instanceof Error ? fallbackError.message : t("agent.error.loadConversation"));
+                }
+              }
+            } else {
+              setLoadError(error instanceof Error ? error.message : t("agent.error.loadConversation"));
+            }
+          }
+        } finally {
+          // A superseded restore must not clear the skeleton a newer one set
+          // (e.g. the error panel's Retry started a second loadBootstrap).
+          if (token === selectionTokenRef.current) setRestoringConversation(false);
         }
       }
-      setLoading(false);
       // The preloaded snapshot can be older than the server (e.g. the panel
       // was closed and reopened before App's close-time refetch landed), so
       // conversations created in the previous panel session would be missing
@@ -611,7 +609,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     } finally {
       setLoading(false);
     }
-  }, [accounts, demoMode, locale, preloadedBootstrap, refreshConversations, t]);
+  }, [accounts, demoMode, initialNewConversation, locale, preloadedBootstrap, refreshConversations, t]);
 
   // Mount-once: loadBootstrap wholesale-adopts the (splash-time) bootstrap
   // snapshot into the sidebar and re-resolves the initial conversation, so
@@ -878,17 +876,18 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   }, []);
   const serializeConversationForExport = useCallback((conversation: AgentConversation, format: "markdown" | "json") => {
     const messages = conversation.messages.filter((message) => message.role === "user" || message.role === "assistant");
+    const title = conversation.title || t("agent.conversation.newTitle");
     if (format === "json") {
       return `${JSON.stringify({
         version: 1,
-        title: conversation.title,
+        title,
         provider: conversation.providerId,
         created_at: messages[0]?.createdAt ?? conversation.updatedAt,
         updated_at: conversation.updatedAt,
         messages: messages.map((message) => ({ role: message.role, content: message.content, created_at: message.createdAt })),
       }, null, 2)}\n`;
     }
-    const lines: string[] = [`# ${conversation.title}`, ""];
+    const lines: string[] = [`# ${title}`, ""];
     if (conversation.providerId) lines.push(`provider: ${conversation.providerId}`, "");
     for (const message of messages) {
       lines.push(`## ${message.role === "user" ? t("agent.message.userPrefix") : t("agent.message.assistantPrefix")}`, "", message.content, "");
@@ -899,7 +898,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     try {
       const conversation = await api.agentConversation(id);
       const content = serializeConversationForExport(conversation, format);
-      const safeTitle = conversation.title.replace(/[^\p{L}\p{N} _\-()（）]/gu, "").trim().slice(0, 48) || "conversation";
+      const safeTitle = (conversation.title || t("agent.conversation.newTitle")).replace(/[^\p{L}\p{N} _\-()（）]/gu, "").trim().slice(0, 48) || "conversation";
       triggerBlobDownload(
         new Blob([content], { type: format === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8" }),
         `${safeTitle}-${new Date().toISOString().slice(0, 10)}.${format === "json" ? "json" : "md"}`,
@@ -1060,6 +1059,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
 
   const selectConversation = useCallback(async (id: string) => {
     if (active?.id === id) return;
+    // A click supersedes a restore in flight; its skeleton must not outlive the choice.
+    setRestoringConversation(false);
     // Generational guard: rapid B→C selections resolve out of order when the
     // users clicks a second conversation while the first is still fetching. The
     // token lets a stale (older) fetch recognise it was superseded and abandon
@@ -1105,7 +1106,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       if (token !== selectionTokenRef.current || activeIdRef.current !== id) return;
       setLoadingConversationId(null);
       activeIdRef.current = id;
-      const conversationView = applyRevokedMarks(purgeStaleErrors(conversation));
+      const view = conversationView(conversation);
       const session = getSession(id);
       // A fetch that resolves while the run is still streaming carries a snapshot
       // older than the text already buffered locally. Adopting it wholesale
@@ -1113,9 +1114,9 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       // further along until the run ends (see keepAheadTranscript).
       const live = Boolean(session && !session.done);
       setActive((current) => current && current.id === id
-        ? keepAheadTranscript(current, conversationView, live)
-        : conversationView);
-      if (live && session) replayBackgroundSession(session, conversationView);
+        ? keepAheadTranscript(current, view, live)
+        : view);
+      if (live && session) replayBackgroundSession(session, view);
       syncBackgroundRuns();
       // Re-surface a background run's cached failure as an error row (consumed
       // once shown). Guarded by the functional updater so a live replay that
@@ -1175,6 +1176,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     // is sent. This avoids empty conversations piling up in the history list
     // and lets the welcome screen (with the animated logo) show.
     setActive(null);
+    // The welcome screen replaces a restore in flight; its skeleton must not outlive it.
+    setRestoringConversation(false);
     activeIdRef.current = null;
     // Closing the panel from the welcome screen must reopen onto the welcome
     // screen, not the previously active conversation.
@@ -1346,12 +1349,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     const now = Date.now();
     if (now - lastSendAtRef.current < 400) return;
     lastSendAtRef.current = now;
-    // Interrupt-to-send: if the current conversation hosts a live run, sending
-    // a new message folds the running reply into an "interrupted" state and
-    // cancels that run (via its own controller) before the new one starts; a
-    // pickup run (no local controller) is cancelled server-side. Owned by the
-    // session hook's prepareInterruptToSend.
-    prepareInterruptToSend();
+    // Replace the reply only in the conversation on screen; a send that
+    // creates another one leaves its run streaming, as a switch does.
     const files = attachedFiles;
     // Quote context from "Follow up" — sent to the LLM as truncated context,
     // the user only sees their own question in the transcript.
@@ -1362,6 +1361,11 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
     // reassemble it without polluting the visible message.
     let conversation = active;
     if (!conversation || !sameAgentScope(conversation.scope, scope)) {
+      // A send from the welcome screen supersedes a restore still in flight.
+      // Bump before the create await so a restore landing meanwhile cannot
+      // adopt over the conversation this send is about to own.
+      selectionTokenRef.current += 1;
+      setRestoringConversation(false);
       try {
         // If a concurrent send is already creating this workspace's first
         // conversation, await and reuse its record instead of orphaning a
@@ -1386,6 +1390,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
         setLoadError(error instanceof Error ? error.message : t("agent.error.createConversation"));
         return;
       }
+    } else {
+      prepareInterruptToSend();
     }
     const attachments = formatMessageAttachments(files);
     const userMessage: AgentMessage = { id: newLocalId("user"), role: "user", content: userText, createdAt: currentTime(), state: "complete", citations: [], toolActivities: [], ...(attachments.length > 0 ? { attachments } : {}), ...(truncatedQuote ? { quote: truncatedQuote } : {}), ...(mailReferences.length > 0 ? { references: mailReferences.map((reference) => ({ id: reference.id, subject: reference.subject })) } : {}) };
@@ -1445,7 +1451,9 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   useInitialPrompt({
     initialPrompt,
     autoSend: initialAutoSend,
-    loading,
+    // The restore must settle first: an auto-send fired mid-restore would see
+    // `active === null`, create a fresh conversation, and discard the restore.
+    loading: loading || restoringConversation,
     ready: Boolean(bootstrap?.enabled && selectedProvider),
     onSend: sendMessage,
     setComposer,
@@ -1758,11 +1766,11 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
           const revokedIds = readRevokedIds(conversationId);
           revokedSet.forEach((id) => revokedIds.delete(id));
           writeRevokedIds(conversationId, revokedIds);
-          const conversationView = applyRevokedMarks(purgeStaleErrors(fresh));
+          const view = conversationView(fresh);
           const session = getSession(conversationId);
           const live = Boolean(session && !session.done);
           setActive((current) => current && current.id === conversationId
-            ? keepAheadTranscript(current, conversationView, live)
+            ? keepAheadTranscript(current, view, live)
             : current);
         }).catch(() => {
           // The server is unreachable; keep the optimistic marks rather than
@@ -1821,7 +1829,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
           {filteredConversations.map((conversation) => (
             <div key={conversation.id} className={`agent-conversation-row ${active?.id === conversation.id ? "active" : ""}${selectionMode ? " selectable" : ""}${selectionMode && selectedConversationIds.has(conversation.id) ? " selected" : ""}`} onContextMenu={(event) => openConversationMenu(event, conversation.id)}>
               {selectionMode && <button className={`agent-row-check ${selectedConversationIds.has(conversation.id) ? "checked" : ""}`} type="button" aria-label={t("agent.conversation.toggleSelect")} aria-pressed={selectedConversationIds.has(conversation.id)} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => toggleConversationSelected(conversation.id)}><span className="agent-row-check-box"><Check size={12} /></span></button>}
-              <button className="agent-conversation-open" type="button" onClick={() => { setMobileConversationsOpen(false); if (selectionMode) toggleConversationSelected(conversation.id); else void selectConversation(conversation.id); }}><span><strong>{conversation.title}</strong>{backgroundRunIds.has(conversation.id) && <LoaderCircle className="spin" size={13} aria-label={t("agent.conversation.backgroundRunning")} />}<small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
+              <button className="agent-conversation-open" type="button" onClick={() => { setMobileConversationsOpen(false); if (selectionMode) toggleConversationSelected(conversation.id); else void selectConversation(conversation.id); }}><span><strong>{conversation.title || t("agent.conversation.newTitle")}</strong>{backgroundRunIds.has(conversation.id) && <LoaderCircle className="spin" size={13} aria-label={t("agent.conversation.backgroundRunning")} />}<small>{conversation.preview || t("agent.conversation.emptyPreview")}</small></span><time>{shortDate(conversation.updatedAt, locale)}</time></button>
               {!selectionMode && <button className="agent-row-delete" type="button" aria-label={t("agent.conversation.delete")} disabled={backgroundRunIds.has(conversation.id) || (active?.id === conversation.id && streaming)} onClick={() => openDeleteConfirm([conversation.id])}><Trash2 size={14} /></button>}
             </div>
           ))}
@@ -1851,7 +1859,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
             <span className="agent-heading-mark" aria-hidden="true"><AgentMark size={21} /></span>
             {renaming && active ? (
               <form onSubmit={(event) => { event.preventDefault(); void renameConversation(); }}><input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} aria-label={t("agent.conversation.rename")} autoFocus onBlur={() => setRenaming(false)} /></form>
-            ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 data-tooltip={active?.title || undefined}>{active?.title ?? t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
+            ) : <div className="agent-conversation-title"><span className="eyebrow">{t("agent.eyebrow")}</span><span className="agent-title-line"><h1 data-tooltip={active?.title || undefined}>{active?.title || t("agent.conversation.newTitle")}</h1>{active && <button className="icon-button" type="button" aria-label={t("agent.conversation.rename")} data-tooltip={t("agent.conversation.rename")} onClick={() => { setDraftTitle(active.title); setRenaming(true); }}><Pencil size={15} /></button>}</span></div>}
           </div>
           <div className="agent-header-actions">
             <div className="agent-scope-picker-wrap" ref={scopePickerRef}>
@@ -1900,32 +1908,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
         <div className="agent-transcript-wrap">
         <div className="agent-transcript" ref={transcriptRef} aria-live="polite" onContextMenu={handleTranscriptContextMenu}>
           {loadError && <div className="agent-error-panel" role="status"><CircleAlert size={18} /><span><strong>{t("agent.error.title")}</strong><small>{loadError}</small></span><button className="secondary-button" type="button" onClick={() => void loadBootstrap()}>{t("common.retry")}</button></div>}
-          {loadingConversationId === active?.id && active && (
-            // Optimistic switch: the record is still being fetched — show a
-            // skeleton mirroring the real message layout (right-aligned user
-            // bubble, left-aligned assistant lines, timestamp rows).
-            <div className="agent-transcript-loading" aria-hidden="true">
-              <article className="agent-message skeleton user">
-                <div className="agent-skeleton-bubble">
-                  <div className="agent-skeleton-content">
-                    <div className="agent-skeleton-line" style={{ width: "74%" }} />
-                    <div className="agent-skeleton-line" style={{ width: "46%" }} />
-                  </div>
-                </div>
-                <div className="agent-message-meta"><span className="agent-skeleton-chrome" /></div>
-              </article>
-              <article className="agent-message skeleton assistant">
-                <div className="agent-skeleton-content">
-                  <div className="agent-skeleton-line" style={{ width: "88%" }} />
-                  <div className="agent-skeleton-line" style={{ width: "70%" }} />
-                  <div className="agent-skeleton-line" style={{ width: "78%" }} />
-                  <div className="agent-skeleton-line" style={{ width: "42%" }} />
-                </div>
-                <div className="agent-message-meta"><span className="agent-skeleton-chrome" /></div>
-              </article>
-            </div>
-          )}
-          {!loading && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
+          {(restoringConversation || (loadingConversationId === active?.id && active)) && <AgentTranscriptSkeleton />}
+          {!loading && !restoringConversation && !active && <div className="agent-empty-state"><span className="agent-wordmark" aria-hidden="true">{"NamiMailAgent".split("").map((char, index) => <span key={index} style={{ animationDelay: `${index * 0.05}s` }}>{char}</span>)}</span>{hasConfiguredProvider ? <div className="agent-suggestion-cards"><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.today"))}><CalendarDays size={17} /><span>{t("agent.suggestion.today")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.actionItems"))}><ClipboardList size={17} /><span>{t("agent.suggestion.actionItems")}</span></button><button className="agent-suggestion-card" type="button" onClick={() => setComposer(t("agent.suggestion.reply"))}><Reply size={17} /><span>{t("agent.suggestion.reply")}</span></button></div> : <button className="agent-configure-provider-button" type="button" onClick={() => onOpenModelSettings?.()}><Wrench size={16} />{t("agent.providers.configure")}</button>}</div>}
           {active?.messages.map((message, index) => (
             <AgentMessageRow
               key={message.id}
@@ -1963,10 +1947,12 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
           )}
           <div ref={messagesEndRef} />
           {contextMenu && (
-            <div className="agent-context-menu" ref={contextMenuRef} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onClick={(e) => e.stopPropagation()}>
-              <button type="button" role="menuitem" onClick={() => { void copyToClipboard(contextMenu.text); setContextMenu(null); }}><Copy size={14} /><span>{t("agent.message.copy")}</span></button>
-              <button type="button" role="menuitem" onClick={() => { setQuoteContext(contextMenu.text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}><Quote size={14} /><span>{t("agent.message.followUp")}</span></button>
-            </div>
+            <AgentTranscriptContextMenu
+              menu={contextMenu}
+              menuRef={contextMenuRef}
+              onDismiss={(menu) => setContextMenu((current) => (current === menu ? null : current))}
+              onFollowUp={(text) => { setQuoteContext(text); setContextMenu(null); window.requestAnimationFrame(() => composerRef.current?.focus()); }}
+            />
           )}
         </div>
         {userMessages.length > 0 && (
@@ -2153,65 +2139,19 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                 void sendMessage();
               }
             }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={(slashMenu !== null && slashMenu.length > 0) || mentionOpen} aria-controls={slashMenu !== null && slashMenu.length > 0 ? "agent-slash-menu" : mentionOpen ? "agent-mention-menu" : undefined} aria-activedescendant={slashMenu !== null && slashMenu.length > 0 ? (activeSlashIndex >= 0 ? `agent-slash-menu-item-${activeSlashIndex}` : undefined) : mentionOpen && mentionItems.length > 0 ? (activeMentionIndex >= 0 ? `agent-mention-menu-item-${activeMentionIndex}` : undefined) : undefined} />
-            {slashMenu && slashMenu.length > 0 && (
-              <div className="agent-slash-menu" id="agent-slash-menu" role="listbox" aria-label={t("agent.commands.label")}>
-                {slashMenu.map((item, index) => (
-                  <button
-                    type="button"
-                    role="option"
-                    id={`agent-slash-menu-item-${index}`}
-                    aria-selected={index === activeSlashIndex}
-                    key={item.kind === "mail-reference" ? "mail-reference" : item.kind === "sub" ? `${item.command.id}.${item.sub.name}` : item.command.id}
-                    className={`agent-slash-item${item.kind === "sub" ? " agent-slash-item-sub" : ""}${index === activeSlashIndex ? " selected" : ""}`}
-                    onMouseDown={(event) => { event.preventDefault(); if (item.kind === "mail-reference") startMailReference(); else if (item.kind === "sub") completeSlash(item.command, item.sub); else completeSlash(item.command); }}
-                  >
-                    {item.kind === "mail-reference" ? (
-                      <>
-                        <span className="agent-slash-item-name">/@</span>
-                        <span className="agent-slash-item-desc">{t("agent.mention.label")}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="agent-slash-item-name">/{item.kind === "sub" ? `${item.command.name} ${item.sub.name}` : item.command.name}</span>
-                        <span className="agent-slash-item-desc">{item.kind === "sub" ? t(item.sub.descriptionKey) : t(item.command.descriptionKey)}</span>
-                        {item.kind === "sub" ? (item.sub.usageKey && <span className="agent-slash-item-usage">{t(item.sub.usageKey)}</span>) : (item.command.usageKey && <span className="agent-slash-item-usage">{t(item.command.usageKey)}</span>)}
-                      </>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            {mentionOpen && (
-              <div className="agent-mention-menu" id="agent-mention-menu" role="listbox" aria-label={t("agent.mention.label")} onScroll={(event) => {
-                const el = event.currentTarget;
-                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) void loadMoreMentions();
-              }}>
-                {mentionLoading && mentionItems.length === 0 ? (
-                  <div className="agent-mention-empty"><LoaderCircle size={13} className="spin" /><span>{t("agent.mention.loading")}</span></div>
-                ) : mentionItems.length === 0 ? (
-                  <div className="agent-mention-empty"><span>{t("agent.mention.empty")}</span></div>
-                ) : (
-                  mentionItems.map((item, index) => (
-                    <button
-                      type="button"
-                      role="option"
-                      id={`agent-mention-menu-item-${index}`}
-                      aria-selected={index === activeMentionIndex}
-                      key={item.id}
-                      className={`agent-mention-item${index === activeMentionIndex ? " selected" : ""}`}
-                      onMouseDown={(event) => { event.preventDefault(); introduceMailReference(item); }}
-                    >
-                      <span className="agent-mention-avatar" aria-hidden="true">{(item.subject ?? "").trim() ? item.subject!.trim()[0].toUpperCase() : "?"}</span>
-                      <span className="agent-mention-main">
-                        <span className="agent-mention-subject">{item.subject || t("agent.reference.noSubject")}</span>
-                        <span className="agent-mention-meta">{item.sender}<span aria-hidden="true">{" · "}</span>{item.accountEmail}</span>
-                      </span>
-                    </button>
-                  ))
-                )}
-                {mentionLimitReached && <div className="agent-mention-limit" role="status">{t("agent.mention.maxReached")}</div>}
-              </div>
-            )}
+            <ComposerMenus
+              slashMenu={slashMenu}
+              activeSlashIndex={activeSlashIndex}
+              completeSlash={completeSlash}
+              startMailReference={startMailReference}
+              mentionOpen={mentionOpen}
+              mentionItems={mentionItems}
+              mentionLoading={mentionLoading}
+              mentionLimitReached={mentionLimitReached}
+              activeMentionIndex={activeMentionIndex}
+              introduceMailReference={introduceMailReference}
+              loadMoreMentions={() => void loadMoreMentions()}
+            />
             {pendingMemorySuggestions.length > 0 && (
               <div className="agent-memory-suggestions" role="status">
                 {pendingMemorySuggestions.map((summary) => (

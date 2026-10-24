@@ -18,6 +18,13 @@ import {
 const MEMORY_RECORD_TYPE = "agent-memory";
 const MEMORY_MAX_RECORDS = 500;
 
+/**
+ * Auto-reply bookkeeping whose detail is reply text and sender data. It is
+ * device-side history, never a user note, so every recall surface hides it.
+ */
+export const autoReplyLedgerKinds =
+  ["auto-reply-sent", "auto-reply-ignored"] as const satisfies readonly AgentMemoryKind[];
+
 export type AgentMemoryCreateInput = {
   kind?: AgentMemoryKind;
   accountId?: string;

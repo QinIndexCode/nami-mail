@@ -28,6 +28,15 @@ jobs:
       # assets (burning a runner plus an approval). Fail here, before any heavy
       # check, with an actionable message.
       - run: node scripts/verify-release-notes.mjs
+      # The landing page, the release index and the release guide must already
+      # describe the version being tagged; a signed release that points users at
+      # the previous release is worse than a failed job.
+      - run: node scripts/sync-site-version.mjs --check
+      # The version cut has to close two lists: claims that drifted from their
+      # source, and every document still carrying the previous release's
+      # `shipped-as` marker. Both fail the tag rather than shipping stale prose.
+      - run: npm run docs:claims:check
+      - run: npm run docs:release-review
       # v4.4.0; pin the action implementation for a secret-free validation job.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:

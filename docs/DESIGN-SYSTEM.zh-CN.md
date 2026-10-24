@@ -1,10 +1,10 @@
 # 设计规范（Design System）
 
-本文档定义界面必须遵守的**视觉基线**。在此之前，视觉规则只隐含在
-`apps/web/src/styles.css`（约 17,000 行）里，导致同一层级出现多套阴影、同一语义出现多档字号——
+本文档定义界面必须遵守的**视觉基线**。在此之前，视觉规则分散在样式模块里，从未被集中写成规则，
+`apps/web/src/styles.css` 只是 30 行 `@import` 索引，实际规则在 `apps/web/src/styles/` 下的 30 个模块里，导致同一层级出现多套阴影、同一语义出现多档字号——
 每轮局部收敛，全局继续发散。新增或修改样式前先读本文档。
 
-- 样式事实来源：`apps/web/src/styles.css`
+- 样式事实来源：`apps/web/src/styles.css`（仅索引）与 `apps/web/src/styles/` 下的模块文件；聚合行数由 `styles-size.test.ts` 的棘轮管控
 - 主题：`:root`（浅色）与 `:root[data-theme=dark]`（深色），语义 token 两套成对定义
 - 修改视觉的验证方式：`npm run test:e2e`（4 套 spec，含 geometry）、`npm run smoke:desktop`，以及读取样式文件的断言测试
 
@@ -91,7 +91,7 @@
 本项目是信息密集的桌面邮件客户端，8–11px 的小字号（计数、时间戳、元信息）是产品定位，
 不是缺陷；需要治理的是"同一类信息用了不同档位"。
 
-当前取值分布（`styles.css`）：`8px`(28) / `9px`(81) / `10px`(155+) / `11px`(144+) /
+当前取值分布（`styles/` 聚合）：`8px`(28) / `9px`(81) / `10px`(155+) / `11px`(144+) /
 `11.5px`(2) / `12px`(52) / `12.5px`(3) / `13px`(11) / `13.5px`(1) / `14px`(9) / `15px`(10) /
 `16px`(7) / `18px`(3) / `20px`(4) / ≥26px 若干。
 
@@ -129,7 +129,7 @@
 
 ### 对比度下限（有测试强制）
 本项目的字号普遍在 8–11px，**没有任何文字够得上 WCAG 的"大字"豁免**，所以全部按普通文本的
-**4.5:1** 下限要求。`apps/web/src/themeContrast.test.ts` 会从 `styles.css` 里读取 token 并逐个校验：
+**4.5:1** 下限要求。`apps/web/src/themeContrast.test.ts` 会通过 `testUtils/loadStyles` 读取 `styles/` 聚合后的 CSS，从 `:root` 与 `:root[data-theme=dark]` 里取出 token 并逐个校验：
 文字三档（`--text` / `--text-soft` / `--text-faint`）在 `--panel-solid`、`--panel`、`--panel-muted`
 以及 `--canvas`（`.background-preview` 会把 faint 文字直接画在 canvas 上）上都必须达标；
 语义四色（`--danger` / `--success` / `--warning` / `--info`）在三种面板上达标（它们不会落在裸 canvas 上）。
@@ -255,7 +255,7 @@ tint 从 14% 降到 10%（4.38 → 4.62）。`themeContrast.test.ts` 现在会�
 
 | 文件 | 作用 |
 |---|---|
-| `src/themeContrast.test.ts` | 从 `styles.css` 读 token，按主题计算 WCAG 对比度并卡 4.5:1 下限（见 §6） |
+| `src/themeContrast.test.ts` | 经 `testUtils/loadStyles` 读取聚合样式，按主题计算 WCAG 对比度并卡 4.5:1 下限（见 §6） |
 | `src/designTokens.test.ts` | 圆角/阴影/字号/`!important`/`outline` 策略 + **债务棘轮** + 主题齐备性 + 文档存在性 |
 | `e2e/geometry.spec.ts` | **几何基线**：4 个断点 × 侧栏/列表行高/阅读列宽/正文宽度，外加"任何断点都不得横向溢出"；另有一条主题不改变 measure、且深色正文确实是浅色的断言 |
 

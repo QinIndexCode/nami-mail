@@ -140,18 +140,6 @@ flex:1;
 font-size:12px;
 overflow:hidden
 }
-.accounts-copy-address svg
-{
-animation:account-copy-icon-in .16s ease
-}
-@keyframes account-copy-icon-in
-{
-from
-{
-opacity:0;
-transform:scale(.55)
-}
-}
 .accounts-row-copy small
 {
 text-overflow:ellipsis;

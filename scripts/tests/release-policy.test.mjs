@@ -658,6 +658,10 @@ test("release workflow isolates read-only validation from credential-minimized p
   const validateCommands = workflow.jobs.validate.steps.map((step) => step.run).filter(Boolean);
   assert.deepEqual(validateCommands, [
     "node scripts/verify-release-notes.mjs",
+    "node scripts/sync-site-version.mjs --check",
+    // The version cut closes two lists before it tags anything.
+    "npm run docs:claims:check",
+    "npm run docs:release-review",
     "npm ci",
     "npm run verify:node-sqlite",
     "npm run verify:electron-sqlite",
@@ -737,6 +741,8 @@ test("pull request validation runs the release gate without write credentials", 
     "npm run smoke:server-node",
     "npm run build:brand:check",
     'node --test "scripts/tests/*.test.mjs"',
+    "npm run docs:claims:check",
+    "npm run docs:release-review",
     "node scripts/build-docs-site.mjs",
     "node scripts/build-locale-catalog.mjs --check",
     "npm run lint",

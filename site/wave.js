@@ -9,6 +9,10 @@
  * 3. Autonomous Tidal Pulses: self-spawning harmonic wave rings periodically sweep across
  *    the matrix so the canvas feels alive even without pointer movement.
  * 4. Expanding Pointer Ripples: moving the cursor radiates outward travelling wave rings.
+ * 5. Balanced Pacing: a 24 FPS cap, a 1.5x larger dot pitch (about 55% fewer
+ *    particles to simulate and draw each frame), and a simulation step halved
+ *    from the original keep the hero calm and cheap — full smoothness at 50%
+ *    of the former motion speed.
  */
 (function () {
   "use strict";
@@ -33,13 +37,14 @@
   var lastTimestamp = 0;
   var simTime = Math.random() * 100;
 
-  // 24 FPS frame rate limit for authentic cinematic pixel art aesthetic & reduced CPU/GPU usage
+  // 24 FPS frame rate limit — smooth motion at the zoomed pitch stays well under budget
   var TARGET_FPS = 24;
   var FRAME_INTERVAL = 1000 / TARGET_FPS; // ~41.67 ms per frame
 
-  // 6px pitch grid; supports 4x4 solid, 4x4 hollow ring, and 2x2 mist dots
-  var SPACING = 6;
-  var CELL_SIZE = 4;
+  // 9px pitch grid (1.5x zoom of the original 6px pitch): ~55% fewer cells per frame;
+  // supports 6x6 solid, 6x6 hollow ring, and 3x3 mist dots
+  var SPACING = 9;
+  var CELL_SIZE = 6;
   var cols = 0;
   var rows = 0;
 
@@ -142,7 +147,8 @@
       cy: customY !== undefined ? customY : cRows * (0.15 + 0.7 * Math.random()),
       radius: 0,
       maxRadius: 22 + Math.random() * 18,
-      speed: (0.22 + Math.random() * 0.10) * 2.5,
+      // Halved expansion rate so autonomous rings match the 50% motion speed
+      speed: (0.22 + Math.random() * 0.10) * 1.25,
       strength: 0.22 + Math.random() * 0.10,
     };
   }
@@ -354,8 +360,8 @@
     ctx.clearRect(0, 0, width, height);
     buildPaletteBuckets();
 
-    // Lively simulation step calibrated for 24 FPS (~1.32 units/sec)
-    simTime += 0.055;
+    // Half-speed simulation step calibrated for 24 FPS (~0.66 units/sec, 50% of the original pace)
+    simTime += 0.0275;
 
     if (pointer.active) {
       var prevX = pointer.x < -1000 ? pointer.targetX : pointer.x;
@@ -498,10 +504,10 @@
         if (gType === 1) {
           ctx.rect(x, yPos, CELL_SIZE, CELL_SIZE);
         } else if (gType === 0) {
-          ctx.rect(x + 1, yPos + 1, 2, 2);
+          ctx.rect(x + 2, yPos + 2, 3, 3);
         } else {
           ctx.rect(x, yPos, CELL_SIZE, CELL_SIZE);
-          ctx.rect(x + 1, yPos + 1, 2, 2);
+          ctx.rect(x + 1, yPos + 1, 4, 4);
         }
       }
 

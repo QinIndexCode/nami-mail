@@ -71,7 +71,6 @@ import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agen
 import { collectAuxiliaryChatText } from "./agent/auxiliary-chat.js";
 import { polishDraftWithProvider, type PolishDraftInput, type PolishDraftResult } from "./agent/writing-polish.js";
 import { sanitizeLinksForScreening } from "./agent/auto-reply-screening.js";
-import type { SupportedLocale } from "./localization.js";
 // 会话/运行域已抽至 agent/run-engine.ts；类型在此再导出以保持公共面不变。
 export type {
   AgentConversationScope,
@@ -86,7 +85,6 @@ export type {
 } from "./agent/run-engine.js";
 import {
   AgentRunEngine,
-  maximumConversationTitleLength,
   type AgentConversation,
   type AgentConversationScope,
   type AgentConversationSummary,
@@ -414,10 +412,6 @@ export class AgentService {
       mcpManager: this.mcpManager,
       memory: this.memory,
       confirmationLifecycle: this.confirmationLifecycle,
-      // First-turn concise title generation stays a provider-domain concern on
-      // AgentService; the engine awaits it in streamMessage's finally block.
-      generateConversationTitle: (configuration, userContent, locale) =>
-        this.generateConversationTitle(configuration, userContent, locale),
       runDeadlineMs: options.runDeadlineMs,
       modelRetryBackoffMs: options.modelRetryBackoffMs,
     });
@@ -631,12 +625,22 @@ export class AgentService {
     // paired client cannot raise its own level: the host clamps it to the
     // configured CLI/MCP setting, and write tools are only reachable at the
     // confirm-every-write (send-confirmed) or full-access (auto) levels.
+    //
+    // Every permission-shaped failure below carries a `suggestion`, because the
+    // reader is usually an AI agent relaying the failure to a human: the error
+    // must say not only "why not" but the exact desktop path that fixes it, so
+    // the conversation can end with the user toggling one setting instead of
+    // the agent guessing.
     const settings = getAppSettings(this.options.db);
     const configuredLevel = rawCaller.kind === "mcp" ? settings.agentMcpAccessLevel : settings.agentCliAccessLevel;
+    const levelSettingPath = rawCaller.kind === "mcp"
+      ? "设置 → 外部连接 → MCP 访问权限 (Settings → External Connections → MCP Access Level)"
+      : "设置 → 外部连接 → CLI 访问权限 (Settings → External Connections → CLI Access Level)";
     if (externalAccessLevelRank[rawCaller.accessLevel] > externalAccessLevelRank[configuredLevel]) {
       return fail(createAgentError({
         code: "PERMISSION_DENIED",
         message: "The paired client exceeds its configured access level.",
+        suggestion: `An external client cannot raise its own access level. In Nami Mail open ${levelSettingPath} and choose the level this client should have.`,
       }));
     }
     const writeEnabled = configuredLevel !== "read-only";
@@ -672,6 +676,7 @@ export class AgentService {
         return fail(createAgentError({
           code: "SCOPE_DENIED",
           message: "The paired caller is not authorized to access a mail account.",
+          suggestion: "A pairing only sees the accounts that existed when it was approved; accounts connected later stay invisible to it. Run \"namimail pair\" again and approve it in Nami Mail to refresh the account snapshot.",
         }));
       }
       const call: ToolCall = {
@@ -741,6 +746,7 @@ export class AgentService {
       return fail(createAgentError({
         code: "SCOPE_DENIED",
         message: "The paired caller is not authorized to access a mail account.",
+        suggestion: "A pairing only sees the accounts that existed when it was approved; accounts connected later stay invisible to it. Run \"namimail pair\" again and approve it in Nami Mail to refresh the account snapshot.",
       }));
     }
     const call: ToolCall = {
@@ -763,6 +769,7 @@ export class AgentService {
       return fail(createAgentError({
         code: "PERMISSION_DENIED",
         message: "The configured access level does not permit external Nami Mail write operations.",
+        suggestion: `This tool needs write access. In Nami Mail open ${levelSettingPath} and switch it to 操作前确认 (confirm each write, a desktop dialog asks before every change) or 完全自动 (full access, no per-operation confirmation).`,
       }));
     }
     this.confirmationLifecycle.prepareConfirmationPayload(call, input.requestId, executionAccountIds);
@@ -781,6 +788,7 @@ export class AgentService {
           code: "NOT_SUPPORTED",
           message: "The desktop host cannot confirm external write operations right now.",
           retryable: true,
+          suggestion: "Start (or focus) the Nami Mail desktop app so it can show the confirmation dialog, then retry this call.",
         }));
       }
       const decision = await confirm.request({
@@ -796,6 +804,7 @@ export class AgentService {
         return fail(createAgentError({
           code: "CONFIRMATION_REJECTED",
           message: "The desktop user rejected the external write operation.",
+          suggestion: "A person in the Nami Mail app declined this operation. Check with them before retrying; repeated retries will keep showing the same dialog.",
         }));
       }
       // Record the host's decision as a durable receipt so the runtime can
@@ -1016,52 +1025,6 @@ export class AgentService {
   /** Language-only polish of a compose body. The prompt, the consent boundary and the size cap all live in agent/writing-polish.ts. */
   polishDraft(input: PolishDraftInput, options: { signal?: AbortSignal } = {}): Promise<PolishDraftResult> {
     return polishDraftWithProvider({ runtime: this.runtime, providerService: this.providerService, ...input, ...options });
-  }
-
-  /**
-   * Generates a concise conversation title from the user's first message via a
-   * SEPARATE, non-streamed provider call that never touches the conversation
-   * history, so the main turn's message list (and therefore any provider-side
-   * prompt-cache prefix) is unchanged. Best-effort: any failure leaves the
-   * provisional title in place and is swallowed by the caller.
-   *
-   * The call goes through the runtime seam like every other provider chat, so a
-   * test that stubs `runtime.streamChat` intercepts this tail call too instead
-   * of discovering it as an unmocked outbound request.
-   */
-  private async generateConversationTitle(
-    configuration: ProviderConfiguration,
-    userContent: string,
-    locale: SupportedLocale,
-  ): Promise<string | undefined> {
-    const titleLength = maximumConversationTitleLength;
-    const chat: ProviderChatRequest = {
-      requestId: `title-${randomUUID()}`,
-      providerId: configuration.id,
-      model: configuration.model,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "Generate a concise conversation title for the user's first message in a mail assistant.",
-            "Rules:",
-            "1. Output ONLY the title text — no quotes, no markdown, no explanations.",
-            "2. Keep it short (at most 24 characters when possible) and specific, not generic like \"question\".",
-            `3. Reply in the same language as the user's message (locale ${locale}).`,
-          ].join(" "),
-        },
-        { role: "user", content: userContent.slice(0, 4_000) },
-      ],
-      tools: [],
-      allowToolCalls: false,
-      responseFormat: "text",
-      temperature: 0.2,
-    };
-    const outcome = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
-    if (outcome.status === "error") return undefined;
-    const normalized = outcome.text.replace(/\s+/g, " ").trim().replace(/^["“”']+|["“”']+$/g, "");
-    if (!normalized) return undefined;
-    return normalized.length <= titleLength ? normalized : `${normalized.slice(0, titleLength - 3).trimEnd()}...`;
   }
 
   /** Offline auto-reply review used by the auto-reply pipeline. A single

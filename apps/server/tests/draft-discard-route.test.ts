@@ -26,8 +26,8 @@ function insertDraft(db: DatabaseHandle): void {
     "imap.example.com", 993, 1, "smtp.example.com", 465, 1,
     "email", "connected", now,
   );
-  db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-    .run("account-1", "Drafts", "Drafts", "\\Drafts", 1, 0);
+  db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+    .run("account-1", "Drafts", "Drafts", "\\Drafts");
   db.prepare(`
     INSERT INTO messages (
       id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,

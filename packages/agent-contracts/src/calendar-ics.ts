@@ -185,12 +185,17 @@ function normalizeCalendarColor(rawColor?: string): CalendarEventColor {
 
 /**
  * Generates an RFC 5545 iCalendar string from a list of calendar events.
+ *
+ * PRODID names the product rather than the release, so it carries no version:
+ * a versioned PRODID needs a manual bump on every release and goes stale
+ * silently, while consumers that group calendars by PRODID see the identity
+ * churn for no benefit.
  */
 export function generateIcs(events: readonly CalendarEventExportSource[], calendarName = "Nami Calendar"): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Nami Mail//Nami Calendar v0.5.1//EN",
+    "PRODID:-//Nami Mail//Nami Calendar//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escapeIcsText(calendarName)}`,

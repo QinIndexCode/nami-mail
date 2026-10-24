@@ -4,7 +4,25 @@
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node", "vitest/globals"],
-    "sourceMap": true
+    "sourceMap": true,
+    // `better-sqlite3-multiple-ciphers` ships `index.d.ts`, but its package
+    // `exports` map lists only JS entry points and no `types` condition, so
+    // NodeNext resolution reports TS7016 for every import of the driver
+    // (`lib/index.js` implicitly has an `any` type). Point the specifier at the
+    // shipped declaration file rather than vendoring a copy or re-adding
+    // DefinitelyTyped's `@types/better-sqlite3`, which would drift from the
+    // installed version.
+    //
+    // This alias is for the type checker alone, and it is not free: tsx applies
+    // tsconfig `paths` to runtime resolution too, which loads this declaration
+    // file as the driver and kills startup with `ReferenceError: Database is not
+    // defined` (its `export = Database` is erased before it can run). The dev
+    // server therefore runs on tsconfig.runtime.json, which inherits everything
+    // here except `paths`; any other tsx entry that reaches the driver needs the
+    // same treatment.
+    "paths": {
+      "better-sqlite3-multiple-ciphers": ["../../node_modules/better-sqlite3-multiple-ciphers/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"]

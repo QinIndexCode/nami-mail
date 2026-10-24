@@ -1,8 +1,8 @@
 /**
  * Language-only polish of the body the user is composing.
  *
- * This is the fourth host-initiated provider chat (after the title generator,
- * the retrieval expander and the translation reader), so it rides the same
+ * This is the third host-initiated provider chat (after the retrieval expander
+ * and the translation reader), so it rides the same
  * seam — `collectAuxiliaryChatText`, which resolves to `AgentRuntime
  * .streamChat` — and never reaches for a provider adapter itself. Nothing here
  * opens a socket: the endpoint URL, its scheme and its host are validated

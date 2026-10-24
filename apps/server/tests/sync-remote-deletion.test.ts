@@ -78,8 +78,8 @@ describe("remote deletion reconciliation", () => {
     specialUse: string | null = "\\Inbox",
   ): void {
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
-      VALUES (?, ?, ?, ?, 1, 0, ?)
+      INSERT INTO folders (account_id, path, name, special_use, uid_validity)
+      VALUES (?, ?, ?, ?, ?)
     `).run("account-1", path, path, specialUse, uidValidity);
   }
 
@@ -332,8 +332,8 @@ describe("remote deletion probe abort", () => {
         'smtp.example.test', 465, 1, 'email', 'connected', ?)
     `).run(now);
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
-      VALUES ('account-1', 'INBOX', 'INBOX', '\\Inbox', 0, 0, '10')
+      INSERT INTO folders (account_id, path, name, special_use, uid_validity)
+      VALUES ('account-1', 'INBOX', 'INBOX', '\\Inbox', '10')
     `).run();
     for (let uid = 1; uid <= 3; uid += 1) {
       db.prepare(`
@@ -461,8 +461,8 @@ describe("remote deletion probe cursor ownership", () => {
         'smtp.example.test', 465, 1, 'email', 'connected', ?)
     `).run("account-1", "demo@example.test", now);
     db.prepare(`
-      INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity)
-      VALUES ('account-1', 'INBOX', 'INBOX', '\\Inbox', 0, 0, '10')
+      INSERT INTO folders (account_id, path, name, special_use, uid_validity)
+      VALUES ('account-1', 'INBOX', 'INBOX', '\\Inbox', '10')
     `).run();
   });
 

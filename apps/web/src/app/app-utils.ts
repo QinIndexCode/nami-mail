@@ -1,4 +1,5 @@
 import DOMPurify from "dompurify";
+import { hasVisibleAttachments, visibleAttachments } from "@nami/agent-contracts";
 import type { MoveTarget } from "../api";
 import type { AttachmentKind } from "../attachmentPresentation";
 import { presentAttachment } from "../attachmentPresentation";
@@ -129,6 +130,21 @@ export function buildMessageQuery({
   return query.toString();
 }
 
+/**
+ * The account scope `/api/stats` must use to describe the list
+ * {@link buildMessageQuery} loads. "all" is the whole mailbox, and a global
+ * search spans every account even when one account row is selected, so its
+ * badges do too.
+ */
+export function messageQueryAccountScope(
+  accountId: string,
+  search: string,
+  searchScope: "view" | "all",
+): string | undefined {
+  if (accountId === "all") return undefined;
+  return searchScope === "all" && search.trim() !== "" ? undefined : accountId;
+}
+
 export function demoMessageTotal(messages: readonly Message[], accounts: readonly Account[], {
   accountId,
   folder,
@@ -158,10 +174,10 @@ export function demoMessageTotal(messages: readonly Message[], accounts: readonl
       if (messageView === "starred" && !message.flagged) return false;
       if (messageView === "archived" && !isArchivedMessage(message, accounts)) return false;
       if (messageView === "snoozed" && !isSnoozedMessage(message)) return false;
-      if (messageView === "attachments" && !message.hasAttachments) return false;
+      if (messageView === "attachments" && !hasVisibleAttachments(message.attachments)) return false;
     }
     if (attachmentKind
-      && !message.attachments.some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
+      && !visibleAttachments(message.attachments).some((item) => presentAttachment(item.filename, item.contentType).kind === attachmentKind)) {
       return false;
     }
     if (after || before) {
@@ -188,7 +204,7 @@ export const moveTargetSpecialUses: Record<MoveTarget, string[]> = {
 
 export function moveActionKey(target: MoveTarget, selection: boolean): string {
   if (selection) {
-    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : "mail.selection.reportedSpam";
+    return target === "archive" ? "mail.selection.archived" : target === "trash" ? "mail.selection.trashed" : target === "junk" ? "mail.selection.reportedSpam" : "mail.selection.restored";
   }
   return target === "archive" ? "mail.action.archived" : target === "trash" ? "mail.action.trashed" : target === "junk" ? "mail.action.reportedSpam" : "mail.action.recoveredFromSpam";
 }
@@ -361,7 +377,8 @@ export const IMAGE_PROXY_PATH = "/api/images/proxy";
  * would perform under its own IP, so the proxy takes it over instead. The URL is
  * resolved against the document first so a protocol-relative `//host/pixel`
  * arrives at the proxy as an absolute URL the server can parse at all.
- */
+ * Taking it over does not hide the open: the proxy request still leaves this
+ * machine, so the sender can still observe the time and source address. */
 function proxiedImageSource(source: string): string | null {
   const value = source.trim();
   if (!value) return null;
@@ -493,6 +510,11 @@ const REMOTE_SRCSET_SELECTOR = 'img, source, input[type="image" i]';
  * server (address allow-list, DNS rebinding caught at resolve time, per-hop
  * redirect re-checks, byte and wall-clock ceilings), but nothing called it, so
  * the images went direct.
+ *
+ * The proxy removes the renderer's direct connection, not the disclosure: its
+ * request still leaves this machine at open time, so the sender can still see
+ * the open. Blocking remote images by default, per-message authorization, or
+ * per-sender allowlists remain open product decisions; this rewrite is not one.
  *
  * Applied AFTER `sanitizeMailHtml`, whose DOMPurify pass must keep its own
  * configuration untouched. Kept as a separate export so that contract stays

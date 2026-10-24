@@ -103,6 +103,55 @@ const BEGIN_MOVE_INTENT_SQL = `
           pending_move_special_use = ?
       WHERE id = ? AND COALESCE(pending_move_destination, '') = ''
     `;
+// The acceptance-time GOAL of a local-first move job. `pending_move_state` is
+// deliberately NULL: every reader in the codebase already treats "a destination
+// without the 'intent' state" as "this message belongs to the destination
+// folder", which is exactly the user's goal the moment they confirm a bulk
+// delete — the row leaves the source view immediately, the remote-deletion
+// probe and backup skip it (they key off `pending_move_destination`), and the
+// archived filter's COALESCE(state,'confirmed') files an archive goal in the
+// archived view. 'intent' stays reserved for "the MOVE command may be in
+// flight", which the worker writes below as it claims its own goal.
+//
+// The guard mirrors `moveActionBlockedError`: a row that already carries a
+// destination is somebody else's pending move (or the user's own newer
+// action) and must not be hijacked.
+const BEGIN_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = ?,
+        pending_move_special_use = ?,
+        pending_move_candidate_uid = NULL,
+        pending_move_state = NULL
+    WHERE id = ? AND COALESCE(pending_move_destination, '') = '' AND pending_move_state IS NULL
+  `;
+// The worker claiming the goal it wrote at acceptance: `BEGIN_MOVE_INTENT_SQL`
+// refuses any row that already has a destination, which is right for a user
+// action and wrong for the job that owns the goal — it would block on its own
+// record. This claims exactly the one case that belongs to the caller: a row
+// whose untouched goal points at the very destination this move is going to.
+const CLAIM_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = ?,
+        pending_move_state = 'intent',
+        pending_move_candidate_uid = ?,
+        pending_move_special_use = ?
+    WHERE id = ? AND (
+      COALESCE(pending_move_destination, '') = ''
+      OR (pending_move_state IS NULL AND pending_move_destination = ?)
+    )
+  `;
+// Puts a goal back: the provider refused the message, or the work gave up on
+// it. The guard is what makes this safe to run twice — only an untouched goal
+// for this exact destination is cleared, so an intent the worker already
+// claimed (and the recovery paths that own it) is never clobbered.
+const CLEAR_MOVE_GOAL_SQL = `
+    UPDATE messages
+    SET pending_move_destination = NULL,
+        pending_move_special_use = NULL,
+        pending_move_candidate_uid = NULL,
+        pending_move_state = NULL
+    WHERE id = ? AND pending_move_state IS NULL AND pending_move_destination = ?
+  `;
 const CANDIDATE_UID_SQL = `
     SELECT uid FROM messages
     WHERE account_id = ? AND mailbox = ? AND remote_id_lookup = ? AND id <> ?
@@ -155,18 +204,6 @@ const RECONCILE_CONFIRM_SQL = `
           all_mail_archived = ?
       WHERE id = ? AND pending_move_state = 'intent'
     `;
-const DECREASE_FOLDER_COUNT_SQL = `
-    UPDATE folders
-    SET
-      total = CASE WHEN total > 0 THEN total - 1 ELSE 0 END,
-      unseen = CASE WHEN ? = 1 AND unseen > 0 THEN unseen - 1 ELSE unseen END
-    WHERE account_id = ? AND path = ?
-  `;
-const INCREASE_FOLDER_COUNT_SQL = `
-      UPDATE folders
-      SET total = total + 1, unseen = unseen + ?
-      WHERE account_id = ? AND path = ?
-    `;
 const TRASH_SYSTEM_VIEW_MIRRORS_SQL = `
     SELECT id, mailbox, uid, flags_json, all_mail_archived
     FROM messages
@@ -190,7 +227,9 @@ const DELETE_MIRROR_ROW_SQL = `
       AND COALESCE(pending_move_destination, '') = ''
       AND pending_move_state IS NULL
   `;
-const ROWS_BY_IDS_SELECT = "SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state";
+const ROWS_BY_IDS_SELECT = `SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state,
+    (SELECT f.uid_validity FROM folders AS f
+      WHERE f.account_id = messages.account_id AND f.path = messages.mailbox) AS origin_uid_validity`;
 /**
  * `resolveMoveDestination`'s folder lookup. The `?` count is the *only* thing
  * that varies — the special-use names are always bound — so one statement per
@@ -216,6 +255,12 @@ export type MoveStatements = {
   readonly clearMoveIntent: MoveStatement;
   /** Claims the durable 'intent' before the provider command is issued. */
   readonly beginMoveIntent: MoveStatement;
+  /** Writes the acceptance-time goal of a local-first move job. */
+  readonly beginMoveGoal: MoveStatement;
+  /** Claims a job's own goal as an 'intent' before the command is issued. */
+  readonly claimMoveGoal: MoveStatement;
+  /** Puts an unclaimed goal back after a refusal or a give-up. */
+  readonly clearMoveGoal: MoveStatement;
   /** The unique cached destination copy to reconcile onto, if there is one. */
   readonly candidateUid: MoveStatement;
   /** Is the preferred negative placeholder UID still occupied? */
@@ -230,9 +275,6 @@ export type MoveStatements = {
   readonly reconcileDuplicateRows: MoveStatement;
   readonly reconcileRemoveDestinationRows: MoveStatement;
   readonly reconcileConfirm: MoveStatement;
-  /** Folder counters, shared by the move itself and the mirror cleanup. */
-  readonly decreaseFolderCount: MoveStatement;
-  readonly increaseFolderCount: MoveStatement;
   readonly trashSystemViewMirrors: MoveStatement;
   readonly deleteMirrorRow: MoveStatement;
   /** `batchMoveMessages`' row lookup, one compiled statement per IN width. */
@@ -288,6 +330,9 @@ export function createMoveStatements(db: DatabaseHandle): MoveStatements {
   return {
     get clearMoveIntent() { return once("clearMoveIntent", CLEAR_MOVE_INTENT_SQL); },
     get beginMoveIntent() { return once("beginMoveIntent", BEGIN_MOVE_INTENT_SQL); },
+    get beginMoveGoal() { return once("beginMoveGoal", BEGIN_MOVE_GOAL_SQL); },
+    get claimMoveGoal() { return once("claimMoveGoal", CLAIM_MOVE_GOAL_SQL); },
+    get clearMoveGoal() { return once("clearMoveGoal", CLEAR_MOVE_GOAL_SQL); },
     get candidateUid() { return once("candidateUid", CANDIDATE_UID_SQL); },
     get preferredUidInUse() { return once("preferredUidInUse", PREFERRED_UID_IN_USE_SQL); },
     get lowestPendingUid() { return once("lowestPendingUid", LOWEST_PENDING_UID_SQL); },
@@ -297,8 +342,6 @@ export function createMoveStatements(db: DatabaseHandle): MoveStatements {
     get reconcileDuplicateRows() { return once("reconcileDuplicateRows", RECONCILE_DUPLICATE_ROWS_SQL); },
     get reconcileRemoveDestinationRows() { return once("reconcileRemoveDestinationRows", RECONCILE_REMOVE_DESTINATION_ROWS_SQL); },
     get reconcileConfirm() { return once("reconcileConfirm", RECONCILE_CONFIRM_SQL); },
-    get decreaseFolderCount() { return once("decreaseFolderCount", DECREASE_FOLDER_COUNT_SQL); },
-    get increaseFolderCount() { return once("increaseFolderCount", INCREASE_FOLDER_COUNT_SQL); },
     get trashSystemViewMirrors() { return once("trashSystemViewMirrors", TRASH_SYSTEM_VIEW_MIRRORS_SQL); },
     get deleteMirrorRow() { return once("deleteMirrorRow", DELETE_MIRROR_ROW_SQL); },
     rowsByIds,
@@ -317,33 +360,19 @@ export function moveStatements(db: DatabaseHandle): MoveStatements {
   return created;
 }
 
-function messageIsUnseen(flagsJson: string): boolean {
-  try {
-    const flags = JSON.parse(flagsJson);
-    return Array.isArray(flags) && !flags.includes("\\Seen");
-  } catch {
-    // A malformed legacy cache row must not make an already-confirmed server
-    // MOVE look like a failure. A later sync will repair the folder count.
-    return false;
-  }
-}
-
-export function updateFolderCountsForMove(
-  statements: MoveStatements,
-  message: { account_id: string; mailbox: string; flags_json: string },
-  destination: MoveDestination,
-  destinationAlreadyCached = false,
-): void {
-  const unseen = messageIsUnseen(message.flags_json) ? 1 : 0;
-  statements.decreaseFolderCount.run(unseen, message.account_id, message.mailbox);
-
-  // Gmail's \All already contains the message before archive removes its
-  // Inbox label. Physical archive, trash, junk, and inbox folders gain a new
-  // membership (the last one when a misclassified Junk message is recovered).
-  if (!destinationAlreadyCached && (destination.special_use === "\\Archive" || destination.special_use === "\\Trash" || destination.special_use === "\\Junk" || destination.special_use === "\\Inbox")) {
-    statements.increaseFolderCount.run(unseen, message.account_id, destination.path);
-  }
-}
+// `messageIsUnseen`, `updateFolderCountsForMove`, `countSourceFolderDeparture`
+// and `revertSourceFolderDeparture` used to live here, along with the two
+// `UPDATE folders SET total = ..., unseen = ...` statements they ran. All four
+// are deleted with the count columns (contract §3.6): a move now changes only
+// which rows `messages` holds, and every sidebar number is derived from that
+// table, so there is no counter to decrement here, nothing for the acceptance
+// commit to take out early, and nothing for a refusal to hand back. The
+// depart/revert pair's whole reason to exist -- that a clamped ±1 counter is not
+// an identity under composition -- disappears with the counter.
+//
+// What did NOT move with them: the UIDPLUS/reconcile bookkeeping above, the
+// mirror-row deletion below, and the move's own state machine. Those change rows,
+// not counters.
 
 export function pendingMoveUid(
   statements: MoveStatements,
@@ -385,7 +414,8 @@ export function cachedDestinationCandidateUid(
  * keeps one row per folder view. After a confirmed move to \Trash those mirror
  * rows are stale and would keep deleted mail visible in the All Mail /
  * Important views until the slow remote-deletion probe sweep happens to reach
- * them. Removes them and adjusts the affected folder counts. Custom-label
+ * them. Removes them — the affected folders' counts need no adjustment, since
+ * they are derived from the rows this deletes (contract §3.6). Custom-label
  * folder rows are kept: Gmail preserves those labels on trashed messages.
  *
  * Gmail reports \All / \Flagged / \Inbox via LIST special-use but not
@@ -406,7 +436,6 @@ export function removeTrashSystemViewMirrors(
   const mirrorRows = statements.trashSystemViewMirrors.all(message.account_id, message.remote_id_lookup, messageId, message.account_id) as TrashMirrorRow[];
   if (!mirrorRows.length) return;
   for (const mirror of mirrorRows) {
-    statements.decreaseFolderCount.run(messageIsUnseen(mirror.flags_json) ? 1 : 0, message.account_id, mirror.mailbox);
     statements.deleteMirrorRow.run(mirror.id, message.account_id, mirror.mailbox);
     if (agentEvents && agentLease) {
       agentEvents.messageDeletedWithinTransaction(agentLease, mirror.id, {

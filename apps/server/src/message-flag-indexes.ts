@@ -49,6 +49,82 @@ export const FLAGGED_PREDICATE_SQL = `flags_json LIKE '%${FLAGGED_FLAG_TEXT}%'`;
 export const UNSEEN_PREDICATE_SQL = `flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%'`;
 
 /**
+ * The marker that makes `flags_json` the user's target: a `flags` task exists
+ * and has not settled.
+ *
+ * It is written by the local-first commit (`tasks/kinds/flags.ts`) in the same
+ * transaction as the durable task, and cleared only by that task's settlement
+ * (`tasks/settlement.ts`) once no newer push holds the row. That is why it is
+ * the task model's whole answer to "may the provider overwrite this row?" —
+ * reading `task_items` on the sync hot path would answer the same question with
+ * a join; the bit is maintained by the same commitment and costs nothing.
+ */
+export const FLAGS_INTENT_MARKER_SQL = `pending_flags_push = 1`;
+
+/** The same predicate for a write that must leave a pending target alone. */
+export const NO_FLAGS_INTENT_SQL = `pending_flags_push IS NOT 1`;
+
+/**
+ * The flag text the server is known to hold, for a row whose local value may be
+ * an unconfirmed optimistic write.
+ *
+ * `flags_json` is updated by the local-first commit along with the
+ * `pending_flags_push` marker, so while that marker is set it is the user's
+ * TARGET, not the server's state; `pending_flags_base_json` holds the value
+ * from before the row first went pending. Once the marker is cleared the two
+ * cannot diverge — the settlement hook only clears it after the push behind the
+ * row has finished — so both spellings select the same rows for a settled row.
+ */
+export const CONFIRMED_FLAGS_SQL = `(CASE WHEN ${FLAGS_INTENT_MARKER_SQL} THEN COALESCE(pending_flags_base_json, flags_json) ELSE flags_json END)`;
+
+/**
+ * The value a reconciler may write over `flags_json` when the provider reports
+ * its own flag set.
+ *
+ * Every sync write of provider flags goes through this, so the one rule — an
+ * unconfirmed local write outranks the remote until its task settles — is
+ * spelled once. The sync's metadata refresh uses {@link NO_FLAGS_INTENT_SQL} in
+ * its `WHERE` instead, because there the changed-row count is itself the signal
+ * (an agent event must not claim a flags change the guard suppressed); every
+ * other reconciler (a move's position confirmation, the sent-placeholder
+ * upsert) needs the assignment to succeed without replacing the target, which
+ * is what this `CASE` does.
+ *
+ * @param remoteSql a SQL expression for the provider's flag text, usually `?`
+ *   or `excluded.flags_json`.
+ */
+export function flagsJsonFromRemoteSql(remoteSql: string): string {
+  return `CASE WHEN ${FLAGS_INTENT_MARKER_SQL} THEN flags_json ELSE ${remoteSql} END`;
+}
+
+/**
+ * The view under EITHER reading — the user's target or the server's state.
+ *
+ * This is what a batch selection resolves on. The list shows the target, so a
+ * selection must never exclude a row the user can see (they just starred it,
+ * and the view they are selecting in shows it starred); and the server's state
+ * must not be silently excluded either, or replaying a select-all after a
+ * pending write would come back empty (the message is still unread as far as
+ * the server is concerned, so it must answer the second selection too). Only
+ * the pending window can differ, and inside it both readings are defensible —
+ * the union is the one that never loses a message the user meant to act on.
+ *
+ * It is therefore a SUPERSET of what the list displays: inside that window a
+ * row whose local target has already left the view (marked read, while the
+ * server still holds it unread) is selected too. A caller that counts rows must
+ * expect its total to exceed the visible row count by exactly those pending
+ * rows — the job reports the work it was asked to do, not the page's length.
+ *
+ * No partial index can serve these, by design: the predicate reads a CASE
+ * expression, so the planner cannot prove it implied by an index whose WHERE
+ * names `flags_json` directly. The list itself keeps the indexed local
+ * predicate (it must show the optimistic value immediately), while a batch
+ * job's selection resolves a few times per job rather than per row.
+ */
+export const EITHER_FLAGGED_PREDICATE_SQL = `(flags_json LIKE '%${FLAGGED_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} LIKE '%${FLAGGED_FLAG_TEXT}%')`;
+export const EITHER_UNSEEN_PREDICATE_SQL = `(flags_json NOT LIKE '%${SEEN_FLAG_TEXT}%' OR ${CONFIRMED_FLAGS_SQL} NOT LIKE '%${SEEN_FLAG_TEXT}%')`;
+
+/**
  * The two negations, for callers that filter on the opposite sense (the Agent's
  * list tool takes a boolean, so it needs both). No partial index is keyed on
  * these — there is no "seen" or "unflagged" view to serve, and adding one is a
@@ -72,4 +148,33 @@ export const SEEN_PREDICATE_SQL = `flags_json LIKE '%${SEEN_FLAG_TEXT}%'`;
 export const MESSAGE_FLAG_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_messages_flagged ON messages(account_id, sort_key DESC, id DESC) WHERE ${FLAGGED_PREDICATE_SQL};
   CREATE INDEX IF NOT EXISTS idx_messages_unseen ON messages(account_id, sort_key DESC, id DESC) WHERE ${UNSEEN_PREDICATE_SQL};
+`;
+
+/**
+ * The index the sidebar's derived per-folder unread count is built on.
+ *
+ * `folder-counts.ts` asks one top-level WHERE per folder — the only shape that
+ * can use a partial index (an aggregate with the predicate in a `SUM(CASE ...)`
+ * arm is declined outright, measured at 363.81ms against 0.86ms for ten
+ * folders). The predicate is this module's own constant, so the spelling is
+ * identical to the query's by construction.
+ *
+ * Three columns, and the third is not an optimisation: the unified-inbox badge
+ * additionally excludes actively-snoozed mail (its list does), and that term
+ * does not disqualify the index — but unless `snoozed_until` is IN the index,
+ * SQLite has to fetch every matching row from the main table to read it.
+ * Measured on 51k rows: 1.30ms with the column, 68.07ms without.
+ *
+ * The DDL is `CREATE INDEX IF NOT EXISTS` alone — deliberately no `DROP … ;
+ * CREATE …`, which is what message-list-indexes.ts uses for the two indexes it
+ * owns. Those two predate this build and may hold an older shape in a user's
+ * database; this name has never shipped, so there is nothing to reshape, and
+ * migrateDatabase runs on EVERY open, so an unconditional DROP+CREATE would
+ * rebuild it on every launch (measured: 330-412ms on 48k rows). If its shape
+ * ever must change: bump SCHEMA_VERSION, then put the DROP+CREATE inside that
+ * version's guard — never make it unconditional.
+ */
+export const FOLDER_COUNT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_messages_unseen_by_folder
+    ON messages(account_id, effective_mailbox, snoozed_until) WHERE ${UNSEEN_PREDICATE_SQL};
 `;

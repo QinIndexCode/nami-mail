@@ -25,5 +25,5 @@ Documentation is organized by topic; each topic maintains a Chinese version (`.z
 | [rag/](rag/architecture.en.md) | 邮件 RAG 入库、清洗、检索与删除同步 / mail RAG ingestion, retrieval, deletion sync |
 | [releases/](releases/README.en.md) | 版本发布说明 / release notes |
 
-> 完整文档索引与开发说明：语言版本索引中包含全部文档链接。
-> For the full list of documents and the contribution index, use the language versions above.
+> 完整文档索引与开发说明：语言版本索引列出主要公开文档入口与已发布页面。
+> For the document list and the contribution index, use the language versions above; they list the main public documents and published pages.

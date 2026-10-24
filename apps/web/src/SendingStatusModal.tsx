@@ -30,10 +30,16 @@ export function submissionNoticeMessage(
   t: Translate = (key, values) => translate("zh-CN", key, values),
   providerId?: string,
 ): string | null {
+  if (submission.deliveryStatus === "unknown_delivery") {
+    // `mailErrorMessage` would fall through to its generic unknown-error
+    // guidance ("check your network and try again"), which is the opposite of
+    // what this state needs: the mail may already have left.
+    return t("sending.notice.unknownDeliveryDetail");
+  }
   if (submission.errorMessage) {
     return mailErrorMessage(
       { code: submission.errorCode ?? undefined, message: submission.errorMessage },
-      submission.deliveryStatus === "unknown_delivery" ? t("sending.notice.unknownDelivery") : t("sending.notice.incomplete"),
+      t("sending.notice.incomplete"),
       t,
       { providerId },
     );

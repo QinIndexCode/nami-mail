@@ -283,16 +283,58 @@ describe("Agent RAG event worker", () => {
     const replacementUpsert = claims.find((claim) => claim.eventId === "replacement-upsert");
     expect(staleDelete).toBeDefined();
     expect(replacementUpsert).toBeDefined();
-    const internals = worker as unknown as { processClaim: (claim: ClaimedSourceEvent) => void };
+    const internals = worker as unknown as { processClaim: (claim: ClaimedSourceEvent) => Promise<void> };
 
-    internals.processClaim(replacementUpsert!);
+    await internals.processClaim(replacementUpsert!);
     outbox.complete(replacementUpsert!);
-    internals.processClaim(staleDelete!);
+    await internals.processClaim(staleDelete!);
     outbox.complete(staleDelete!);
 
     const indexed = await worker.search(["account-1"], "current project review", 5);
     expect(indexed).toHaveLength(1);
     expect(indexed[0]?.citation).toMatchObject({ messageId: "message-1", subject: "Current project report" });
+    await worker.stop();
+  });
+
+  it("yields to the event loop between chunks of a large message", async () => {
+    db = openDatabase(":memory:");
+    masterKey = randomBytes(32);
+    insertAccount(db);
+    const longBody = Array.from({ length: 30 }, (_, index) =>
+      `Paragraph ${index}: ${"project review status update ".repeat(20)}`,
+    ).join("\n\n");
+    insertMessage(db, "account-1", "message-long", 1, "Long project report", longBody);
+    applyAgentStoreSchema(db, "2026-07-27T10:00:00.000Z");
+    const lifecycle = new AccountLifecycleStore(db, masterKey);
+    const outbox = new AgentSourceEventOutbox(db, masterKey, lifecycle);
+    const lease = lifecycle.acquireLease("account-1");
+    outbox.enqueue({
+      lease,
+      event: {
+        eventId: "long-upsert",
+        type: "message-upserted",
+        accountId: "account-1",
+        accountGeneration: lease.generation,
+        revision: "revision-long",
+        source: { kind: "message", messageId: "message-long" },
+        occurredAt: "2026-07-27T10:00:01.000Z",
+      },
+    });
+    const worker = new AgentRagWorker({ db, masterKey, lifecycle, sourceEvents: outbox });
+    const claim = outbox.claimPending({ owner: "yield-worker" })[0]!;
+    const internals = worker as unknown as { processClaim: (claim: ClaimedSourceEvent) => Promise<void> };
+
+    // A macrotask queued before the claim can only run if the chunk loop
+    // yields; without the yield the whole upsert settles in microtasks first.
+    let ranWhileIndexing = false;
+    setImmediate(() => { ranWhileIndexing = true; });
+    await internals.processClaim(claim);
+    expect(ranWhileIndexing).toBe(true);
+
+    const pages = db.prepare(
+      "SELECT COUNT(*) AS count FROM agent_rag_pages WHERE account_id = ?",
+    ).get("account-1") as { count: number };
+    expect(pages.count).toBeGreaterThan(8);
     await worker.stop();
   });
 });
@@ -438,8 +480,8 @@ describe("Agent service lifecycle fence", () => {
     })) events.push(event);
 
     // Every provider chat the host makes crosses this one seam, so "no stream
-    // was started" is a single assertion about the whole host — the turn, the
-    // second retrieval arm and the tail title call all count as one.
+    // was started" is a single assertion about the whole host — the turn and
+    // the second retrieval arm both count.
     expect(providerStream).not.toHaveBeenCalled();
     expect(events).toContainEqual(expect.objectContaining({
       type: "error",

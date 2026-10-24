@@ -49,7 +49,16 @@ GitHub Actions 使用下列 Secrets：
 
 ## 本地预检
 
-先更新 [变更日志](../CHANGELOG.zh-CN.md)，确认用户可见文案、许可和版本号都正确。执行与本次改动相关的检查，再执行完整基线：
+先更新 [变更日志](../CHANGELOG.zh-CN.md)，确认用户可见文案、许可和版本号都正确。
+
+`package.json` 是版本号的唯一来源，其余每一处版本号要么由它派生、要么与它比对。执行下面的检查之前，先让这些位置保持一致：
+
+- `npm.cmd run sync:version` 会重写不含版本专属文案的副本：`site/index.html` 的 hero 徽标，以及 `docs/cli/examples.*.md` 与 `docs/cli/output-schema.*.md` 中的 `namimail version` 与 `meta.version` 示例输出。
+- 它有意不重写的是每个版本单独撰写的句子。三个 README 都用 `<!-- whats-new: v<version> -->` 钉住自己的版本小节（写在标题上一行），并链接 `docs/releases/v<version>.<lang>.md`；`docs/releases/README.<lang>.md` 列出该版本，本指南则指名当前版本的发布说明。脚本无法凭空生成这些文案——硬套会把某个版本的说明错标成另一个版本，因此必须在版本号变更的同一次提交里手工更新全部位置。
+- `npm.cmd run sync:version:check` 只报错不写入，并在 PR 门禁与发布工作流中运行，因此停留在上一版本的落地页既无法合入、也无法打标签。被发布的版本必须在两种语言下都已存在版本说明，检查才会通过。发布工作流还会额外运行 `node scripts/verify-release-notes.mjs`，它要求存在作为 GitHub Release 正文的 `docs/releases/v<version>.md`。
+- `npm.cmd run docs:release-review` 把上面这些位置合成一份工作清单：**BLOCK** 段是这次发布缺什么（版本说明三件套、三个 README 的 `whats-new` 标记、变更日志的 `[Unreleased]`、发布说明索引条目），**EDIT** 段列出每个 `shipped-as` 标记还停在旧版本的文档——那份清单就是切版本时必须重写的文件，改完再跑一次应当为空。`npm.cmd run docs:claims:check` 则保证文档里的版本号与工具数与事实一致，两者都在 PR 门禁里。
+
+执行与本次改动相关的检查，再执行完整基线：
 
 ```powershell
 npm.cmd ci
@@ -111,7 +120,7 @@ npm.cmd run package:win:github
 - 数据兼容性、需要用户重新登录/重新授权的情况，以及是否存在不可逆迁移；
 - 仅下载本 Release 页面列出的 Windows `.exe` 安装程序进行手动安装。版本化 ZIP 和 JSON 是自动更新内部资源，不应让用户自行解压或运行。
 
-本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.zh-CN.md)。Git 源码标签已推进至 `v0.5.1`（含 `v0.1.0`、`v0.1.2`、`v0.2.0`–`v0.2.3`、`v0.3.0`、`v0.4.0`、`v0.4.3`、`v0.5.0`、`v0.5.1`；`v0.4.1` 与 `v0.4.2` 暂无独立 tag），代码库当前 `package.json` 版本为 `0.5.1`。`releases/v0.5.1.md` 与 CHANGELOG 顶部的 `[0.5.1]` 是该版本的正式发布说明（修复 Windows 重启更新后台进程退出与覆盖安装缺陷）。保留的 [候选模板](releases/v0.1.1-candidate.zh-CN.md) 仅用于发布前检查。任何新版本的待发布说明均应保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才能在后续版本说明中写为已完成。
+本仓库将可公开审阅的版本说明放在 [Release Notes 目录](releases/README.zh-CN.md)。源码 tag 历史以 `git tag` 为准，当前版本以 `package.json` 为准（`v0.4.1` 与 `v0.4.2` 没有独立 tag）。当前版本的正式发布说明是 `releases/v0.5.1.md` 与 CHANGELOG 顶部的 `[0.5.1]` 条目；`sync:version:check` 与发布工作流会校验这两处与 `package.json` 的版本一致。保留的 [候选模板](releases/v0.1.1-candidate.zh-CN.md) 仅用于发布前检查。任何新版本的待发布说明均应保留“尚未完成真实线上升级验收”的安全文案，只有完成本页末尾的全部真实验证并保存证据后，才能在后续版本说明中写为已完成。
 
 发布说明不得包含 `GH_TOKEN`、证书、私钥、OAuth 凭据、真实邮件、测试账户数据或本地绝对路径。若发布后发现资源、签名、版本或更新清单不一致，应先撤销或标记该 Release，而不是静默替换文件。
 

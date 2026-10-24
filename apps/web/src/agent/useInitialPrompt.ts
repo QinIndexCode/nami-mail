@@ -15,8 +15,8 @@ export interface UseInitialPromptOptions {
  * auto-send (e.g. from reader "AI Summary" or "AI Draft Reply").
  *
  * - When not auto-sending: focuses the composer textarea and sets cursor to end.
- * - When auto-sending: waits until the workspace finishes loading and is ready,
- *   then sends once.
+ * - When auto-sending: waits until the workspace (including its initial
+ *   transcript restore) finishes loading and is ready, then sends once.
  */
 export function useInitialPrompt({
   initialPrompt,

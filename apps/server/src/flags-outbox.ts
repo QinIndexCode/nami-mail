@@ -1,48 +1,51 @@
 /**
- * Write-behind flag updates.
+ * The flag-push half of the flags pipeline: what the task layer consumes.
  *
- * The synchronous flag path (sync-flags.ts) waits for the IMAP STORE before
- * committing the local cache, so a user action costs one provider round-trip —
- * and queues behind whatever else holds the account write slot (measured: a
- * flag toggle waiting 16s behind a batch). This module inverts the order for
- * user-initiated flag writes:
+ * The synchronous flag path (`sync-flags.ts`) still waits for the IMAP STORE
+ * before committing the local cache, so a user action on that path costs one
+ * provider round-trip. The local-first path writes the target state first and
+ * pushes it from a durable task; both share this module's vocabulary and the
+ * push below.
  *
- * 1. `commitLocalFlags` applies the patch to the local cache inside one
- *    transaction (single-digit milliseconds — no network, no write slot) and
- *    records a durable `flags-push` operation per account **in that same
- *    transaction**, so a marker and its push can never be committed apart.
- * 2. The operation queue drives `flags-push` in the background (FIFO per
- *    account, bounded retries), pushing the flag delta to the provider.
+ * Three exports, and each has exactly one consumer:
  *
- * Correctness:
- * - The push payload carries the delta against the remote-confirmed flag set
- *   (the local cache mirrors it until a push lands). Rows for the same account
- *   push in commit order, so chained deltas compose to the latest local state.
- * - While `messages.pending_flags_push` is set, sync must not overwrite
- *   flags_json from the stale remote (guarded at the sync write sites).
- * - Rows are durable: a crash mid-push is resumed on the next start, and the
- *   push is idempotent (STORE on an already-applied flag is a no-op).
- * - A marker left behind with no push behind it (only ever possible on a build
- *   that wrote the two in separate transactions) would block that message's
- *   flags from syncing for good, so startup reconciles them — see
- *   {@link clearOrphanedPendingFlagsMarkers}.
+ * - {@link prepareLocalFlags} reads the rows and diffs the patch against the
+ *   current cache, writing nothing. `tasks/kinds/flags.ts` applies the result
+ *   itself, so the direct route and the outbox route compute the same delta the
+ *   same way.
+ * - {@link pushFlagsRemote} is the provider half of the `flags` runner: one IMAP
+ *   connection per account, one STORE per (mailbox, flag-group), and every
+ *   position re-resolved from the stable local message id, because a move can
+ *   rewrite `mailbox`/`uid` between the commit and the push.
+ * - {@link flagsPushError} is the user-facing half of a refused push.
+ *
+ * The local-first commit that used to live here (`commitLocalFlags` and its
+ * transaction body) applied the patch locally and staged durable `flags-push`
+ * rows into `operation_queue` in that same transaction. Both halves are gone:
+ * the local writes are `tasks/kinds/flags.ts` and the durable row is a `tasks`
+ * row written by `commitTask`. The startup repair for markers left without a
+ * push behind them (`clearOrphanedPendingFlagsMarkers`) is
+ * `clearOrphanedFlagsMarkers` in `tasks/settlement.ts`; it needs no second store
+ * to consult because there is no second store.
+ *
+ * What the push payload means is unchanged and still load-bearing: while
+ * `messages.pending_flags_push` is set the delta is against the
+ * remote-confirmed flag set, sync must not overwrite `flags_json` from the stale
+ * remote, and a push is idempotent (a STORE of an already-applied flag is a
+ * no-op), which is what makes a retry safe.
  */
 import type { DatabaseHandle } from "./db.js";
-import type { OperationQueue } from "./operation-queue.js";
-import type { AgentMailEventSink } from "./agent/mail-state-events.js";
-import { imapClientForAccount, type AccountAccessTokenProvider } from "./mail.js";
+import { imapClientForAccount, safeMailError, type AccountAccessTokenProvider } from "./mail.js";
 import { safeLogout } from "./imap-logout.js";
 import { moveActionBlockedError } from "./message-storage.js";
 import { messageFlagNames, type MessageFlagsPatch } from "./message-flags.js";
-export type { MessageFlagsPatch };
 import { accountById } from "./account-store.js";
-
-
-export type LocalFlagsCommit = {
-  updated: number;
-  failed: number;
-  changedIds: string[];
-};
+import {
+  cachedUidValidity,
+  liveUidValidity,
+  uidGenerationAllowsWrite,
+  type UidGenerationEvidence,
+} from "./mailbox-generation.js";
 
 type PendingRow = {
   id: string;
@@ -55,35 +58,49 @@ type PendingRow = {
   pending_move_state: string | null;
 };
 
+export type PreparedFlagsChange = {
+  message: PendingRow;
+  nextFlags: string[];
+  add: string[];
+  remove: string[];
+};
+
+export type PreparedFlagsPatch = {
+  prepared: PreparedFlagsChange[];
+  blocked: string[];
+};
+
 /**
- * Applies the patch to the local cache and queues the remote push. Throws
- * "Message not found." when none of the ids exist (the single-message route
- * maps that to its 404/422 contract); messages that are move-blocked count as
- * failed, mirroring the synchronous path's per-message semantics.
+ * Reads the rows and diffs the patch against the current cache — no writes.
+ * Shared by every local-first flags entry point so all of them prepare the
+ * exact same delta shape. The read is chunked because a predicate selection
+ * has no id cap and one IN (...) list would hit the driver's per-statement
+ * variable ceiling (measured at 32 766 in this codebase).
  */
-export function commitLocalFlags(
+export function prepareLocalFlags(
   db: DatabaseHandle,
   messageIds: readonly string[],
   patch: MessageFlagsPatch,
-  operationQueue: OperationQueue,
-  agentEvents?: AgentMailEventSink,
-): LocalFlagsCommit {
-  if (!messageIds.length || !Object.keys(patch).length) return { updated: 0, failed: 0, changedIds: [] };
-  const placeholders = messageIds.map(() => "?").join(", ");
-  const rows = db
-    .prepare(`SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (${placeholders})`)
-    .all(...messageIds) as PendingRow[];
+): PreparedFlagsPatch {
+  if (!messageIds.length || !Object.keys(patch).length) return { prepared: [], blocked: [] };
+  const readChunkSize = 10_000;
+  const rowsById = new Map<string, PendingRow>();
+  for (let offset = 0; offset < messageIds.length; offset += readChunkSize) {
+    const chunk = messageIds.slice(offset, offset + readChunkSize);
+    const rows = db
+      .prepare(`SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+      .all(...chunk) as PendingRow[];
+    for (const row of rows) rowsById.set(row.id, row);
+  }
 
-  type PreparedMessage = {
-    message: PendingRow;
-    nextFlags: string[];
-    add: string[];
-    remove: string[];
-    seenChanged: boolean;
-  };
-  const prepared: PreparedMessage[] = [];
+  const prepared: PreparedFlagsChange[] = [];
   const blocked: string[] = [];
-  for (const message of rows) {
+  const visited = new Set<string>();
+  for (const id of messageIds) {
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const message = rowsById.get(id);
+    if (!message) continue;
     if (moveActionBlockedError(message)) {
       blocked.push(message.id);
       continue;
@@ -103,161 +120,9 @@ export function commitLocalFlags(
         remove.push(flag);
       }
     }
-    prepared.push({ message, nextFlags: [...nextFlags], add, remove, seenChanged: currentFlags.has("\\Seen") !== nextFlags.has("\\Seen") });
+    prepared.push({ message, nextFlags: [...nextFlags], add, remove });
   }
-
-  const changedIds: string[] = [];
-  // One durable push row per account. Entries carry the delta against the
-  // remote-confirmed flags (the pre-patch local cache), so ordered execution
-  // composes consecutive user toggles to the latest local state.
-  const entriesByAccount = new Map<string, Array<{ id: string; mailbox: string; uid: number; add: string[]; remove: string[] }>>();
-  for (const item of prepared) {
-    if (!item.add.length && !item.remove.length) continue;
-    const entries = entriesByAccount.get(item.message.account_id) ?? [];
-    entries.push({ id: item.message.id, mailbox: item.message.mailbox, uid: item.message.uid, add: item.add, remove: item.remove });
-    entriesByAccount.set(item.message.account_id, entries);
-  }
-  // The lease is acquired inside the transaction so agent listeners observe
-  // the committed local state immediately, mirroring the synchronous path.
-  const leases = new Map<string, ReturnType<NonNullable<AgentMailEventSink>["acquireLease"]>>();
-  // The push rows are recorded inside the same transaction as the markers they
-  // belong to: a marker without a queued push is a permanent orphan that makes
-  // sync skip this message's flags forever, so the two must commit or roll
-  // back as one unit. The FIFO chain is only joined after the commit, because
-  // the row is not readable before it.
-  const startPushes: Array<() => void> = [];
-  db.transaction(() => {
-    for (const item of prepared) {
-      const { message } = item;
-      if (!item.add.length && !item.remove.length) continue;
-      db.prepare("UPDATE messages SET flags_json = ?, pending_flags_push = 1 WHERE id = ?")
-        .run(JSON.stringify(item.nextFlags), message.id);
-      changedIds.push(message.id);
-      if (item.seenChanged) {
-        db.prepare(`
-          UPDATE folders
-          SET unseen = CASE
-            WHEN ? = 1 THEN CASE WHEN unseen > 0 THEN unseen - 1 ELSE 0 END
-            ELSE unseen + 1
-          END
-          WHERE account_id = ? AND path = ?
-        `).run(item.nextFlags.includes("\\Seen") ? 1 : 0, message.account_id, message.mailbox);
-      }
-      if (agentEvents) {
-        const lease = leases.get(message.account_id) ?? agentEvents.acquireLease(message.account_id);
-        leases.set(message.account_id, lease);
-        if (lease) {
-          agentEvents.messageUpsertedWithinTransaction(lease, message.id, {
-            mailbox: message.mailbox,
-            uid: message.uid,
-            remoteIdLookup: message.remote_id_lookup,
-            flags: [...item.nextFlags].sort(),
-            pendingMoveDestination: message.pending_move_destination,
-            pendingMoveState: message.pending_move_state,
-          });
-        }
-      }
-    }
-    for (const [accountId, entries] of entriesByAccount) {
-      startPushes.push(operationQueue.stageBackgroundInTransaction([accountId], "flags-push", { accountId, entries }));
-    }
-  })();
-  for (const startPush of startPushes) startPush();
-
-  const failed = blocked.length + (messageIds.length - rows.length);
-  const changedSet = new Set(changedIds);
-  return {
-    updated: rows.length - blocked.length,
-    failed,
-    changedIds: messageIds.filter((id) => changedSet.has(id)),
-  };
-}
-
-/**
- * Clears the per-message push markers after the push has settled for good.
- *
- * The clear is per message and conditional: a message whose flag delta was
- * committed twice in quick succession (seen=true then seen=false) is named by
- * TWO `flags-push` rows. When the older row settles, the newer row may still
- * be pending — clearing unconditionally would drop the newer push's
- * protection and let the next sync overwrite the user's newest local choice
- * with stale remote state. Same-account `flags-push` rows run serially
- * (per-account FIFO chains), so at settlement time any newer push for the
- * same message is a `pending` row (queued or between retries) or a `running`
- * one (executing right now): only when NO other pending-or-running row names
- * the message is its marker cleared.
- *
- * `settledRowId` names the queue row whose settlement triggered this clear
- * (from the `onOperationSettled` hook). Its own row is still `running` at
- * that instant, so excluding it is what lets a lone push clear its own
- * messages. Omit it (startup reconciliation, tests) to check every row.
- *
- * Callers settle this from the queue's durable-settle hook
- * (`onOperationSettled`), never from inside the executor: an executor can
- * complete late — after a write-slot timeout already settled its row — and a
- * late clear would otherwise drop a newer push's protection.
- */
-export function clearPendingFlagsMarkers(
-  db: DatabaseHandle,
-  messageIds: readonly string[],
-  settledRowId?: string,
-): void {
-  const update = db.prepare(`
-    UPDATE messages SET pending_flags_push = 0
-    WHERE id = ? AND pending_flags_push = 1
-      AND NOT EXISTS (
-        SELECT 1
-        FROM operation_queue
-        WHERE operation_queue.kind = 'flags-push'
-          AND operation_queue.id != ?
-          AND operation_queue.status IN ('pending', 'running')
-          AND json_valid(operation_queue.payload_json)
-          AND EXISTS (
-            SELECT 1
-            FROM json_each(operation_queue.payload_json, '$.entries') AS entry
-            WHERE json_extract(entry.value, '$.id') = messages.id
-          )
-      )
-  `);
-  for (const id of messageIds) update.run(id, settledRowId ?? "");
-}
-
-/**
- * Startup reconciliation for markers with no push behind them. Builds that
- * recorded the `pending_flags_push` marker and the `flags-push` queue row in
- * two separate transactions could leave the first committed and the second
- * lost; such a row makes sync skip this message's flags for good (the marker
- * is only ever cleared by the queue's settlement hooks), so local and remote
- * state diverge silently until the user happens to toggle that flag again.
- * `commitLocalFlags` now records both in one transaction, so this only has to
- * repair rows a crash already left behind.
- *
- * The match is per message, not per account: a message is only cleared when
- * *no* pending or running `flags-push` row names it in its entries, so a push
- * that is still queued or retrying for the same account is never disturbed.
- * The queue rows are read as they stand on disk at this point (before
- * `resumePending` changes any status), so a row that is pending now and
- * running later is still seen as pending. Returns how many markers were
- * cleared.
- */
-export function clearOrphanedPendingFlagsMarkers(db: DatabaseHandle): number {
-  const cleared = db.prepare(`
-    UPDATE messages SET pending_flags_push = 0
-    WHERE pending_flags_push = 1
-      AND NOT EXISTS (
-        SELECT 1
-        FROM operation_queue
-        WHERE operation_queue.kind = 'flags-push'
-          AND operation_queue.status IN ('pending', 'running')
-          AND json_valid(operation_queue.payload_json)
-          AND EXISTS (
-            SELECT 1
-            FROM json_each(operation_queue.payload_json, '$.entries') AS entry
-            WHERE json_extract(entry.value, '$.id') = messages.id
-          )
-      )
-  `).run();
-  return cleared.changes;
+  return { prepared, blocked };
 }
 
 export type FlagsPushDeps = {
@@ -272,34 +137,182 @@ export type FlagsPushEntry = {
   uid: number;
   add: string[];
   remove: string[];
+  /**
+   * The generation `mailbox` had when the entry was accepted (`folders.uid_validity`
+   * at commit time). The payload is sealed, so this is the only evidence that
+   * survives until the push: re-reading a "current" value later cannot tell a
+   * queued UID from one the provider re-numbered underneath it. Absent on
+   * payloads written before this field existed -- such an entry has no
+   * acceptance evidence and is refused whenever the provider reports a
+   * generation, never back-filled from the cache. It is
+   * also ignored for an entry whose message was re-positioned to another
+   * mailbox, which is judged by the cache instead.
+   */
+  uidValidity?: string | null;
+};
+
+/** One entry as the push will send it, after re-positioning. */
+type PushedFlagsEntry = {
+  id: string;
+  uid: number;
+  add: string[];
+  remove: string[];
+  evidence: UidGenerationEvidence;
 };
 
 /**
- * The `flags-push` executor: pushes committed local deltas to the provider
- * with one IMAP connection per account and one STORE per (mailbox, flag-group).
- * Throws on provider failure so the queue retries; markers are cleared by the
- * caller only when the push has settled (success or permanent failure).
+ * Resolves each id's CURRENT position from the local cache. A `flags` task's
+ * payload is sealed with the position the message had at commit time; a
+ * foreground move can rewrite `mailbox`/`uid` before the runner pushes, and
+ * STOREing at the stale UID would either miss the message or, worse, hit
+ * whichever message inherited that UID in the old mailbox. The stable local
+ * message id is the only position-independent handle, so the push re-resolves
+ * from it.
+ * Chunked like every other id-list read (the driver's variable ceiling).
+ */
+function currentPositions(db: DatabaseHandle, ids: readonly string[]): Map<string, { mailbox: string; uid: number }> {
+  const chunkSize = 10_000;
+  const unique = [...new Set(ids)];
+  const positions = new Map<string, { mailbox: string; uid: number }>();
+  for (let offset = 0; offset < unique.length; offset += chunkSize) {
+    const chunk = unique.slice(offset, offset + chunkSize);
+    const rows = db
+      .prepare(`SELECT id, mailbox, uid FROM messages WHERE id IN (${chunk.map(() => "?").join(", ")})`)
+      .all(...chunk) as Array<{ id: string; mailbox: string; uid: number }>;
+    for (const row of rows) positions.set(row.id, { mailbox: row.mailbox, uid: row.uid });
+  }
+  return positions;
+}
+
+/** A STORE the provider accepted but did not confirm. Ours, and already written
+ * for the user, so it is one of the two texts {@link flagsPushError} passes
+ * through verbatim. Named so this module's three throws cannot drift apart. */
+const FLAGS_PUSH_UNCONFIRMED = "邮件服务器未确认状态更新，请稍后重试。";
+
+/** Thrown when the attempt's signal arrived before any IMAP command was sent.
+ * Not offered to the user: the scheduler already gave up on this attempt, the
+ * task is retried, and `flagsPushError` translates it like any other socket
+ * failure. */
+const FLAGS_PUSH_ABORTED = "Flags push aborted before it reached the provider.";
+
+/**
+ * The user-facing half of a refused flags push, as `{code, message}`.
+ *
+ * Two kinds of error come out of {@link pushFlagsRemote}, and only one of them
+ * may be shown: its own refusals, which are written for the user already (an
+ * account that is gone, a STORE the provider never confirmed), and whatever came
+ * off the socket. This text does not stay in a log -- the task layer writes it to
+ * `tasks.error_message`, `GET /api/batch-jobs/:id` hands it to the renderer, and
+ * the batch poller toasts it verbatim (`batchJobRunner.ts`, `showToast(job.error)`).
+ * A socket's message can carry the server's banner, the account name or a
+ * credential, so it is translated by `safeMailError` exactly as the send
+ * runner's failures are (contract §十七 (9), (11)): the code is ours, the
+ * sentence is ours, and the raw error stays reachable as `cause`, in-process.
+ */
+export function flagsPushError(error: unknown): { code?: string; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === FLAGS_PUSH_UNCONFIRMED || message === "Account not found.") return { message };
+  return safeMailError(error);
+}
+
+/**
+ * The provider half of the `flags` runner: pushes committed local deltas to the
+ * provider with one IMAP connection per account and one STORE per (mailbox,
+ * flag-group).
+ * Entries carry the delta as staged and are re-positioned by message id at
+ * execution time; an entry whose message is gone from the cache is dropped
+ * (there is nothing left to push). Throws on provider failure so the task
+ * scheduler retries the `flags` task (`tasks/scheduler.ts:250`); markers are
+ * cleared by the caller only when the push has settled (success or permanent
+ * failure).
+ *
+ * The counts are returned for the task layer's benefit and mean nothing unless
+ * the call resolved: any STORE that the provider did not confirm throws, so a
+ * returned `pushed` is the number of entries every STORE covering them accepted.
+ * `dropped` is the share the caller stops owing -- a message that left the cache
+ * between the commit and the push can never be delivered, and neither can one
+ * whose UID generation cannot be proven from the acceptance-time evidence (see
+ * `mailbox-generation.ts`); the legacy caller (which ignores this return) left
+ * that share unaccounted for in both directions.
  */
 export async function pushFlagsRemote(
   deps: FlagsPushDeps,
   payload: { accountId: string; entries: FlagsPushEntry[] },
-): Promise<void> {
+  /** The task attempt's cancellation signal (`TaskRunner.signal`). Aborting it
+   * closes the connection, which is what rejects an in-flight STORE: the scheduler
+   * releases the account slot on timeout, and an abandoned push that kept the
+   * socket alive would still be writing when the next task on that account runs. */
+  signal?: AbortSignal,
+): Promise<{ pushed: number; dropped: number; generationChanged: boolean }> {
   const account = accountById(deps.db, payload.accountId);
   if (!account) throw new Error("Account not found.");
+  // Nothing has been sent yet, so this is the cheapest place to stop an attempt
+  // the scheduler has already given up on -- and it avoids dialling a server to
+  // immediately hang up on it.
+  if (signal?.aborted) throw new Error(FLAGS_PUSH_ABORTED);
+  const positions = currentPositions(deps.db, payload.entries.map((entry) => entry.id));
+  let dropped = 0;
+  let generationChanged = false;
   const client = await imapClientForAccount(account, deps.masterKey, deps.accessTokenProvider);
+  // Registered before `connect()`, because the timeout can fire during it. A
+  // signal that flipped between the check above and here is caught by the
+  // immediate replay; otherwise the listener fires once, at abort.
+  const closeOnAbort = () => client.close();
+  signal?.addEventListener("abort", closeOnAbort, { once: true });
+  if (signal?.aborted) closeOnAbort();
   try {
     await client.connect();
-    const byMailbox = new Map<string, FlagsPushEntry[]>();
+    const byMailbox = new Map<string, PushedFlagsEntry[]>();
     for (const entry of payload.entries) {
-      const group = byMailbox.get(entry.mailbox) ?? [];
-      group.push(entry);
-      byMailbox.set(entry.mailbox, group);
+      const position = positions.get(entry.id);
+      if (!position) {
+        dropped += 1;
+        continue;
+      }
+      const group = byMailbox.get(position.mailbox) ?? [];
+      // The position is re-resolved, so a frozen generation describes this entry
+      // only while it still sits where it was accepted. A re-positioned entry is
+      // judged by the cache instead: its current number was written under the
+      // current generation. A payload that cannot even name its frozen position
+      // (written before those fields existed) has no acceptance evidence at all,
+      // so it is refused rather than judged by the cache.
+      const positioned = typeof entry.mailbox === "string" && Number.isInteger(entry.uid);
+      const stillThere = positioned && entry.mailbox === position.mailbox && entry.uid === position.uid;
+      group.push({
+        id: entry.id,
+        uid: position.uid,
+        add: entry.add,
+        remove: entry.remove,
+        evidence: positioned && !stillThere
+          ? { source: "current" }
+          : { source: "accepted", value: stillThere ? entry.uidValidity ?? null : null },
+      });
+      byMailbox.set(position.mailbox, group);
     }
     for (const [mailbox, entries] of byMailbox) {
       const lock = await client.getMailboxLock(mailbox);
       try {
-        const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
+        // The generation check (see `mailbox-generation.ts`). The acceptance-time
+        // value wins; an entry that froze none (a payload written before the field
+        // existed) is refused rather than judged by the cache, because the cache
+        // cannot say which epoch that UID belonged to when the task was accepted.
+        // A mismatch drops the entry rather than sending it: the number now
+        // belongs to a different message, and the caller counts the drop as a
+        // failure so the local state is given back and a sync re-learns the
+        // folder.
+        const live = liveUidValidity(client);
+        const cached = cachedUidValidity(deps.db, payload.accountId, mailbox);
+        const permitted: PushedFlagsEntry[] = [];
         for (const entry of entries) {
+          if (uidGenerationAllowsWrite(entry.evidence, live, cached)) permitted.push(entry);
+          else {
+            dropped += 1;
+            generationChanged = true;
+          }
+        }
+        if (permitted.length === 0) continue;
+        const byFlagGroup = new Map<string, { add: string[]; remove: string[]; uids: number[] }>();
+        for (const entry of permitted) {
           const key = `${entry.add.join(",")}\u0000${entry.remove.join(",")}`;
           let group = byFlagGroup.get(key);
           if (!group) {
@@ -311,18 +324,23 @@ export async function pushFlagsRemote(
         for (const group of byFlagGroup.values()) {
           if (group.add.length) {
             const added = await client.messageFlagsAdd(group.uids, group.add, { uid: true });
-            if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+            if (added === false) throw new Error(FLAGS_PUSH_UNCONFIRMED);
           }
           if (group.remove.length) {
             const removed = await client.messageFlagsRemove(group.uids, group.remove, { uid: true });
-            if (removed === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
+            if (removed === false) throw new Error(FLAGS_PUSH_UNCONFIRMED);
           }
         }
       } finally {
         lock.release();
       }
     }
+    return { pushed: payload.entries.length - dropped, dropped, generationChanged };
   } finally {
+    // Detached first: after this point the attempt has no more work to cancel,
+    // and leaving the listener on a long-lived signal would close a client the
+    // logout below is already handling.
+    signal?.removeEventListener("abort", closeOnAbort);
     await safeLogout(client);
   }
 }

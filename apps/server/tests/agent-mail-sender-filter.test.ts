@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { CallerContext } from "@nami/agent-contracts";
-import type { MailApplicationContext, MailListQuery } from "../src/agent/mail-application-service.js";
+import type { MailApplicationContext, MailListQuery, MailSearchQuery } from "../src/agent/mail-application-service.js";
 import { SqliteMailApplicationService } from "../src/agent/sqlite-mail-application-service.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { indexMessageFts } from "../src/message-search.js";
@@ -100,6 +100,18 @@ function listQuery(sender?: string, limit = 20, cursor?: string): MailListQuery 
   };
 }
 
+/** An explicit lower bound keeps these tests independent of the 90-day default
+ * window (the seeded mail is old relative to whenever the suite runs). */
+function searchQuery(overrides: Partial<MailSearchQuery> = {}): MailSearchQuery {
+  return {
+    accountIds: ["account-1"],
+    query: "",
+    after: "2026-01-01T00:00:00.000Z",
+    limit: 10,
+    ...overrides,
+  };
+}
+
 function setup() {
   const db = openDatabase(":memory:");
   const masterKey = randomBytes(32);
@@ -138,6 +150,24 @@ describe("SqliteMailApplicationService sender filter over the FTS index", () => 
     }
   });
 
+  it("keeps the sender filter inside the caller's allowed message boundary", async () => {
+    const { db, masterKey, service } = setup();
+    try {
+      insertEncryptedMessage(db, masterKey, { id: "msg-ada", uid: 1, fromName: "Ada Lovelace", fromAddress: "ada@example.test", subject: "Analytical engine" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-alan", uid: 2, fromName: "Alan Turing", fromAddress: "alan@example.test", subject: "Enigma" });
+
+      // Both rows match the sender; only the authorized one may come back.
+      const allowed = await service.listMessages(context(["msg-ada"]), listQuery("example.test"));
+      expect(allowed.items.map((message) => message.id)).toEqual(["msg-ada"]);
+
+      const none = await service.listMessages(context([]), listQuery("example.test"));
+      expect(none.items).toEqual([]);
+    } finally {
+      masterKey.fill(0);
+      db.close();
+    }
+  });
+
   it("paginates filtered results with a cursor", async () => {
     const { db, masterKey, service } = setup();
     try {
@@ -154,6 +184,59 @@ describe("SqliteMailApplicationService sender filter over the FTS index", () => 
       const pageTwo = await service.listMessages(context(), listQuery("bulk", 2, pageOne.nextCursor));
       expect(pageTwo.items.map((message) => message.id)).toEqual(["msg-1"]);
       expect(pageTwo.nextCursor).toBeUndefined();
+    } finally {
+      masterKey.fill(0);
+      db.close();
+    }
+  });
+});
+
+describe("SqliteMailApplicationService search over the FTS index", () => {
+  it("matches a long keyword through MATCH on the table, not the alias", async () => {
+    const { db, masterKey, service } = setup();
+    try {
+      insertEncryptedMessage(db, masterKey, { id: "msg-ada", uid: 1, fromName: "Ada Lovelace", fromAddress: "ada@example.test", subject: "Analytical engine" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-alan", uid: 2, fromName: "Alan Turing", fromAddress: "alan@example.test", subject: "Enigma" });
+
+      // `f MATCH ?` is a SQLite syntax error ("no such column: f"); this is the
+      // regression that kept every >=3-character Agent search failing.
+      const result = await service.searchMessages(context(), searchQuery({ query: "engine" }));
+      expect(result.items.map((message) => message.id)).toEqual(["msg-ada"]);
+      expect(result.total).toBe(1);
+    } finally {
+      masterKey.fill(0);
+      db.close();
+    }
+  });
+
+  it("matches a two-character keyword through LIKE below the trigram floor", async () => {
+    const { db, masterKey, service } = setup();
+    try {
+      insertEncryptedMessage(db, masterKey, { id: "msg-ada", uid: 1, fromName: "Ada Lovelace", fromAddress: "ada@example.test", subject: "Analytical engine" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-alan", uid: 2, fromName: "Alan Turing", fromAddress: "alan@example.test", subject: "Enigma" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-grace", uid: 3, fromName: "Grace Hopper", fromAddress: "grace@example.test", subject: "Compiler" });
+
+      // "ad" is below the trigram floor; the recipient address in every seeded
+      // row contains no "ad", so only Ada matches.
+      const result = await service.searchMessages(context(), searchQuery({ query: "ad" }));
+      expect(result.items.map((message) => message.id)).toEqual(["msg-ada"]);
+      expect(result.total).toBe(1);
+    } finally {
+      masterKey.fill(0);
+      db.close();
+    }
+  });
+
+  it("combines a keyword with a subject substring filter", async () => {
+    const { db, masterKey, service } = setup();
+    try {
+      insertEncryptedMessage(db, masterKey, { id: "msg-ada", uid: 1, fromName: "Ada Lovelace", fromAddress: "ada@example.test", subject: "Analytical engine" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-grace", uid: 2, fromName: "Grace Hopper", fromAddress: "grace@example.test", subject: "Compiler engine" });
+
+      // Both bodies contain "engine"; the subject filter keeps only Grace's.
+      const result = await service.searchMessages(context(), searchQuery({ query: "engine", subject: "comp" }));
+      expect(result.items.map((message) => message.id)).toEqual(["msg-grace"]);
+      expect(result.total).toBe(1);
     } finally {
       masterKey.fill(0);
       db.close();

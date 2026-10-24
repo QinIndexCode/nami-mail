@@ -981,8 +981,8 @@ export class AgentRagWorker {
         })
         .finally(() => {
           // A closed database handle (shutdown) makes every future pass fail
-          // the same way; stop the poll loop instead of retrying forever,
-          // like the operation-queue background driver does.
+          // the same way; stop the poll loop instead of retrying forever, as
+          // `tasks/scheduler.ts` does when its handle has closed.
           if (this.stopped || !this.options.db.open) return;
           this.schedule(this.pollIntervalMs);
         });
@@ -996,7 +996,7 @@ export class AgentRagWorker {
     let processed = 0;
     for (const claim of claims) {
       try {
-        this.processClaim(claim);
+        await this.processClaim(claim);
         this.options.sourceEvents.complete(claim);
       } catch (error) {
         const code = error instanceof Error && error.message.includes("account")
@@ -1008,12 +1008,9 @@ export class AgentRagWorker {
           // A lost claim is safe: the durable outbox recovery path will decide its next state.
         }
       }
-      // The claim loop is pure synchronous work (decrypt → clean → chunk →
-      // re-encrypt → index transactions). A backfilled mailbox can keep the
-      // event loop busy for a long stretch, starving concurrent HTTP: SSE
-      // flushes of a just-started run's first tool event and unrelated GETs
-      // (e.g. switching to another conversation) queue up behind it. Yield to
-      // the event loop every few claims so those stay responsive.
+      // Each claim decrypts → cleans → chunks → indexes; a backfilled mailbox
+      // can starve concurrent HTTP for a long stretch, so claims and chunks
+      // both yield to let queued requests through.
       processed += 1;
       if (processed % 4 === 0) {
         await new Promise<void>((resolve) => setImmediate(() => resolve()));
@@ -1127,7 +1124,7 @@ export class AgentRagWorker {
     }))}`;
   }
 
-  private processClaim(claim: ClaimedSourceEvent): void {
+  private async processClaim(claim: ClaimedSourceEvent): Promise<void> {
     const lifecycle = this.options.lifecycle.current(claim.accountId);
     const needsAccountData = claim.eventType === "message-upserted" || claim.eventType === "message-deleted"
       || claim.eventType === "attachment-upserted" || claim.eventType === "attachment-deleted";
@@ -1142,7 +1139,7 @@ export class AgentRagWorker {
     const lease = this.options.lifecycle.acquireLease(claim.accountId);
     const event = this.options.sourceEvents.recoverClaimedEvent(claim, lease);
     if (event.type === "message-upserted") {
-      this.upsertMessage(lease, event);
+      await this.upsertMessage(lease, event);
       return;
     }
     if (event.type === "message-deleted") {
@@ -1159,7 +1156,7 @@ export class AgentRagWorker {
     }
     // Attachment metadata is represented on the parent message. A later
     // attachment extractor can replace this with its own safe page type.
-    this.upsertMessage(lease, { ...event, type: "message-upserted" });
+    await this.upsertMessage(lease, { ...event, type: "message-upserted" });
   }
 
   private processLifecycleEvent(event: AgentSourceEvent): void {
@@ -1173,7 +1170,7 @@ export class AgentRagWorker {
     this.ragIndex.removeGeneration(event.accountId, event.accountGeneration);
   }
 
-  private upsertMessage(lease: AccountGenerationLease, event: AgentSourceEvent): void {
+  private async upsertMessage(lease: AccountGenerationLease, event: AgentSourceEvent): Promise<void> {
     const messageId = event.source?.messageId;
     if (!messageId) throw new Error("Message source event has no message id.");
     const stored = messagePayloadById(this.options.db, this.options.masterKey, messageId);
@@ -1197,7 +1194,10 @@ export class AgentRagWorker {
     const current = this.pageStore.listMetadataByPrefix(lease, pagePrefix(messageId));
     const byPageId = new Map(current.map((page) => [page.pageId, page]));
     const retained = new Set<string>();
-    for (const chunk of chunks) {
+    for (const [chunkIndex, chunk] of chunks.entries()) {
+      // One long message can hold hundreds of chunks, each doing an encrypted
+      // page read and an index write; every 8 chunks gives queued HTTP a turn.
+      if (chunkIndex > 0 && chunkIndex % 8 === 0) await new Promise<void>((resolve) => setImmediate(() => resolve()));
       const pageId = pageIdFor(messageId, chunk.chunkIndex);
       retained.add(pageId);
       const nextPayload: AgentRagPagePayload = {

@@ -1,4 +1,5 @@
 import type { Message } from "./types";
+import { withSeenFlag } from "./app/mailStore";
 
 export type ThreadGroup = {
   /** Representative message id (the earliest message in the conversation). */
@@ -110,6 +111,37 @@ export function mergeThreadSnapshot(previous: ThreadSnapshot | null, next: Threa
     anchorId: next.anchorId,
     members: [...next.members, ...previous.members.filter((message) => !known.has(message.id))],
   };
+}
+
+/**
+ * Applies a local read/unread change to the thread snapshot and the strip's
+ * retained membership map. A member outside the loaded list lives only in
+ * those two places, so neither the store's optimistic write nor its later
+ * rollback reaches it; without this the open message would keep showing its
+ * old unread dot until the thread was fetched again.
+ *
+ * The strip map is a ref, so replacing it is not a render. `changed` reports
+ * whether the target was found so the caller can request the render that makes
+ * the new value visible.
+ */
+export function applySeenToThread(
+  extras: ThreadSnapshot | null,
+  strip: ReadonlyMap<string, Message>,
+  messageId: string,
+  seen: boolean,
+): { extras: ThreadSnapshot | null; strip: Map<string, Message>; changed: boolean } {
+  let changed = false;
+  const update = (member: Message): Message => {
+    if (member.id !== messageId) return member;
+    changed = true;
+    return withSeenFlag(member, seen);
+  };
+  const extrasHasTarget = extras?.members.some((member) => member.id === messageId) ?? false;
+  const nextExtras = extrasHasTarget && extras
+    ? { ...extras, members: extras.members.map(update) }
+    : extras;
+  const nextStrip = new Map([...strip].map(([id, member]) => [id, update(member)] as const));
+  return { extras: nextExtras, strip: nextStrip, changed };
 }
 
 /** Whether the thread strip should render collapsed: only long conversations,

@@ -1,11 +1,11 @@
 # Design System
 
-This document defines the **visual baselines** the UI must follow. Until now the visual rules lived
-only inside `apps/web/src/styles.css` (~17,000 lines), which is how the same layer ended up with
+This document defines the **visual baselines** the UI must follow. Until now the visual rules were scattered across style modules,
+never collected into one place; `apps/web/src/styles.css` itself is only a 30-line `@import` index and the actual rules live in the 30 modules under `apps/web/src/styles/`, which is how the same layer ended up with
 several different shadows and the same kind of text with several different sizes: each local pass
 converged while the whole drifted. Read this before changing styles.
 
-- Source of truth for styles: `apps/web/src/styles.css`
+- Source of truth for styles: the modules under `apps/web/src/styles/`; `apps/web/src/styles.css` is only the 30-line `@import` index, and aggregate size is held by the ratchet in `styles-size.test.ts`
 - Themes: `:root` (light) and `:root[data-theme=dark]`, with semantic tokens defined in pairs
 - How to verify a visual change: `npm run test:e2e` (four specs, including geometry), `npm run smoke:desktop`, and the tests that assert against the stylesheet
 
@@ -103,7 +103,7 @@ This is a dense desktop mail client — the 8–11px sizes (counts, timestamps, 
 product, not a defect. What needs governing is that the *same kind of information* uses different
 steps.
 
-Current distribution (`styles.css`): `8px`(28) / `9px`(81) / `10px`(155+) / `11px`(144+) /
+Current distribution (aggregated `styles/`): `8px`(28) / `9px`(81) / `10px`(155+) / `11px`(144+) /
 `11.5px`(2) / `12px`(52) / `12.5px`(3) / `13px`(11) / `13.5px`(1) / `14px`(9) / `15px`(10) /
 `16px`(7) / `18px`(3) / `20px`(4) plus a few ≥26px.
 
@@ -144,7 +144,7 @@ semantic colours, with matching dark steps. New accents follow the same rule by 
 ### Contrast floor (enforced by a test)
 Type in this app is mostly 8–11px, so **nothing qualifies for the WCAG "large text" allowance** and
 everything is held to the **4.5:1** normal-text floor. `apps/web/src/themeContrast.test.ts` reads the
-tokens out of `styles.css` and checks them: the three text tiers (`--text` / `--text-soft` /
+tokens from the aggregated `styles/` CSS via `testUtils/loadStyles` and checks them: the three text tiers (`--text` / `--text-soft` /
 `--text-faint`) against `--panel-solid`, `--panel`, `--panel-muted` and `--canvas` (the background
 preview renders faint text straight onto the canvas), and the four semantic colours
 (`--danger` / `--success` / `--warning` / `--info`) against the three panel surfaces, where they are
@@ -250,7 +250,7 @@ Rules only hold if something watches them, so the baseline is **executable** and
 
 | file | what it does |
 |---|---|
-| `src/themeContrast.test.ts` | reads the tokens from `styles.css`, computes WCAG contrast per theme, holds the 4.5:1 floor (§6) |
+| `src/themeContrast.test.ts` | reads the tokens from the aggregated `styles/` CSS via `testUtils/loadStyles`, computes WCAG contrast per theme, holds the 4.5:1 floor (§6) |
 | `src/designTokens.test.ts` | radius / shadow / type / `!important` / `outline` policy + **debt ratchet** + theme parity + doc existence |
 | `e2e/geometry.spec.ts` | **geometry baseline**: sidebar / row height / reading column / prose width at four breakpoints, plus "no horizontal overflow anywhere"; also asserts a theme switch does not move the measure and that dark prose really is light |
 

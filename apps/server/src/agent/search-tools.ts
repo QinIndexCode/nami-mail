@@ -25,6 +25,10 @@ type WebSearchOutput = z.infer<typeof webSearchOutputSchema>;
 
 const SEARCH_TIMEOUT_MS = 12_000;
 const DEFAULT_MAX_RESULTS = 5;
+// DuckDuckGo's lite page is tens of kilobytes. A multi-megabyte body means the
+// endpoint served something other than results, and buffering it unbounded
+// would hand whatever a redirect or a hostile response streams to the Agent.
+const MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 function searchFailure(error: unknown, signal?: AbortSignal): AgentError {
   if (signal?.aborted) {
@@ -137,6 +141,33 @@ function parseDuckDuckGoResults(html: string, maxResults: number): WebSearchOutp
   return results;
 }
 
+async function readBoundedBody(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_SEARCH_RESPONSE_BYTES) {
+        throw new Error(`DuckDuckGo response exceeded ${MAX_SEARCH_RESPONSE_BYTES} bytes.`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  } catch (error) {
+    // Stop the transfer instead of leaving the rest of the body draining
+    // unobserved; cancellation failures must not mask the original error.
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function fetchDuckDuckGoResults(query: string, signal?: AbortSignal): Promise<string> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
@@ -156,7 +187,7 @@ async function fetchDuckDuckGoResults(query: string, signal?: AbortSignal): Prom
       throw new WebSearchBlockedError(`DuckDuckGo refused the request (HTTP ${response.status}).`);
     }
     if (!response.ok) throw new Error(`DuckDuckGo returned HTTP ${response.status}.`);
-    return await response.text();
+    return await readBoundedBody(response);
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);

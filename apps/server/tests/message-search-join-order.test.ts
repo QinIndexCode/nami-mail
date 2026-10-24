@@ -36,7 +36,7 @@ describe("search page join order", () => {
         username_mode, status, created_at
       ) VALUES ('account-1', 'a1@example.com', 'custom', 'Demo', 'encrypted', 'imap.example.com', 993, 1, 'smtp.example.com', 465, 1, 'email', 'connected', '2026-01-01T00:00:00.000Z')
     `).run();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen, uid_validity) VALUES ('account-1', 'INBOX', 'Inbox', '\\Inbox', 0, 0, '1')").run();
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES ('account-1', 'INBOX', 'Inbox', '\\Inbox', '1')").run();
     for (let index = 0; index < ROWS; index += 1) {
       const id = `m-${String(index).padStart(3, "0")}`;
       const at = new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString();

@@ -749,6 +749,7 @@ export class DesktopAgentBrokerHost {
       return respond(serializableResponseEnvelope(brokerFailurePayload(identifiers.requestId, createAgentError({
         code: "SCOPE_DENIED",
         message: "The paired NamiMail client is not authorized for mail read access.",
+        suggestion: "The pairing exists but carries no mail-read scope or account snapshot. Run \"namimail revoke --profile <name>\", then \"namimail pair\" and approve it in Nami Mail.",
       }))));
     }
     const payload = frame.payload;
@@ -764,6 +765,11 @@ export class DesktopAgentBrokerHost {
       });
     }
     if (payload.command === "status") {
+      // The identity fields exist so an external agent can answer "who am I
+      // and until when" without a guided tour: `namimail status` is the first
+      // command every integration guide tells an agent to run, and a self-
+      // diagnosing agent needs the pairing identity, its expiry, and the
+      // read-only floor in the same payload as the tool list.
       return respond({
         protocolVersion: "1.0",
         requestId: identifiers.requestId,
@@ -772,6 +778,9 @@ export class DesktopAgentBrokerHost {
           status: "running",
           transport: "windows-named-pipe",
           entryPoint: payload.entryPoint,
+          callerId: verified.pairing.clientId,
+          scopes: [...verified.pairing.scopes],
+          ...(verified.pairing.expiresAt ? { pairingExpiresAt: verified.pairing.expiresAt } : {}),
           tools: [...externalToolNames],
         },
         error: null,

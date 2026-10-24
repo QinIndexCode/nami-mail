@@ -1,7 +1,7 @@
 # Nami Mail — Agent 自动回复 + 长期记忆 实施计划与进度
 
 > 交接文档（供更换编码 Agent 后续推进）。最后更新：2026-08-08
-> 项目根：`d:\MyCode\nami-workspace\nami-mail-agent`（pnpm workspace：`packages/agent-contracts`、`apps/server`、`apps/web`、`apps/desktop`）
+> 项目根：仓库根目录（pnpm workspace：`packages/agent-contracts`、`apps/server`、`apps/web`、`apps/desktop`）
 
 ---
 

@@ -1,4 +1,5 @@
 # Calendar and Mail Invitations
+<!-- shipped-as: v0.5.1 -->
 
 [简体中文](CALENDAR.zh-CN.md) | [English](CALENDAR.en.md)
 
@@ -30,7 +31,7 @@ The embedded Agent registers four local calendar tools (`calendar.list`, `calend
 
 ## Local Storage and Boundaries
 
-- Event title, description, and location are encrypted at rest with a master-key-derived AES-256-GCM envelope; start/end timestamps stay plaintext in UTC to serve the month view's date-range queries. This matches the mail-cache encryption boundary — it is not whole-database SQLite encryption.
+- Event title, description, and location are encrypted at rest with a master-key-derived AES-256-GCM envelope; start/end timestamps stay plaintext in UTC to serve the month view's date-range queries. This matches the mail-cache encryption boundary — it is not whole-database SQLite encryption. Whole-database at-rest encryption has landed on the development trunk but has not shipped; once it does, those UTC timestamps no longer sit in a plaintext database file, and the release notes will state that change.
 - Field lengths are bounded: title 300 characters, description 10,000 characters, location 500 characters; a single import accepts at most 5,000 events.
 - The calendar sends nothing to third parties. ICS parsing happens entirely on your machine; the invite banner only downloads the attachment itself from the local service.
 

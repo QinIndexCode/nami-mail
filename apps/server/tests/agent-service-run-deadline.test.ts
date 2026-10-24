@@ -126,23 +126,14 @@ describe("AgentService run watchdog", () => {
     const internals = internalRuntime(service);
     vi.spyOn(internals.rag, "drainOnce").mockResolvedValue(undefined);
     vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    // The first turn's best-effort tail (title generation) shares the seam, so
-    // it is counted apart: the deadline under test governs the turn's own call.
-    let turnCalls = 0;
-    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (input: { requestId: string }) {
-      if (input.requestId.startsWith("title-")) {
-        yield { type: "text_delta", delta: "Fast reply." };
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
-      turnCalls += 1;
+    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
       yield { type: "text_delta", delta: "Fast reply." };
       yield { type: "completed", reason: "stop" };
     });
 
     const events = await drain(service, conversation, provider.id);
 
-    expect(turnCalls).toBe(1);
+    expect(streamChat).toHaveBeenCalledTimes(1);
     expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
     expect(events).toContainEqual({ type: "text_delta", delta: "Fast reply." });
     expect(events).toContainEqual({ type: "completed", reason: "stop" });
@@ -170,55 +161,6 @@ describe("AgentService run watchdog", () => {
     // the user message (existing behavior, preserved by the watchdog change).
     const messages = service.getConversation(conversation.id).messages;
     expect(messages.filter((message) => message.role === "assistant")).toHaveLength(0);
-    await service.close();
-  });
-
-  it("frees the conversation slot before the first-turn title generation finishes", async () => {
-    const { service, provider, conversation } = fixture();
-    const internals = internalRuntime(service);
-    vi.spyOn(internals.rag, "drainOnce").mockResolvedValue(undefined);
-    vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-    // The first-turn title generation rides a separate call on the same seam as
-    // the turn itself, told apart by its request id. Gate it: on a slow
-    // provider it can outrun the provider request timeout, and while it hangs
-    // the conversation must already accept new sends.
-    const { gate, release } = gatedStream();
-    let titleCalls = 0;
-    const streamChat = vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (input: { requestId: string }) {
-      if (!input.requestId.startsWith("title-")) {
-        yield { type: "text_delta", delta: "Partial reply." };
-        yield { type: "completed", reason: "stop" };
-        return;
-      }
-      titleCalls += 1;
-      await gate;
-      yield { type: "text_delta", delta: "Conversation title" };
-      yield { type: "completed", reason: "stop" };
-    });
-
-    const runPromise = drain(service, conversation, provider.id);
-    // The terminal events were consumed and the run persists its turn; the
-    // title generation (call 2) is now hanging on the gate.
-    await vi.waitFor(() => expect(titleCalls).toBe(1), { timeout: 10_000 });
-
-    // A resend issued while the title generation is still hanging must NOT be
-    // refused with CONFLICT: the slot was released right after the turn was
-    // persisted. This is what keeps the revoke-and-resend flow from leaving a
-    // user message that was never persisted (its later revoke would 404).
-    const followUp = await drain(service, conversation, provider.id);
-    expect(followUp).not.toContainEqual(expect.objectContaining({
-      type: "error",
-      error: expect.objectContaining({ code: "CONFLICT" }),
-    }));
-    expect(followUp).toContainEqual({ type: "text_delta", delta: "Partial reply." });
-    expect(followUp).toContainEqual({ type: "completed", reason: "stop" });
-    const messages = service.getConversation(conversation.id).messages;
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
-
-    release();
-    await runPromise;
-    expect(titleCalls).toBe(1);
-    expect(streamChat).toHaveBeenCalled();
     await service.close();
   });
 });

@@ -8,7 +8,6 @@ import {
   ChevronDown,
   CircleAlert,
   Clock,
-  Copy,
   Download,
   Eye,
   FileText,
@@ -31,10 +30,11 @@ import {
   X,
 } from "lucide-react";
 import { AgentMark } from "./AgentMark";
+import CopyButton from "./CopyButton";
 import { MailTextBody } from "./MailTextBody";
 import { CustomAvatar, SenderAvatar, accountTone } from "./SenderAvatar";
 import DatePicker from "./DatePicker";
-import { canPreviewAttachment } from "./attachmentPreview";
+import { canOpenPreview, previewKindFor } from "./attachments/catalog";
 import { hideFailedMailImages } from "./mailImageFallback";
 import { presentAttachment } from "./attachmentPresentation";
 import { AttachmentFileIcon, formatFileSize, isoFromDatetimeLocal, IconButton } from "./mailUi";
@@ -53,10 +53,11 @@ import type { DialogRoutingActions, DialogRoutingState } from "./dialogRouting";
 import type { Translate, useI18n } from "./i18n";
 import type { Account, AppSettings, Message } from "./types";
 import { resolveReaderAiIntent, type ReaderAiLaunchIntent } from "./readerAiActions";
+import { canReportSpam, messageFolderContext, messageMoveActions } from "./messageMoveActions";
 
-// The attachment preview modal is only reachable from the reader, so its lazy
+// The attachment preview drawer is only reachable from the reader, so its lazy
 // boundary lives here instead of App.
-const AttachmentPreviewModal = lazy(() => import("./AttachmentPreviewModal"));
+const AttachmentPreviewDrawer = lazy(() => import("./AttachmentPreviewDrawer"));
 
 type AttachmentExportsApi = ReturnType<typeof useAttachmentExports>;
 type MailTranslationApi = ReturnType<typeof useMailTranslation>;
@@ -254,6 +255,22 @@ export function MailReader(props: MailReaderProps) {
   const mailHtmlRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => hideFailedMailImages(mailHtmlRef.current), [readerHtml]);
 
+  // The full body is fetched per message while the list row carries only a
+  // bounded preview. Until that detail lands the reader must not present the
+  // preview as the mail: the "loading" phase gets its own skeleton, and the two
+  // actions that would quote/export the whole raw message stay withheld. A body
+  // that is already present (demo rows, a re-open) skips the phase entirely, and
+  // the error phase keeps the preview with the retry notice.
+  const bodyLoading = selected !== null
+    && selected.htmlBody === undefined
+    && selectedBodyPhase !== "loaded"
+    && selectedBodyPhase !== "error";
+  const folderContext = selected && selectedMessageAccount
+    ? messageFolderContext(selected, [selectedMessageAccount])
+    : selectedIsInJunk ? "junk" : selectedIsArchived ? "archive" : "other";
+  const moveActions = messageMoveActions(folderContext);
+  const canSnooze = folderContext === "other" || folderContext === "archive";
+
   return (
     <section className={`reader-column ${selected ? "has-message" : ""}`}>
       {selected ? (
@@ -267,9 +284,12 @@ export function MailReader(props: MailReaderProps) {
               <span className="toolbar-divider" aria-hidden="true" />
               <IconButton label={selectedMoveActionLabel ?? (selected.seen ? t("mail.action.markUnread") : t("mail.action.markRead"))} onClick={() => void toggleSelectedSeen()} disabled={selectedRemoteActionsBlocked}>{selected.seen ? <Mail size={18} /> : <MailOpen size={18} />}</IconButton>
               <IconButton label={selectedMoveActionLabel ?? (selected.flagged ? t("mail.action.unstar") : t("mail.action.star"))} className={selected.flagged ? "active-star" : ""} onClick={() => void toggleSelectedStar()} disabled={selectedRemoteActionsBlocked}><Star size={18} fill={selected.flagged ? "currentColor" : "none"} /></IconButton>
-              <IconButton label={selectedMoveActionLabel ?? t("mail.action.archive")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("archive")} disabled={selectedRemoteActionsBlocked || selectedIsArchived}><Archive size={18} /></IconButton>
-              <IconButton label={selectedMoveActionLabel ?? t("mail.action.moveToTrash")} className="reader-action-secondary" onClick={() => void moveSelectedMessage("trash")} disabled={selectedRemoteActionsBlocked}><Trash2 size={18} /></IconButton>
-              <div className="reader-snooze" ref={snoozeRef}>
+              {moveActions.map((action) => (
+                <IconButton key={action.target} label={selectedMoveActionLabel ?? t(action.labelKey)} className={action.target === "inbox" ? "" : "reader-action-secondary"} onClick={() => void moveSelectedMessage(action.target)} disabled={selectedRemoteActionsBlocked}>
+                  {action.target === "inbox" ? <Inbox size={18} /> : action.target === "archive" ? <Archive size={18} /> : <Trash2 size={18} />}
+                </IconButton>
+              ))}
+              {canSnooze && <div className="reader-snooze" ref={snoozeRef}>
                 <IconButton label={selectedIsSnoozed ? t("mail.snooze.reschedule") : t("mail.snooze.title")} className={`reader-action-secondary${selectedIsSnoozed ? " snoozed" : ""}`} onClick={() => { if (snoozeOpen) { beginSnoozeClose(); } else { setSnoozeOpen(true); } setSnoozeCustomUntil(""); }} expanded={snoozeOpen} disabled={selectedRemoteActionsBlocked}><Clock size={18} /></IconButton>
                 {snoozeMounted && (
                   <div className={`snooze-menu${snoozeClosing ? " closing" : ""}`} role="menu" aria-label={t("mail.snooze.title")}>
@@ -291,7 +311,7 @@ export function MailReader(props: MailReaderProps) {
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
               <div className="reader-more" ref={readerMoreRef}>
                 <IconButton label={t("mail.action.more")} className="reader-more-toggle" onClick={() => { if (readerMoreOpen) { beginReaderMoreClose(); } else { setReaderMoreOpen(true); } }} expanded={readerMoreOpen}><MoreHorizontal size={19} /></IconButton>
                 {readerMoreMounted && (
@@ -322,21 +342,21 @@ export function MailReader(props: MailReaderProps) {
                         </button>
                       </>
                     )}
-                    <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked || selectedIsArchived} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("archive"); }}><Archive size={16} />{t("mail.action.archive")}</button>
-                    <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>
+                    {moveActions.map((action) => (
+                      <button key={action.target} type="button" role="menuitem" className={action.target === "trash" ? "reader-more-danger" : undefined} disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage(action.target); }}>
+                        {action.target === "inbox" ? <Inbox size={16} /> : action.target === "archive" ? <Archive size={16} /> : <Trash2 size={16} />}{t(action.labelKey)}
+                      </button>
+                    ))}
+                    {!bodyLoading && <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void exportSelectedEml(); }}><Download size={16} />{t("mail.action.exportEml")}</button>}
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportContactVcf(); }}><UserRound size={16} />{t("mail.action.saveVcf")}</button>
                     <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); exportCalendarIcs(); }}><CalendarArrowDown size={16} />{t("mail.action.exportIcs")}</button>
                     {!shouldRenderTranslationPanel && (
                       <button type="button" role="menuitem" onClick={() => { setReaderMoreOpen(false); setForceShowTranslationId(selected.id); }}><Languages size={16} />{t("translation.action", { language: locales.find((item) => item.locale === locale)?.nativeName ?? locale })}</button>
                     )}
-                    <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>
-                    {!selectedIsInJunk && (
+                    {!bodyLoading && <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); printSelectedMessage(); }}><Printer size={16} />{t("mail.action.print")}</button>}
+                    {canReportSpam(folderContext) && (
                       <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("junk"); }}><ShieldCheck size={16} />{t("mail.action.reportSpam")}</button>
                     )}
-                    {selectedIsInJunk && (
-                      <button type="button" role="menuitem" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("inbox"); }}><Inbox size={16} />{t("mail.action.notSpam")}</button>
-                    )}
-                    <button type="button" role="menuitem" className="reader-more-danger" disabled={selectedRemoteActionsBlocked} onClick={() => { setReaderMoreOpen(false); void moveSelectedMessage("trash"); }}><Trash2 size={16} />{t("mail.action.moveToTrash")}</button>
                   </div>
                 )}
               </div>
@@ -378,7 +398,7 @@ export function MailReader(props: MailReaderProps) {
           {selectedMoveLocationUnverified && <section className="move-location-notice" role="status"><CircleAlert size={18} /><div><strong>{t("mail.moveLocationUnverified.title")}</strong><p>{t("mail.moveLocationUnverified.description")}</p></div></section>}
           <div className="reader-split">
             <article className="mail-reader">
-              <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div>{openAgentWorkspace && (<div className="mail-summary-bar" style={{ marginTop: 14, display: "flex", alignItems: "center" }}><button type="button" className="secondary-button mail-summary-pill" style={{ minHeight: 28, padding: "3px 10px", borderRadius: "var(--radius-pill)", fontSize: 11, fontWeight: 550, gap: 6 }} onClick={() => openAgentWorkspace(resolveReaderAiIntent("summary"))} aria-label={t("mail.action.aiSummaryAria")} data-tooltip={t("mail.action.aiSummaryAria")}><FileText size={13} aria-hidden="true" /><span>{t("mail.action.aiSummary")}</span></button></div>)}</header>
+              <header className="mail-title"><span className="account-badge">{selectedMessageAccount ? localizedProviderName(selectedMessageAccount) : selected.providerName}</span><h2 ref={readerTitleRef} tabIndex={-1}>{selected.subject.trim() ? selected.subject : t("mail.message.noSubject")}</h2><div className="mail-people">{(() => { const headerPerson = selectedSentRecipient ?? selected.from; return <><SenderAvatar name={headerPerson.name} address={headerPerson.address} tone={accountTone(headerPerson.address)} size="large" gravatarEnabled={settings.avatarGravatarEnabled} bimiEnabled={settings.avatarBimiEnabled} /><div className="mail-people-copy"><strong>{headerPerson.name || headerPerson.address}</strong><button className="mail-recipient-toggle" type="button" data-tooltip={headerPerson.address} aria-expanded={recipientDetailsOpen} onClick={() => setRecipientDetailsOpen((value) => !value)}>{selectedSentRecipient ? t("mail.reader.toRecipient", { recipient: headerPerson.name || headerPerson.address }) : t("mail.reader.toMe")} <ChevronDown className={recipientDetailsOpen ? "open" : ""} size={13} /></button>{recipientDetailsOpen && <div className="mail-recipient-details"><span>{t("compose.sender")}</span><strong>{selected.from.name ? `${selected.from.name} <${selected.from.address}>` : selected.from.address}</strong><span>{t("compose.to")}</span><strong>{selected.to.length ? selected.to.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator")) : selected.accountEmail}</strong>{selected.cc.length > 0 && <><span>{t("compose.cc")}</span><strong>{selected.cc.map((recipient) => recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).join(t("common.listSeparator"))}</strong></>}</div>}</div></>; })()}<time>{formatFullDate(selected.sentAt, locale)}</time></div>{openAgentWorkspace && (<div className="mail-summary-bar" style={{ marginTop: 14, display: "flex", alignItems: "center" }}><button type="button" className="secondary-button mail-summary-pill" style={{ minHeight: 28, padding: "3px 10px", borderRadius: "var(--radius-pill)", fontSize: 11, fontWeight: 550, gap: 6 }} onClick={() => openAgentWorkspace(resolveReaderAiIntent("summary"))} aria-label={t("mail.action.aiSummaryAria")} data-tooltip={t("mail.action.aiSummaryAria")}><FileText size={13} aria-hidden="true" /><span>{t("mail.action.aiSummary")}</span></button></div>)}</header>
               {verificationCodes.length > 0 && (
                 <section className="verification-code-list" aria-label={t("mail.verification.detected") }>
                   {verificationCodes.map((candidate, index) => {
@@ -387,7 +407,15 @@ export function MailReader(props: MailReaderProps) {
                     return (
                       <section className={`verification-code-panel ${isPrimaryVerificationCode ? "primary" : "candidate"}`} key={`${candidate.code}:${candidate.source}`} aria-label={isPrimaryVerificationCode ? t("mail.verification.detected") : t("mail.verification.otherCandidate")}>
                         <div><span>{isPrimaryVerificationCode ? t("mail.verification.label", { source: sourceLabel }) : t("mail.verification.otherLabel", { source: sourceLabel })}</span><strong>{candidate.code}</strong></div>
-                        <button className="secondary-button verification-code-copy" type="button" onClick={() => void copyDetectedVerificationCode(candidate.code)} aria-label={t("mail.verification.copyAria", { code: candidate.code })} data-tooltip={t("mail.verification.copyTooltip")}><Copy size={15} />{isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}</button>
+                        <CopyButton
+                          className="secondary-button verification-code-copy"
+                          text={candidate.code}
+                          copy={copyDetectedVerificationCode}
+                          ariaLabel={t("mail.verification.copyAria", { code: candidate.code })}
+                          tooltip={t("mail.verification.copyTooltip")}
+                          label={isPrimaryVerificationCode ? t("mail.verification.copy") : t("common.copy")}
+                          size={15}
+                        />
                       </section>
                     );
                   })}
@@ -417,13 +445,24 @@ export function MailReader(props: MailReaderProps) {
                   </div>
                 </section>
               )}
-              <div className="mail-content">{selected.htmlBody
-                ? <div className="mail-html" ref={mailHtmlRef} dangerouslySetInnerHTML={{ __html: readerHtml }} />
-                : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
-              </div>
+              {bodyLoading ? (
+                <div className="mail-content mail-body-loading" role="status" aria-live="polite">
+                  <span className="visually-hidden">{t("mail.body.loading")}</span>
+                  <div className="skeleton-stack" aria-hidden="true">
+                    <div className="skeleton-card" />
+                    <div className="skeleton-card" />
+                  </div>
+                </div>
+              ) : (
+                <div className="mail-content">{selected.htmlBody
+                  ? <div className="mail-html" ref={mailHtmlRef} dangerouslySetInnerHTML={{ __html: readerHtml }} />
+                  : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
+                </div>
+              )}
               {visibleAttachments.length > 0 && (
                 <section className="attachment-list" aria-label={t("mail.attachment.aria", { count: visibleAttachments.length })}>
                   <div className="attachment-list-heading"><Paperclip size={15} /><span>{t("compose.attachments")}</span><small>{t("mail.attachment.fileCount", { count: visibleAttachments.length })}</small><span className="attachment-heading-actions"><IconButton label={t("mail.attachment.downloadAllZip")} disabled={zipAllPhase === "zipping" || selectedMovePending || selected.movePending || selected.moveLocationUnverified} onClick={() => void zipAllAttachments()}>{zipAllPhase === "zipping" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}</IconButton></span></div>
+                  <div className="attachment-grid">
                   {visibleAttachments.map((attachment) => {
                     const presentation = presentAttachment(attachment.filename, attachment.contentType, t);
                     const downloadKey = `${selected.id}:${attachment.partId}`;
@@ -438,10 +477,10 @@ export function MailReader(props: MailReaderProps) {
                           : t("mail.attachment.detail", { type: presentation.label, size: formatFileSize(attachment.size) });
                     return (
                       <div className={`attachment-card${download?.phase ? ` is-${download.phase}` : ""}`} key={attachment.partId}>
-                        <AttachmentFileIcon kind={presentation.kind} />
+                        <AttachmentFileIcon kind={presentation.kind} filename={attachment.filename} />
                         <span><strong className="truncated-tooltip" data-tooltip={attachment.filename}><span>{attachment.filename}</span></strong><small className="truncated-tooltip" aria-live="polite" data-tooltip={download?.detail}><span>{downloadDetail}</span></small></span>
                         <div className="attachment-actions">
-                          {canPreviewAttachment(attachment.filename, attachment.contentType) && (
+                          {canOpenPreview(previewKindFor(attachment)) && (
                             <IconButton label={t("mail.attachment.preview", { filename: attachment.filename })} disabled={selectedRemoteActionsBlocked} onClick={() => openAttachmentPreview(selected, attachment)}><Eye size={16} /></IconButton>
                           )}
                           {isIcsAttachment(attachment) && (
@@ -452,11 +491,12 @@ export function MailReader(props: MailReaderProps) {
                       </div>
                     );
                   })}
+                  </div>
                 </section>
               )}
               <footer className="quick-reply"><CustomAvatar name={selected.accountEmail} address={selected.accountEmail} tone={accountTone(selected.accountEmail)} size="small" /><button onClick={openReply}>{t("mail.reader.replyTo", { sender: quickReplySender })}</button></footer>
             </article>
-            {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewModal messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
+            {state.attachmentPreview && <Suspense fallback={null}><AttachmentPreviewDrawer messageId={state.attachmentPreview.message.id} attachment={state.attachmentPreview.attachment} onClose={() => actions.closeAttachmentPreview()} /></Suspense>}
           </div>
         </ErrorBoundary>
       ) : (

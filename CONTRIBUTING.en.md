@@ -51,6 +51,9 @@ See the [Development Guide](docs/DEVELOPMENT.en.md) for layout, testing, and pac
 3. For UI interactions, check focus, keyboard operation, text overflow, themes, and accessible names in at least a desktop and narrow window.
 4. Treat mail content as untrusted input. Do not weaken HTML sanitization, remote-resource restrictions, local API access-token controls, or cache policies.
 5. For local storage changes, remain compatible with existing databases and encrypted payloads. Every migration must be detectable, retryable, and must not rewrite sensitive fields as plaintext.
+6. Ship the three pieces together: the code, the test that covers it, and the documentation that describes the behaviour. When they cannot land in the same commit, the commit message must say which piece is deliberately deferred and what will close the gap — otherwise the next person has to reverse-engineer the docs from the code, and the docs stay at the old conclusion.
+7. Do not leave a working tree uncommitted for long. End a work session with either a commit or a WIP note (what changed, what is left, what comes next); work spanning several sessions should be split into commits that each pass the checks on their own.
+8. Cross-cutting trade-offs — replacing a persistence layer, changing the HTTP contract, merging or deleting an existing module — get a [decision record](docs/development/decisions/README.en.md) before the code. It states what was seen, which path was chosen, and what was given up; it promises no roadmap and does not track implementation details.
 
 Before opening a pull request, run at least the checks relevant to the change. The full baseline is:
 
@@ -60,6 +63,8 @@ npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run build
@@ -72,7 +77,7 @@ See the [Release Guide](docs/RELEASING.en.md) for additional Windows installer, 
 
 1. Fork the upstream repository and create a clearly named feature or fix branch from the latest `main`. Do not push commits directly to upstream `main`.
 2. Commit focused changes in your fork. Do not push `.env`, test accounts, OAuth callback parameters, tokens, app passwords, certificates, build artifacts, or local data.
-3. Run the complete local checks below before submitting. They are the local subset of GitHub's `Validate Pull Request / validate` — CI additionally runs `lint`, `test:e2e`, SQLite load verification, and smoke checks. For documentation-only changes, run the relevant checks at minimum and state any checks not run in the PR.
+3. Run the complete local checks below before submitting. They are the local subset of GitHub's `Validate Pull Request / validate` — CI additionally runs checks outside this list: Node/Electron SQLite load verification, `smoke:server-node`, the script-level invariant suite (`node --test "scripts/tests/*.test.mjs"`), `docs:claims:check`, `docs:release-review`, the docs-site build and locale check, `test:e2e:real`, the Electron ABI check plus desktop smoke, and `npm audit`. For documentation-only changes, run the relevant checks at minimum and state any checks not run in the PR.
 4. Open a pull request against upstream `main`. Use the template to describe the related issue, user-visible changes, validation evidence, and remaining risks. Validation workflows from forks use read-only tokens and cannot read release or signing credentials. Do not ask a PR workflow to expose those credentials.
 5. Wait for `Validate Pull Request / validate` to pass before requesting review. The current `main` rules require a PR, resolved discussions, at least one valid approval, and `validate` based on the latest `main`. New commits dismiss prior approvals. `.github/CODEOWNERS` routes PRs to maintainers automatically, but it does not replace remote rules or human review. Regular collaborators cannot push directly or force-push. Administrators should bypass the rules only in an emergency and leave an auditable follow-up PR.
 
@@ -87,6 +92,8 @@ npm.cmd run build
 npm.cmd run test
 npm.cmd run lint
 npm.cmd run test:e2e
+npm.cmd run docs:claims:check
+npm.cmd run docs:release-review
 npm.cmd --workspace @nami/web run test
 npm.cmd run test:desktop-security
 npm.cmd run smoke:runtime

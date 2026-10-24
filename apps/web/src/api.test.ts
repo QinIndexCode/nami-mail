@@ -39,6 +39,19 @@ describe("api transport errors", () => {
     await expect(api.accounts()).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("carries the server's refusal reason onto ApiError", async () => {
+    // The undo route answers six of its seven refusals with 409, so the reason
+    // word in the body is the only way the renderer can pick the right sentence.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      JSON.stringify({ message: "Undo refused.", code: "conflict", reason: "expired" }),
+      { status: 409, headers: { "content-type": "application/json" } },
+    )));
+
+    const error: unknown = await api.accounts().catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 409, code: "conflict", reason: "expired" });
+  });
+
   it("keeps renderer API requests free of a desktop token (injected by the main process)", async () => {
     vi.stubGlobal("window", {});
     const fetchMock = vi.fn().mockResolvedValue(new Response("[]", {
@@ -514,5 +527,25 @@ describe("agent stream seam validation", () => {
     const received: string[] = [];
     await api.streamAgentMessage("conversation-1", request, (event) => received.push(event.type));
     expect(received).toEqual(["text_delta", "tool"]);
+  });
+});
+
+describe("api.stats", () => {
+  it("asks for the same account scope the list query names", async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(
+      JSON.stringify({ accounts: 1, messages: 2, unread: 1 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.stats();
+    await api.stats("acct-1");
+    await api.stats("acct x");
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/stats",
+      "/api/stats?accountId=acct-1",
+      "/api/stats?accountId=acct%20x",
+    ]);
   });
 });

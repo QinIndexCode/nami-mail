@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageListRow } from "./MessageList";
 import { I18nProvider } from "./i18n";
 import type { Message } from "./types";
+import type { MoveTarget } from "./api";
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -46,7 +47,7 @@ describe("MessageListRow", () => {
   let onRowClick: ReturnType<typeof vi.fn<RowClick>>;
   let onOpenContextMenu: ReturnType<typeof vi.fn<(message: Message, x: number, y: number) => void>>;
   let onQuickToggleStar: ReturnType<typeof vi.fn<(message: Message) => void>>;
-  let onQuickMoveMessage: ReturnType<typeof vi.fn<(message: Message, target: "archive" | "trash") => void>>;
+  let onQuickMoveMessage: ReturnType<typeof vi.fn<(message: Message, target: MoveTarget) => void>>;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -58,7 +59,7 @@ describe("MessageListRow", () => {
     onRowClick = vi.fn<RowClick>();
     onOpenContextMenu = vi.fn<(message: Message, x: number, y: number) => void>();
     onQuickToggleStar = vi.fn<(message: Message) => void>();
-    onQuickMoveMessage = vi.fn<(message: Message, target: "archive" | "trash") => void>();
+    onQuickMoveMessage = vi.fn<(message: Message, target: MoveTarget) => void>();
   });
 
   afterEach(() => {
@@ -162,6 +163,17 @@ describe("MessageListRow", () => {
     expect(onQuickMoveMessage).toHaveBeenNthCalledWith(2, message, "trash");
   });
 
+  it("offers restore in Trash and sends the existing inbox move target", () => {
+    const message = makeMessage({ mailbox: "Trash" });
+    renderRow(message, { folderContext: "trash" });
+    const restore = container.querySelector<HTMLButtonElement>('.row-quick-action[aria-label="恢复到收件箱"]');
+    expect(restore).not.toBeNull();
+    expect(container.querySelector('[aria-label="移至废纸篓"]')).toBeNull();
+    expect(container.querySelector('[aria-label="归档"]')).toBeNull();
+    act(() => restore!.click());
+    expect(onQuickMoveMessage).toHaveBeenCalledWith(message, "inbox");
+  });
+
   it("keeps the ref stable when App replaces the message object with the same id (no re-measure)", () => {
     renderRow(makeMessage({ subject: "First" }));
     expect(container.querySelector(".message-subject")?.textContent).toContain("First");
@@ -202,5 +214,22 @@ describe("MessageListRow", () => {
     // Own-sent mail without recipients falls back to the sender rendering.
     renderRow(makeMessage({ mailbox: "Sent", from: { name: "Me", address: "me@example.com" }, to: [] }));
     expect(container.querySelector(".message-meta strong")?.textContent).toBe("Me");
+  });
+
+  it("renders the localized placeholder instead of a blank line for a missing subject", () => {
+    // An empty subject is a real server value (including for locally saved
+    // drafts), and a whitespace-only one must not slip through either.
+    renderRow(makeMessage({ subject: "" }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("无主题");
+    renderRow(makeMessage({ subject: "   " }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("无主题");
+    // A real subject is shown untouched.
+    renderRow(makeMessage({ subject: "Quarterly report" }));
+    expect(container.querySelector(".message-subject")?.textContent).toBe("Quarterly report");
+  });
+
+  it("puts the same placeholder into the selection announcement", () => {
+    renderRow(makeMessage({ subject: "  " }), { selectionMode: true });
+    expect(container.querySelector(".visually-hidden")?.textContent).toContain("无主题");
   });
 });

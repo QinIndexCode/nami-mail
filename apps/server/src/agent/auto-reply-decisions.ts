@@ -53,6 +53,8 @@ export type AutoReplyDecisionCreateInput = {
 
 export type AutoReplyDecisionListOptions = {
   accountId?: string;
+  /** Restricts results to the conversation's selected accounts. */
+  accountIds?: readonly string[];
   reason?: AutoReplyDecisionReason;
   query?: string;
   fromAddress?: string;
@@ -193,6 +195,7 @@ export class EncryptedAutoReplyDecisionStore {
     const records: AutoReplyDecisionRecord[] = [];
     for (const row of rows) {
       if (options.accountId && row.account_id !== options.accountId) continue;
+      if (options.accountIds && !options.accountIds.includes(row.account_id)) continue;
       if (options.reason && row.reason !== options.reason) continue;
       let record: AutoReplyDecisionRecord;
       try {

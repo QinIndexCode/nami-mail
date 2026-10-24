@@ -168,16 +168,6 @@ function internalRuntime(service: AgentService) {
   };
 }
 
-/**
- * The best-effort first-turn title generator is a provider call on this same
- * seam, told apart by its request id. These cases characterize the turn's own
- * event order, so the tail is answered with nothing: it must add neither a
- * request to the recorded calls nor a `title` event to the anchored sequence.
- */
-function isAuxiliaryChatRequest(request: { requestId: string }): boolean {
-  return request.requestId.startsWith("title-");
-}
-
 async function streamWithAgent(
   service: AgentService,
   conversation: ReturnType<AgentService["createConversation"]>,
@@ -260,7 +250,6 @@ function compactEvents(events: unknown[]): string[] {
 /** Round 1 yields one draft-creating tool call; round 2 answers in plain text. */
 function mockDraftThenReplyStream(internals: ReturnType<typeof internalRuntime>, providerRequests: ProviderChatRequest[]): void {
   vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-    if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
     const { chat } = request;
     providerRequests.push(chat);
     if (providerRequests.length === 1) {
@@ -307,6 +296,8 @@ describe("AgentService streamMessage event order (characterization)", () => {
       // confirmation request.
       const pending = await readUntilConfirmation(iterator);
       expect(compactEvents(pending.events)).toEqual([
+        // The first turn publishes its derived title before touching the model.
+        "title",
         "status",
         "tool:rag.search:running",
         "tool:rag.search:completed",
@@ -341,7 +332,6 @@ describe("AgentService streamMessage event order (characterization)", () => {
       const providerRequests: ProviderChatRequest[] = [];
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
       vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string; chat: ProviderChatRequest }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
         const { chat } = request;
         providerRequests.push(chat);
         if (providerRequests.length === 1) {
@@ -364,6 +354,7 @@ describe("AgentService streamMessage event order (characterization)", () => {
       const events = await streamWithAgent(value.service, value.conversation, value.provider.id);
 
       expect(compactEvents(events)).toEqual([
+        "title",
         "status",
         "tool:rag.search:running",
         "tool:rag.search:completed",
@@ -465,8 +456,7 @@ describe("AgentService streamMessage teardown when the consumer stops reading", 
       const internals = internalRuntime(value.service);
       const tasks = trackTaskRelease(value.lifecycle);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         yield { type: "text_delta", delta: replyWithSuggestion };
         yield { type: "completed", reason: "stop" };
       });
@@ -508,8 +498,7 @@ describe("AgentService streamMessage teardown when the consumer stops reading", 
     try {
       const internals = internalRuntime(value.service);
       vi.spyOn(internals.rag, "search").mockResolvedValue([]);
-      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request: { requestId: string }) {
-        if (isAuxiliaryChatRequest(request)) { yield { type: "completed", reason: "stop" }; return; }
+      vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
         yield { type: "text_delta", delta: replyWithSuggestion };
         yield { type: "completed", reason: "stop" };
       });
@@ -517,6 +506,7 @@ describe("AgentService streamMessage teardown when the consumer stops reading", 
       const events = await streamWithAgent(value.service, value.conversation, value.provider.id);
 
       expect(compactEvents(events)).toEqual([
+        "title",
         "status",
         "tool:rag.search:running",
         "tool:rag.search:completed",

@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import {
-  clearMessageSnooze,
-  listSnoozedMessages,
-  releaseDueSnoozedMessages,
-  setMessageSnoozed,
-} from "../src/snooze.js";
+import { listSnoozedMessages, releaseDueSnoozedMessages, snoozedUntilValue } from "../src/snooze.js";
+import { acceptSnoozeTask, cancelSnoozeTask, createSnoozeRunner } from "../src/tasks/kinds/snooze.js";
+import { openTaskPayload, reportTaskProgress, taskItems, taskRow } from "../src/tasks/index.js";
+import type { NewInboxMessage } from "../src/sync.js";
+
+const MASTER_KEY = Buffer.alloc(32, 7);
 
 describe("snooze storage", () => {
   let db: DatabaseHandle;
@@ -36,29 +36,84 @@ describe("snooze storage", () => {
     db.close();
   });
 
+  /** The acceptance only needs somewhere for `start()` to land; these tests never drain. */
+  function commitDeps() {
+    return { db, masterKey: MASTER_KEY, scheduler: { start: () => undefined } };
+  }
+
+  function snooze(messageId: string, until: string) {
+    return acceptSnoozeTask(commitDeps(), { messageId, until });
+  }
+
+  async function run(taskId: string, onSnoozeReleased?: (message: NewInboxMessage) => void): Promise<number> {
+    const task = taskRow(db, taskId)!;
+    let updated = 0;
+    await createSnoozeRunner({ db, masterKey: MASTER_KEY, ...(onSnoozeReleased ? { onSnoozeReleased } : {}) })({
+      task,
+      payload: openTaskPayload(MASTER_KEY, task),
+      items: taskItems(db, taskId),
+      signal: new AbortController().signal,
+      report: (delta) => {
+        updated += delta.updated ?? 0;
+        // What the scheduler's own callback does; without it the row would stay
+        // at zero and the assertion below would be testing this helper.
+        reportTaskProgress(db, taskId, delta);
+      },
+    });
+    return updated;
+  }
+
   it("sets, clears and lists snoozes", () => {
     const future = new Date(Date.now() + 60_000).toISOString();
-    setMessageSnoozed(db, "message-1", future);
+    snooze("message-1", future);
     expect(listSnoozedMessages(db)).toHaveLength(1);
     expect(listSnoozedMessages(db)[0]!.snoozed_until).toBe(future);
 
-    clearMessageSnooze(db, "message-1");
+    cancelSnoozeTask(db, "message-1");
     expect(listSnoozedMessages(db)).toHaveLength(0);
+  });
+
+  it("parks one release task at the stored instant", () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const accepted = snooze("message-1", future);
+
+    const task = taskRow(db, accepted.taskId)!;
+    expect(task).toMatchObject({ kind: "snooze", status: "pending", due_at: Date.parse(future), total: 1 });
+    expect(taskItems(db, accepted.taskId).map((item) => item.message_id)).toEqual(["message-1"]);
+    expect(openTaskPayload(MASTER_KEY, task)).toEqual({ until: future });
+  });
+
+  it("supersedes the earlier release when the same message is snoozed again", () => {
+    const first = snooze("message-1", new Date(Date.now() + 60_000).toISOString());
+    const second = snooze("message-1", new Date(Date.now() + 120_000).toISOString());
+
+    // The first task cannot fire and end the newer snooze early.
+    expect(taskRow(db, first.taskId)).toBeUndefined();
+    expect(taskRow(db, second.taskId)?.status).toBe("pending");
+    expect(snoozedUntilValue(db, "message-1")).toBe(second.snoozedUntil);
+  });
+
+  it("cancels the pending release alongside the column", () => {
+    const accepted = snooze("message-1", new Date(Date.now() + 60_000).toISOString());
+    cancelSnoozeTask(db, "message-1");
+
+    expect(snoozedUntilValue(db, "message-1")).toBeNull();
+    expect(taskRow(db, accepted.taskId)).toBeUndefined();
   });
 
   it("throws when the message does not exist", () => {
     const future = new Date(Date.now() + 60_000).toISOString();
-    expect(() => setMessageSnoozed(db, "missing", future)).toThrow("邮件不存在。");
-    expect(() => clearMessageSnooze(db, "missing")).toThrow("邮件不存在。");
+    expect(() => snooze("missing", future)).toThrow("邮件不存在。");
+    expect(() => cancelSnoozeTask(db, "missing")).toThrow("邮件不存在。");
   });
 
   it("releases only snoozes whose time has arrived", () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 60_000).toISOString();
-    setMessageSnoozed(db, "message-1", past);
-    setMessageSnoozed(db, "message-2", future);
+    snooze("message-1", past);
+    snooze("message-2", future);
 
-    const released = releaseDueSnoozedMessages(db, Buffer.alloc(32, 7), new Date().toISOString());
+    const released = releaseDueSnoozedMessages(db, MASTER_KEY, new Date().toISOString());
 
     expect(released.map((entry) => entry.id).sort()).toEqual(["message-1"]);
     expect(released[0]).toMatchObject({ accountId: "account-1", subject: "Subject", fromAddress: "demo@example.com" });
@@ -66,23 +121,51 @@ describe("snooze storage", () => {
     expect(listSnoozedMessages(db).map((row) => row.id)).toEqual(["message-2"]);
   });
 
+  it("releases at the runner's instant and notifies once", async () => {
+    const past = new Date(Date.now() - 1_000).toISOString();
+    const accepted = snooze("message-1", past);
+    const notified: NewInboxMessage[] = [];
+
+    expect(await run(accepted.taskId, (message) => notified.push(message))).toBe(1);
+
+    expect(snoozedUntilValue(db, "message-1")).toBeNull();
+    expect(notified.map((message) => message.id)).toEqual(["message-1"]);
+    expect(taskRow(db, accepted.taskId)).toMatchObject({ updated: 1, failed: 0 });
+  });
+
+  it("does nothing when a claimed task's snooze has been replaced", async () => {
+    const first = new Date(Date.now() - 1_000).toISOString();
+    const accepted = snooze("message-1", first);
+    // The old task was already claimed and could not be deleted by the newer
+    // acceptance; the user then moved the snooze to a later instant.
+    const newer = new Date(Date.now() + 60_000).toISOString();
+    db.prepare("UPDATE messages SET snoozed_until = ? WHERE id = ?").run(newer, "message-1");
+    const notified: NewInboxMessage[] = [];
+
+    expect(await run(accepted.taskId, (message) => notified.push(message))).toBe(0);
+
+    // The newer promise survives, and no toast claims otherwise.
+    expect(snoozedUntilValue(db, "message-1")).toBe(newer);
+    expect(notified).toEqual([]);
+  });
+
   // R05: the snoozed view and the due release compare snoozed_until as a
   // STRING against a UTC now — an offset form sorted wrongly and the message
   // came back at the wrong time (or never). The stored value is the same
   // instant in UTC form.
   it("stores an offset snooze as the same instant in UTC (R05)", () => {
-    const snoozedUntil = setMessageSnoozed(db, "message-1", "2026-01-01T09:00:00+08:00");
-    expect(snoozedUntil).toBe("2026-01-01T01:00:00.000Z");
+    const accepted = snooze("message-1", "2026-01-01T09:00:00+08:00");
+    expect(accepted.snoozedUntil).toBe("2026-01-01T01:00:00.000Z");
 
     // One minute before the instant: string comparison agrees with reality.
     expect(listSnoozedMessages(db, "2026-01-01T00:59:00.000Z").map((row) => row.id)).toEqual(["message-1"]);
     // One millisecond past it: released, and only the offset task.
-    const released = releaseDueSnoozedMessages(db, Buffer.alloc(32, 7), "2026-01-01T01:00:00.001Z");
+    const released = releaseDueSnoozedMessages(db, MASTER_KEY, "2026-01-01T01:00:00.001Z");
     expect(released.map((entry) => entry.id)).toEqual(["message-1"]);
   });
 
   it("rejects an unparseable snooze time (R05)", () => {
-    expect(() => setMessageSnoozed(db, "message-1", "not-a-date")).toThrow("稍后处理时间无效。");
+    expect(() => snooze("message-1", "not-a-date")).toThrow("稍后处理时间无效。");
   });
 });
 
@@ -101,8 +184,8 @@ describe("snooze API routes", () => {
         username_mode, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run("account-1", "demo@example.com", "custom", "Demo", "encrypted", "imap.example.com", 993, 1, "smtp.example.com", 465, 1, "email", "connected", routeNow);
-    routeDb.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "INBOX", "Inbox", "\\Inbox", 2, 0);
+    routeDb.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "INBOX", "Inbox", "\\Inbox");
     for (const [id, uid] of [["message-1", 1], ["message-2", 2]] as Array<[string, number]>) {
       routeDb.prepare(`
         INSERT INTO messages (

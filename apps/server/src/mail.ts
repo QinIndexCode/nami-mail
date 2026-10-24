@@ -1,18 +1,14 @@
-import { ImapFlow } from "imapflow";
-import nodemailer from "nodemailer";
 import { decryptAccountPassword } from "./account-credentials.js";
 import { safeLogout } from "./imap-logout.js";
 import type { ResolvedOutboundAttachment } from "./outbound-attachments.js";
-import { loginUsername, type DetectedProvider, type MailServerConfig } from "./providers.js";
+import {
+  activeProviderFactory,
+  type ImapSession,
+  type MailAuth,
+  type SmtpTransport,
+} from "./provider/index.js";
+import { loginUsername, type DetectedProvider } from "./providers.js";
 import type { AccountRecord } from "./types.js";
-
-const connectionOptions = {
-  logger: false as const,
-  connectionTimeout: 15_000,
-  greetingTimeout: 15_000,
-  socketTimeout: 45_000,
-  tls: { rejectUnauthorized: true },
-};
 
 export type AccountAccessTokenProvider = {
   getAccessToken(account: AccountRecord): Promise<string>;
@@ -45,10 +41,6 @@ export type SafeMailError = {
   message: string;
 };
 
-type MailAuth =
-  | { kind: "password"; secret: string }
-  | { kind: "oauth2"; accessToken: string };
-
 type ConnectionProvider = Pick<DetectedProvider, "imap" | "smtp" | "usernameMode">;
 type MailOperationPhase = "imap" | "smtp";
 
@@ -60,45 +52,27 @@ function withMailOperationPhase(error: unknown, phase: MailOperationPhase): Erro
   return wrapped;
 }
 
-function transportOf(server: Pick<MailServerConfig, "transport" | "secure">): "tls" | "starttls" {
-  return server.transport ?? (server.secure ? "tls" : "starttls");
-}
-
 function imapClient(
   username: string,
   provider: Pick<ConnectionProvider, "imap">,
   auth: MailAuth,
   socketTimeoutOverride?: number,
   maxIdleTimeOverride?: number,
-): ImapFlow {
-  const transport = transportOf(provider.imap);
-  const client = new ImapFlow({
-    host: provider.imap.host,
-    port: provider.imap.port,
-    secure: transport === "tls",
-    // A false `secure` value otherwise allows ImapFlow to downgrade to
-    // plaintext when STARTTLS is unavailable. This is deliberately mandatory.
-    doSTARTTLS: transport === "starttls",
-    auth: auth.kind === "oauth2"
-      ? { user: username, accessToken: auth.accessToken }
-      : { user: username, pass: auth.secret },
-    ...connectionOptions,
+): ImapSession {
+  return activeProviderFactory().createImapSession({
+    ...provider.imap,
+    username,
+    auth,
     ...(socketTimeoutOverride !== undefined ? { socketTimeout: socketTimeoutOverride } : {}),
     ...(maxIdleTimeOverride !== undefined ? { maxIdleTime: maxIdleTimeOverride } : {}),
   });
-
-  // ImapFlow reports connection failures both through rejected operations and
-  // through EventEmitter. A late socket error without a listener terminates the
-  // entire Node.js process even after the HTTP handler has returned an error.
-  client.on("error", () => undefined);
-  return client;
 }
 
 export function createImapClient(
   email: string,
   password: string,
   provider: Pick<DetectedProvider, "imap" | "usernameMode" | "imapUsernameMode">,
-): ImapFlow {
+): ImapSession {
   return imapClient(loginUsername(email, provider as DetectedProvider, "imap"), provider, { kind: "password", secret: password });
 }
 
@@ -106,20 +80,8 @@ function smtpTransport(
   username: string,
   provider: Pick<ConnectionProvider, "smtp">,
   auth: MailAuth,
-) {
-  const transport = transportOf(provider.smtp);
-  return nodemailer.createTransport({
-    host: provider.smtp.host,
-    port: provider.smtp.port,
-    secure: transport === "tls",
-    // Nodemailer otherwise uses opportunistic STARTTLS on port 587. Require it
-    // so an active downgrade cannot expose credentials or message contents.
-    requireTLS: transport === "starttls",
-    auth: auth.kind === "oauth2"
-      ? { type: "OAuth2" as const, user: username, accessToken: auth.accessToken }
-      : { user: username, pass: auth.secret },
-    ...connectionOptions,
-  });
+): SmtpTransport {
+  return activeProviderFactory().createSmtpTransport({ ...provider.smtp, username, auth });
 }
 
 export async function testMailboxConnection(
@@ -250,7 +212,7 @@ export async function imapClientForAccount(
   masterKey: Buffer,
   accessTokenProvider?: AccountAccessTokenProvider,
   options?: { socketTimeout?: number; maxIdleTime?: number },
-): Promise<ImapFlow> {
+): Promise<ImapSession> {
   const provider = connectionProviderForAccount(account);
   const username = account.imap_username?.trim() || loginUsername(account.email, provider as DetectedProvider, "imap");
   return imapClient(

@@ -1,9 +1,10 @@
 import dns from "node:dns";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { guardedLookup, isAllowedUrl, isPrivateOrReservedHost, isPrivateOrReservedIp, nextRedirectUrl, proxyImage, runCacheCleanup, startCacheCleanupTimer } from "../src/image-proxy.js";
-import { setServerLogger } from "../src/logging.js";
+import { guardedLookup, isAllowedUrl, isPrivateOrReservedHost, isPrivateOrReservedIp, nextRedirectUrl } from "../src/image-proxy.js";
 
 const PUBLIC = "https://cdn.example.com/logo.png";
 
@@ -146,7 +147,75 @@ describe("guardedLookup", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// A throwaway data directory per test
+//
+// Both the cache directory and the index file are derived from DATABASE_PATH
+// when the modules load, and the cleanup pass treats an unsealed index as proof
+// that the whole directory predates encryption and deletes it. Pointing these
+// tests at the default path would therefore mean reading — and, on that branch,
+// deleting — the real `data/image-cache` of whichever checkout they run in.
+// ---------------------------------------------------------------------------
+
+const tempRoots: string[] = [];
+
+/** Loads a fresh image-proxy instance plus the cache index it delegates to. */
+async function openProxy(overrides: Record<string, string> = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "nami-image-proxy-"));
+  tempRoots.push(root);
+  vi.resetModules();
+  for (const [name, value] of Object.entries(overrides)) vi.stubEnv(name, value);
+  vi.stubEnv("DATABASE_PATH", path.join(root, "nami-mail.db"));
+  const mod = await import("../src/image-proxy.js");
+  const index = await import("../src/image-cache-index.js");
+  const crypto = await import("../src/local-file-encryption.js");
+  const envelope = await import("../src/crypto.js");
+  // The sink hangs off module state, so it has to be installed on the instance
+  // the reset above produced: pointing the logger at the pre-reset instance
+  // would send every warning of this pass to the stderr fallback instead.
+  const logging = await import("../src/logging.js");
+  const warns: Array<{ meta: object; message: string }> = [];
+  logging.setServerLogger({
+    info: () => undefined,
+    warn: (meta, message) => warns.push({ meta, message }),
+    error: () => undefined,
+  });
+  // Not a real key derivation input: any stable 32 bytes exercise the same seal
+  // and open paths, and a distinct one per test would only hide a mix-up.
+  return { mod, index, crypto, envelope, masterKey: Buffer.alloc(32, 7), cacheDir: path.join(root, "image-cache"), warns };
+}
+
+/** Everything the cache directory holds, or `[]` when it was never created. */
+function cacheDirectoryContents(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** The sealed cache files in `dir`; the index files are not cache entries. */
+function cacheFiles(dir: string): string[] {
+  return cacheDirectoryContents(dir).filter((name) => /^[0-9a-f]{64}$/.test(name));
+}
+
+function removeTempRoots(): void {
+  for (const root of tempRoots.splice(0)) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+    } catch {
+      // Windows can keep a handle open briefly; a leftover temp dir is harmless.
+    }
+  }
+}
+
 describe("proxyImage", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    removeTempRoots();
+  });
+
   it("never opens a socket for a disallowed URL", async () => {
     let requests = 0;
     const server = http.createServer((_req, res) => {
@@ -157,8 +226,9 @@ describe("proxyImage", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
+    const { mod, masterKey } = await openProxy();
     try {
-      await expect(proxyImage(`http://127.0.0.1:${port}/a.png`)).resolves.toBeNull();
+      await expect(mod.proxyImage(`http://127.0.0.1:${port}/a.png`, masterKey)).resolves.toBeNull();
       expect(requests).toBe(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -171,6 +241,7 @@ describe("proxyImage streaming limits", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.resetModules();
+    removeTempRoots();
   });
 
   /**
@@ -218,26 +289,8 @@ describe("proxyImage streaming limits", () => {
     };
   }
 
-  /** Records where the cache write stream is pointed, without changing behavior. */
-  function spyCacheWriteTargets(): string[] {
-    const targets: string[] = [];
-    const realCreateWriteStream = fs.createWriteStream.bind(fs);
-    vi.spyOn(fs, "createWriteStream").mockImplementation(((filePath: fs.PathLike, options?: fs.WriteStreamOptions) => {
-      targets.push(String(filePath));
-      return realCreateWriteStream(filePath, options);
-    }) as typeof fs.createWriteStream);
-    return targets;
-  }
-
-  /** Re-imports the module so its env-derived limits pick up `overrides`. */
-  async function importImageProxyWithEnv(overrides: Record<string, string>) {
-    vi.resetModules();
-    for (const [name, value] of Object.entries(overrides)) vi.stubEnv(name, value);
-    return import("../src/image-proxy.js");
-  }
-
-  it("aborts a content-length-less chunked body past MAX_FILE_BYTES and cleans the temp file", async () => {
-    const mod = await importImageProxyWithEnv({ NAMI_MAIL_IMAGE_CACHE_MAX_FILE_MB: "1" });
+  it("aborts a content-length-less chunked body past MAX_FILE_BYTES and writes nothing", async () => {
+    const { mod, masterKey, cacheDir } = await openProxy({ NAMI_MAIL_IMAGE_CACHE_MAX_FILE_MB: "1" });
     const chunk = Buffer.alloc(64 * 1024, 0x61);
     let sent = 0;
     const server = await listenFixtureServer((_req, res) => {
@@ -255,22 +308,22 @@ describe("proxyImage streaming limits", () => {
         sent += chunk.length;
       }, 2);
     });
-    const targets = spyCacheWriteTargets();
     try {
-      await expect(mod.proxyImage(`http://cdn.example.com:${server.port}/chunked.png`)).rejects.toMatchObject({
+      await expect(mod.proxyImage(`http://cdn.example.com:${server.port}/chunked.png`, masterKey)).rejects.toMatchObject({
         code: mod.IMAGE_DOWNLOAD_LIMIT_CODE,
         message: expect.stringContaining("size ceiling"),
       });
-      expect(targets).toHaveLength(1);
-      expect(fs.existsSync(targets[0]!)).toBe(false);
+      // The body is collected in memory and sealed in one pass, so an aborted
+      // transfer must leave neither a partial image nor any staging file.
+      expect(cacheDirectoryContents(cacheDir)).toEqual([]);
     } finally {
       await server.close();
     }
   });
 
-  it("aborts a slow-drip body at the wall-clock transfer deadline and cleans the temp file", async () => {
+  it("aborts a slow-drip body at the wall-clock transfer deadline and writes nothing", async () => {
     // Fresh module instance so the wall-clock ceiling can be shortened for the test.
-    const mod = await importImageProxyWithEnv({ NAMI_MAIL_IMAGE_TRANSFER_TIMEOUT_MS: "200" });
+    const { mod, masterKey, cacheDir } = await openProxy({ NAMI_MAIL_IMAGE_TRANSFER_TIMEOUT_MS: "200" });
     let drips = 0;
     const server = await listenFixtureServer((_req, res) => {
       res.writeHead(200, { "content-type": "image/png" }); // chunked, no content-length
@@ -280,20 +333,20 @@ describe("proxyImage streaming limits", () => {
       }, 10);
       res.on("close", () => clearInterval(drip));
     });
-    const targets = spyCacheWriteTargets();
     try {
-      await expect(mod.proxyImage(`http://cdn.example.com:${server.port}/drip.png`)).rejects.toMatchObject({
+      await expect(mod.proxyImage(`http://cdn.example.com:${server.port}/drip.png`, masterKey)).rejects.toMatchObject({
         code: mod.IMAGE_DOWNLOAD_LIMIT_CODE,
         message: expect.stringContaining("wall-clock deadline"),
       });
       expect(drips).toBeGreaterThan(0); // data kept flowing; the deadline, not silence, ended the transfer
-      expect(fs.existsSync(targets[0]!)).toBe(false);
+      expect(cacheDirectoryContents(cacheDir)).toEqual([]);
     } finally {
       await server.close();
     }
   });
 
-  it("keeps the ordinary path unchanged for a content-length'd image below the ceiling", async () => {
+  it("caches an ordinary content-length'd image below the ceiling, sealed, and serves the next request from it", async () => {
+    const { mod, crypto, envelope, masterKey, cacheDir } = await openProxy();
     const body = Buffer.alloc(1024 * 1024, 0x62);
     let requests = 0;
     const server = await listenFixtureServer((_req, res) => {
@@ -301,20 +354,30 @@ describe("proxyImage streaming limits", () => {
       res.writeHead(200, { "content-type": "image/png", "content-length": String(body.length) });
       res.end(body);
     });
-    // Keep saveMeta off the real cache metadata file during the test. It now
-    // stages the bytes in `_meta.json.tmp` and renames them into place, so the
-    // rename has to be stubbed as well — a real one fails on the missing tmp.
-    vi.spyOn(fs, "writeFileSync").mockImplementation((() => undefined) as typeof fs.writeFileSync);
-    vi.spyOn(fs, "renameSync").mockImplementation((() => undefined) as typeof fs.renameSync);
-    let result: { filePath: string; contentType: string } | null = null;
     try {
-      result = await proxyImage(`http://cdn.example.com:${server.port}/small.png`);
+      const result = await mod.proxyImage(`http://cdn.example.com:${server.port}/small.png`, masterKey);
       expect(requests).toBe(1);
-      expect(result).not.toBeNull();
       expect(result?.contentType).toBe("image/png");
-      expect(fs.statSync(result!.filePath).size).toBe(body.length);
+      expect(result?.content.equals(body)).toBe(true);
+
+      // The bytes that reached the disk are the seal, not the image: it is
+      // recognized as an envelope and the only size difference is the fixed
+      // per-file overhead. This is the property the whole change exists for, so
+      // it is asserted on the file itself rather than inferred from the API.
+      const files = cacheFiles(cacheDir);
+      expect(files).toHaveLength(1);
+      const onDisk = fs.readFileSync(path.join(cacheDir, files[0]!));
+      expect(crypto.isSealedLocalFile(onDisk)).toBe(true);
+      expect(onDisk.length).toBe(body.length + envelope.encryptedBufferEnvelopeOverhead);
+      // Staging is cleaned up: the index is the only other file in the directory.
+      expect(cacheDirectoryContents(cacheDir).sort()).toEqual(["_meta.bin", files[0]!].sort());
+
+      // A second request is served from that sealed file — no second socket —
+      // which is what proves the open path matches the seal.
+      const second = await mod.proxyImage(`http://cdn.example.com:${server.port}/small.png`, masterKey);
+      expect(requests).toBe(1);
+      expect(second?.content.equals(body)).toBe(true);
     } finally {
-      if (result) try { fs.unlinkSync(result.filePath); } catch { /* ignore */ }
       await server.close();
     }
   });
@@ -323,6 +386,7 @@ describe("proxyImage streaming limits", () => {
     // fetchRemoteImage's redirect loop is the wiring nextRedirectUrl alone
     // cannot cover: the per-hop isAllowedUrl re-check, the drained redirect
     // bodies and the hop carry-over all live there.
+    const { mod, masterKey } = await openProxy();
     const body = Buffer.alloc(512, 0x64);
     const target = await listenFixtureServer((_req, res) => {
       res.writeHead(200, { "content-type": "image/png", "content-length": String(body.length) });
@@ -334,14 +398,10 @@ describe("proxyImage streaming limits", () => {
       res.writeHead(302, { location: `http://cdn2.example.com:${target.port}/final.png` });
       res.end();
     });
-    vi.spyOn(fs, "writeFileSync").mockImplementation((() => undefined) as typeof fs.writeFileSync);
-    vi.spyOn(fs, "renameSync").mockImplementation((() => undefined) as typeof fs.renameSync);
     try {
-      const result = await proxyImage(`http://cdn.example.com:${origin.port}/a.png`);
-      expect(result).not.toBeNull();
+      const result = await mod.proxyImage(`http://cdn.example.com:${origin.port}/a.png`, masterKey);
       expect(result?.contentType).toBe("image/png");
-      expect(fs.statSync(result!.filePath).size).toBe(body.length);
-      try { fs.unlinkSync(result!.filePath); } catch { /* ignore */ }
+      expect(result?.content.equals(body)).toBe(true);
     } finally {
       await origin.close();
       await target.close();
@@ -349,6 +409,7 @@ describe("proxyImage streaming limits", () => {
   });
 
   it("refuses a 302 that escapes into private address space mid-chain", async () => {
+    const { mod, masterKey } = await openProxy();
     let requests = 0;
     const origin = await listenFixtureServer((_req, res) => {
       requests += 1;
@@ -356,7 +417,7 @@ describe("proxyImage streaming limits", () => {
       res.end();
     });
     try {
-      await expect(proxyImage(`http://cdn.example.com:${origin.port}/a.png`)).resolves.toBeNull();
+      await expect(mod.proxyImage(`http://cdn.example.com:${origin.port}/a.png`, masterKey)).resolves.toBeNull();
       // The refusal happens at the URL policy, before any second socket.
       expect(requests).toBe(1);
     } finally {
@@ -365,6 +426,7 @@ describe("proxyImage streaming limits", () => {
   });
 
   it("gives up once a redirect chain exceeds the hop ceiling", async () => {
+    const { mod, masterKey } = await openProxy();
     let requests = 0;
     // Self-referential location: every hop is policy-clean, only the ceiling
     // can end the chain (MAX_REDIRECT_HOPS + 1 requests, then null). The
@@ -376,7 +438,7 @@ describe("proxyImage streaming limits", () => {
       res.end();
     });
     try {
-      await expect(proxyImage(`http://cdn.example.com:${server.port}/loop.png`)).resolves.toBeNull();
+      await expect(mod.proxyImage(`http://cdn.example.com:${server.port}/loop.png`, masterKey)).resolves.toBeNull();
       expect(requests).toBe(6);
     } finally {
       await server.close();
@@ -385,114 +447,119 @@ describe("proxyImage streaming limits", () => {
 });
 
 describe("runCacheCleanup", () => {
-  const warns: Array<{ meta: object; message: string }> = [];
-
-  beforeEach(() => {
-    warns.length = 0;
-    setServerLogger({
-      info: () => undefined,
-      warn: (meta, message) => warns.push({ meta, message }),
-      error: () => undefined,
-    });
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
-    setServerLogger(undefined);
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    removeTempRoots();
   });
-
-  /** A disk-free successful pass; a clean pass also re-arms the throttled warning. */
-  function stubSuccessfulPass(): void {
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "readFileSync").mockImplementation(() => "{}");
-  }
 
   function diskError(code: string): Error {
     return Object.assign(new Error(`${code}: injected fs failure`), { code });
   }
 
-  it("keeps the startup and timer path safe when the cache directory cannot be written", () => {
-    stubSuccessfulPass();
-    expect(() => runCacheCleanup()).not.toThrow();
+  /** Seeds the sealed index with one entry that the age rule already expires. */
+  function seedExpiredEntry(
+    index: Awaited<ReturnType<typeof openProxy>>["index"],
+    masterKey: Buffer,
+  ): void {
+    index.loadMeta(masterKey);
+    index.cacheMeta()["a".repeat(64)] = { contentType: "image/png", size: 10, lastAccess: 0 };
+    index.saveMeta(masterKey);
+  }
+
+  it("keeps the startup and timer path safe when the cache directory cannot be written", async () => {
+    const { mod, index, masterKey, cacheDir, warns } = await openProxy();
+    // A clean pass over a real, empty cache directory; it also re-arms the
+    // throttled warning. The directory existing is the proof it really ran.
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
+    expect(fs.existsSync(cacheDir)).toBe(true);
+    // The pass only writes the index when the sweep actually removed something,
+    // so an empty directory would never reach a failing write at all.
+    seedExpiredEntry(index, masterKey);
 
     const error = diskError("ENOSPC");
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => {
-      throw error;
-    });
+    // One flag, flipped in place. Restoring and re-installing a spy mid-test
+    // would make the throttle assertions here depend on the spy helper's
+    // semantics rather than on the pass under test.
+    const realMkdirSync = fs.mkdirSync;
+    let failing = true;
+    const mkdir = vi.spyOn(fs, "mkdirSync").mockImplementation(((dir: fs.PathLike, options?: fs.MakeDirectoryOptions) => {
+      if (failing) throw error;
+      return realMkdirSync(dir, options);
+    }) as typeof fs.mkdirSync);
     // The synchronous startup pass inside startCacheCleanupTimer and the hourly
     // timer tick run the same fs work; neither may throw out and kill the process.
-    expect(() => runCacheCleanup()).not.toThrow();
-    expect(() => startCacheCleanupTimer()).not.toThrow();
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
+    expect(() => mod.startCacheCleanupTimer(masterKey)).not.toThrow();
     expect(warns).toEqual([{ meta: { err: error }, message: "Image cache cleanup failed" }]);
 
     // The throttle keeps a persistently broken directory from spamming the log.
-    expect(() => runCacheCleanup()).not.toThrow();
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
     expect(warns).toHaveLength(1);
 
-    // A clean pass re-arms the warning.
-    stubSuccessfulPass();
-    expect(() => runCacheCleanup()).not.toThrow();
-    vi.spyOn(fs, "mkdirSync").mockImplementation(() => {
-      throw error;
-    });
-    expect(() => runCacheCleanup()).not.toThrow();
+    // A clean pass re-arms the warning, which then fires again on the next
+    // failure. The entry is seeded once more because the clean pass persists
+    // the eviction it just performed.
+    failing = false;
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
+    expect(warns).toHaveLength(1);
+    seedExpiredEntry(index, masterKey);
+    failing = true;
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
     expect(warns).toHaveLength(2);
+    expect(mkdir).toHaveBeenCalled();
   });
 
-  it("does not throw when persisting the cache metadata fails", () => {
-    stubSuccessfulPass();
-    expect(() => runCacheCleanup()).not.toThrow();
+  it("does not throw when persisting the cache metadata fails", async () => {
+    const { mod, index, masterKey, warns } = await openProxy();
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
 
     // An expired entry forces the eviction path and its saveMeta() write; a
-    // locked or read-only metadata file (Windows antivirus) must not crash it.
-    const expired = { file: "a".repeat(64), key: "https://cdn.example.com/a.png", contentType: "image/png", size: 10, lastAccess: 0 };
-    vi.spyOn(fs, "readFileSync").mockImplementation(() => JSON.stringify({ expired }));
+    // locked or read-only index file (Windows antivirus) must not crash it.
+    seedExpiredEntry(index, masterKey);
     const error = diskError("EPERM");
     vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
       throw error;
     });
-    expect(() => runCacheCleanup()).not.toThrow();
+    expect(() => mod.runCacheCleanup(masterKey)).not.toThrow();
     expect(warns).toEqual([{ meta: { err: error }, message: "Image cache cleanup failed" }]);
   });
 
-  it("evicts the right entries at the size ceiling on a large entry set", () => {
-    stubSuccessfulPass();
-    const written: string[] = [];
+  it("evicts the right entries at the size ceiling on a large entry set", async () => {
+    const { mod, index, masterKey } = await openProxy();
     vi.spyOn(fs, "unlinkSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "writeFileSync").mockImplementation((_path, data) => {
-      written.push(String(data));
-    });
 
     // The realistic ceiling of a 200MB quota at ~4KB per image is ~50 000
     // entries, and the pass runs on the startup path plus an hourly timer, so
     // the "not already expired" test has to stay a hash lookup instead of a
     // linear scan per entry. Correctness at that size is what this pins: the
     // age sweep and the size sweep must still remove exactly the same keys.
+    // Seeding through the real seal and parse also covers the round-trip of an
+    // index this large, which the in-memory seeding used to skip.
     const now = Date.now();
-    const meta: Record<string, { file: string; key: string; contentType: string; size: number; lastAccess: number }> = {};
+    const meta = index.cacheMeta();
     for (let i = 0; i < 50_000; i += 1) {
       // Every third entry is past MAX_AGE_MS; the rest are one byte apart so
       // the size sweep has to fall back on the id tie-break deterministically.
-      meta[`entry-${i}`] = {
-        file: String(i).padStart(64, "0"),
-        key: `https://cdn.example.com/${i}.png`,
+      meta[String(i).padStart(64, "0")] = {
         contentType: "image/png",
         size: 4096,
         lastAccess: i % 3 === 0 ? 0 : now - i,
       };
     }
-    vi.spyOn(fs, "readFileSync").mockImplementation(() => JSON.stringify(meta));
+    index.saveMeta(masterKey);
 
-    runCacheCleanup();
+    mod.runCacheCleanup(masterKey);
 
     // Everything survives except the age-expired third, which is what a small
     // entry set with the same ratio produces: the quota is far above the
     // surviving bytes, so the size sweep evicts nothing.
-    const survivors = Object.keys(JSON.parse(written[0]!));
+    const survivors = Object.keys(index.cacheMeta());
     expect(survivors).toHaveLength(50_000 - Math.ceil(50_000 / 3));
-    expect(survivors).not.toContain("entry-0");
-    expect(survivors).toContain("entry-1");
-    expect(survivors).toContain("entry-2");
+    expect(survivors).not.toContain(String(0).padStart(64, "0"));
+    expect(survivors).toContain(String(1).padStart(64, "0"));
+    expect(survivors).toContain(String(2).padStart(64, "0"));
     // Only the expired entries were unlinked, once each.
     expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledTimes(Math.ceil(50_000 / 3));
   });

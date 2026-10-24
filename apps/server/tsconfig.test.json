@@ -8,6 +8,15 @@
     "rootDir": "..",
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "../web/src/demoProviderCatalog.ts"],
+  // The two web modules are plain data/vocabulary with no React imports, so
+  // the server suite can assert the two sides agree instead of restating the
+  // lists in a comment (contract §8 G11/G12).
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "../web/src/demoProviderCatalog.ts",
+    "../web/src/realtimeEventNames.ts",
+    "../web/src/taskStatuses.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }

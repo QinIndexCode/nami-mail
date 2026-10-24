@@ -8,6 +8,7 @@ import {
   SubmissionConflictError,
   confirmSubmissionsInSent,
   deliveryFailureStatus,
+  markSubmissionConfirmed,
   markSubmissionSubmitted,
   markSubmissionUnknownDelivery,
   migrateOutboundSubmissionStorage,
@@ -110,6 +111,25 @@ describe("durable outbound submissions", () => {
     expect(deliveryFailureStatus(error)).toBe("failed");
   });
 
+  it("never lets an unknown-delivery write downgrade a submitted or confirmed row", () => {
+    const { submission } = prepareSubmission(db, masterKey, {
+      accountId: "account-1",
+      accountEmail: "sender@example.com",
+      request,
+    });
+    markSubmissionSubmitted(db, masterKey, submission.id, "<sent-1@example.com>");
+
+    // The record-failed path is the reachable case: `markSubmissionSubmitted`
+    // commits before it re-reads, so a read-back failure lands in the fallback
+    // even though the mailbox already says "sent".
+    const afterFailure = markSubmissionUnknownDelivery(db, masterKey, submission.id, "submission_record_failed", "record write failed");
+    expect(afterFailure.deliveryStatus).toBe("submitted");
+
+    markSubmissionConfirmed(db, masterKey, submission.id);
+    const afterConfirm = markSubmissionUnknownDelivery(db, masterKey, submission.id, "smtp_attempt_unconfirmed", "still unknown");
+    expect(afterConfirm.deliveryStatus).toBe("confirmed");
+  });
+
   it("reuses one RFC Message-ID for an idempotent request and never restarts an unknown delivery", () => {
     const first = prepareSubmission(db, masterKey, {
       accountId: "account-1",
@@ -177,8 +197,8 @@ describe("durable outbound submissions", () => {
     expect(confirmSubmissionsInSent(db, masterKey, "account-1")).toBe(0);
 
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Sent", "Sent", "\\Sent", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Sent", "Sent", "\\Sent");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,
@@ -202,8 +222,8 @@ describe("durable outbound submissions", () => {
     });
     markSubmissionUnknownDelivery(db, masterKey, prepared.submission.id, "timeout", "SMTP response was lost.");
     const now = new Date().toISOString();
-    db.prepare("INSERT INTO folders (account_id, path, name, special_use, total, unseen) VALUES (?, ?, ?, ?, ?, ?)")
-      .run("account-1", "Sent", "Sent", "\\Sent", 1, 0);
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use) VALUES (?, ?, ?, ?)")
+      .run("account-1", "Sent", "Sent", "\\Sent");
     db.prepare(`
       INSERT INTO messages (
         id, account_id, mailbox, uid, message_id, subject, from_name, from_address, to_json,

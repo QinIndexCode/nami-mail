@@ -92,7 +92,7 @@ it("OpenAI Responses provider converts history to input items and streams text, 
   assert.deepEqual(body.input, [{ role: "user", content: [{ type: "input_text", text: "Find invoices" }] }]);
   assert.deepEqual(body.tools, [{
     type: "function",
-    name: "messages.search",
+    name: "messages_search",
     description: "Search indexed mail.",
     strict: false,
   }]);
@@ -144,21 +144,13 @@ it("OpenAI Responses provider puts system prompts in instructions and maps tool 
 
   const body = JSON.parse(String(requests[0]!.body)) as Record<string, unknown>;
   assert.equal(body.instructions, "You are a mail assistant.");
+  // `function_call` / `function_call_output` are top-level ResponseInputItems.
+  // Nesting them in a message's `content` (which only accepts
+  // input_text/input_image/input_file) makes every post-tool request invalid.
   assert.deepEqual(body.input, [
-    {
-      role: "assistant",
-      content: [
-        { type: "function_call", call_id: "call_1", name: "messages.search", arguments: '{"query":"x"}' },
-      ],
-    },
-    {
-      role: "user",
-      content: [{ type: "function_call_output", call_id: "call_1", output: '{"count":1}' }],
-    },
-    {
-      role: "assistant",
-      content: [{ type: "output_text", text: "Done." }],
-    },
+    { type: "function_call", call_id: "call_1", name: "messages_search", arguments: '{"query":"x"}' },
+    { type: "function_call_output", call_id: "call_1", output: '{"count":1}' },
+    { role: "assistant", content: "Done." },
   ]);
   assert.deepEqual(events.at(-1), { type: "completed", finishReason: "stop" });
 });
