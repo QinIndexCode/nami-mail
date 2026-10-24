@@ -251,6 +251,16 @@ const settleMentionDebounce = async () => {
   await flush();
 };
 
+// The composer menus unmount through a ~170ms fade-out (useDismissTransition);
+// assertions about their absence must let the exit transition finish first.
+const settleMenuExit = async () => {
+  await flush();
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+  await flush();
+};
+
 const headingFor = (): string | null => container.querySelector(".agent-conversation-title h1")?.textContent ?? null;
 
 const referenceMessage: Message = {
@@ -493,7 +503,9 @@ describe("AgentWorkspace conversation switching", () => {
 
     pickMentionRow(rows[0]!);
     await flush();
-    // Introducing closes the menu and clears the /@ prefix.
+    // Introducing closes the menu through the fade-out and clears the /@ prefix.
+    expect(container.querySelector(".agent-mention-menu.closing")).not.toBeNull();
+    await settleMenuExit();
     expect(container.querySelector(".agent-mention-menu")).toBeNull();
     expect(textarea?.value).toBe("");
     // The seeded entering-message chip is still there, now joined by the
@@ -531,6 +543,8 @@ describe("AgentWorkspace conversation switching", () => {
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     await flush();
+    expect(container.querySelector(".agent-mention-menu.closing")).not.toBeNull();
+    await settleMenuExit();
     expect(container.querySelector(".agent-mention-menu")).toBeNull();
     expect(container.querySelector<HTMLTextAreaElement>(".agent-composer textarea")?.value).toBe("");
   });
@@ -555,6 +569,7 @@ describe("AgentWorkspace conversation switching", () => {
     await flush();
     const chips = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-reference-chips .agent-reference-chip-open"));
     expect(chips.map((chip) => chip.textContent).join("|")).toContain("Team offsite");
+    await settleMenuExit();
     expect(container.querySelector(".agent-mention-menu")).toBeNull();
   });
 
@@ -583,8 +598,9 @@ describe("AgentWorkspace conversation switching", () => {
       textarea!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     await flush();
-    expect(container.querySelector(".agent-slash-menu")).toBeNull();
     expect(textarea?.getAttribute("aria-activedescendant")).toBeNull();
+    await settleMenuExit();
+    expect(container.querySelector(".agent-slash-menu")).toBeNull();
   });
 
   it("drives the mention menu with aria-activedescendant", async () => {

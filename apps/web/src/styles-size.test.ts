@@ -157,8 +157,13 @@ describe("styles.css size ratchet", () => {
   // markdown 79 / 注释 3）按该格式展开后就是这个量级，没有额外装饰规则。
   // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
   // 「带边框的面板 + 列表行」外壳。
+  // 2026-10-24 指令菜单过渡的一次上调（18_173 → 18_194）：斜杠指令与 /@ 引用
+  // 菜单补上出现/消失动画——两条基类 animation（复用既有 agent-message-in
+  // keyframes，零新增帧定义）与一条 .closing 退场规则（transition + opacity +
+  // transform + pointer-events + animation:none，共 10 行，全部在
+  // features/agent.css）。实测聚合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 18_173;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_194;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
