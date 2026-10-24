@@ -55,8 +55,7 @@ jobs:
       # The web build guards on the generated pdf.js assets (cmaps, fonts,
       # wasm); they are not tracked in git, so materialize them before the
       # site build.
-      - name: Materialize the generated pdf.js assets
-        run: npm run assets:pdfjs
+      - run: npm run assets:pdfjs
       - name: Build the site and interactive demo
         run: node scripts/build-site.mjs
       - name: Setup Pages

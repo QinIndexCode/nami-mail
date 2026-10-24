@@ -41,11 +41,19 @@ test("the required PR check includes the same Linux install and site build as Pa
   );
   assert.deepEqual(site.steps.map((step) => step.run).filter(Boolean), [
     "npm ci --ignore-scripts",
+    // The generated pdf.js assets are not tracked in git; the build guards on
+    // them, so both Linux builds must materialize them before build-site runs.
+    "npm run assets:pdfjs",
     // build-site repairs the hero badge in this checkout, so the drift check has
     // to run first or a forgotten version bump would merge unnoticed.
     "node scripts/sync-site-version.mjs --check",
     "node scripts/build-site.mjs",
   ]);
+  assert.deepEqual(
+    pages.jobs.deploy.steps.map((step) => step.run).filter(Boolean),
+    ["npm ci --ignore-scripts", "npm run assets:pdfjs", "node scripts/build-site.mjs"],
+    "Pages must materialize the same generated assets before its identical build",
+  );
   for (const step of site.steps) {
     assert.doesNotMatch(JSON.stringify(step), /\$\{\{\s*secrets\./i);
   }
