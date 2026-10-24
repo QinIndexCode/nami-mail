@@ -625,12 +625,22 @@ export class AgentService {
     // paired client cannot raise its own level: the host clamps it to the
     // configured CLI/MCP setting, and write tools are only reachable at the
     // confirm-every-write (send-confirmed) or full-access (auto) levels.
+    //
+    // Every permission-shaped failure below carries a `suggestion`, because the
+    // reader is usually an AI agent relaying the failure to a human: the error
+    // must say not only "why not" but the exact desktop path that fixes it, so
+    // the conversation can end with the user toggling one setting instead of
+    // the agent guessing.
     const settings = getAppSettings(this.options.db);
     const configuredLevel = rawCaller.kind === "mcp" ? settings.agentMcpAccessLevel : settings.agentCliAccessLevel;
+    const levelSettingPath = rawCaller.kind === "mcp"
+      ? "设置 → 外部连接 → MCP 访问权限 (Settings → External Connections → MCP Access Level)"
+      : "设置 → 外部连接 → CLI 访问权限 (Settings → External Connections → CLI Access Level)";
     if (externalAccessLevelRank[rawCaller.accessLevel] > externalAccessLevelRank[configuredLevel]) {
       return fail(createAgentError({
         code: "PERMISSION_DENIED",
         message: "The paired client exceeds its configured access level.",
+        suggestion: `An external client cannot raise its own access level. In Nami Mail open ${levelSettingPath} and choose the level this client should have.`,
       }));
     }
     const writeEnabled = configuredLevel !== "read-only";
@@ -666,6 +676,7 @@ export class AgentService {
         return fail(createAgentError({
           code: "SCOPE_DENIED",
           message: "The paired caller is not authorized to access a mail account.",
+          suggestion: "A pairing only sees the accounts that existed when it was approved; accounts connected later stay invisible to it. Run \"namimail pair\" again and approve it in Nami Mail to refresh the account snapshot.",
         }));
       }
       const call: ToolCall = {
@@ -735,6 +746,7 @@ export class AgentService {
       return fail(createAgentError({
         code: "SCOPE_DENIED",
         message: "The paired caller is not authorized to access a mail account.",
+        suggestion: "A pairing only sees the accounts that existed when it was approved; accounts connected later stay invisible to it. Run \"namimail pair\" again and approve it in Nami Mail to refresh the account snapshot.",
       }));
     }
     const call: ToolCall = {
@@ -757,6 +769,7 @@ export class AgentService {
       return fail(createAgentError({
         code: "PERMISSION_DENIED",
         message: "The configured access level does not permit external Nami Mail write operations.",
+        suggestion: `This tool needs write access. In Nami Mail open ${levelSettingPath} and switch it to 操作前确认 (confirm each write, a desktop dialog asks before every change) or 完全自动 (full access, no per-operation confirmation).`,
       }));
     }
     this.confirmationLifecycle.prepareConfirmationPayload(call, input.requestId, executionAccountIds);
@@ -775,6 +788,7 @@ export class AgentService {
           code: "NOT_SUPPORTED",
           message: "The desktop host cannot confirm external write operations right now.",
           retryable: true,
+          suggestion: "Start (or focus) the Nami Mail desktop app so it can show the confirmation dialog, then retry this call.",
         }));
       }
       const decision = await confirm.request({
@@ -790,6 +804,7 @@ export class AgentService {
         return fail(createAgentError({
           code: "CONFIRMATION_REJECTED",
           message: "The desktop user rejected the external write operation.",
+          suggestion: "A person in the Nami Mail app declined this operation. Check with them before retrying; repeated retries will keep showing the same dialog.",
         }));
       }
       // Record the host's decision as a durable receipt so the runtime can
