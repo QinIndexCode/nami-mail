@@ -60,7 +60,7 @@ import { buildForwardDraft, buildReplyDraft, isOwnSentMessage } from "./mailActi
 import { messageFolderContext, selectionFolderContext } from "./messageMoveActions";
 // ComposeModal loaded lazily below
 import { sortMessages } from "./mailImportance";
-import { collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
+import { applySeenToThread, collapseDuplicateMembers, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import {
   canLoadMoreMessagePage,
   isArchivedMessage,
@@ -85,7 +85,7 @@ import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { dialogKeydownDecision, useDialogRouting } from "./dialogRouting";
 import { useBatchSelection } from "./app/useBatchSelection";
 import { useQuickMessageActions } from "./app/useQuickMessageActions";
-import { createMailStore, type ReconcileRunner } from "./app/mailStore";
+import { createMailStore, withSeenFlag, type ReconcileRunner } from "./app/mailStore";
 import { mailListScopeKey } from "./app/mailListScope";
 import { deriveDemoCounts } from "./app/demoCounts";
 import { resolveDraftBody } from "./app/draftBody";
@@ -984,7 +984,6 @@ export default function App() {
       onRefresh: requestRefresh,
       onSettingsChanged: loadSettings,
       onSyncProgress: handleSyncProgress,
-      store,
     });
   // Defensive: a read/unread toggle whose request hangs would otherwise leave
   // its id in the in-flight set, pinning the optimistic seen state on top of
@@ -1319,6 +1318,8 @@ export default function App() {
   // this map as a final fallback, so any member the strip ever showed opens
   // even when the list window and the extras snapshot have both moved on.
   const threadStripMembersRef = useRef<ReadonlyMap<string, Message>>(new Map());
+  // The strip map is a ref, so a local flag change there needs this bump to render.
+  const [, setThreadMemberRevision] = useState(0);
   const selected = filteredMessages.find((message) => message.id === selectedId)
     ?? threadExtras?.members.find((message) => message.id === selectedId)
     ?? (selectedId ? threadStripMembersRef.current.get(selectedId) : undefined)
@@ -1460,10 +1461,12 @@ const emptyMessageList = useMemo(() => (query.trim()
       : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
   const safeHtml = useMemo(
-    // Sanitize first, then route remote images through the proxy: the reader
-    // must never reach a mail's own image host directly (that request is the
-    // open-time + read-receipt leak), while `data:`, `cid:` and the server's
-    // inline-attachment URLs stay exactly as they are.
+    // Sanitize first, then route remote images through the proxy: the renderer
+    // itself must not contact a mail's image host. The proxy request still
+    // leaves this machine at open time, so this does NOT prevent the sender
+    // from observing the open; blocking images by default or requiring
+    // per-message consent is still a product decision.
+    // `data:`, `cid:` and the server's inline-attachment URLs stay untouched.
     () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark")) : "",
     [selected?.htmlBody, theme],
   );
@@ -1519,7 +1522,15 @@ const emptyMessageList = useMemo(() => (query.trim()
   );
   const applyLocalSeenChange = useCallback((message: Message, nextSeen: boolean) => {
     store.applySeen([message.id], nextSeen);
-  }, [store]);
+    // Rows outside the loaded list are not in the store. The thread snapshot
+    // and the strip's retained map are the only copies that can hold them, so
+    // both are patched here — otherwise the open message would keep its old
+    // unread dot until the thread was fetched again.
+    const patch = applySeenToThread(threadExtras, threadStripMembersRef.current, message.id, nextSeen);
+    threadStripMembersRef.current = patch.strip;
+    if (patch.extras !== threadExtras) setThreadExtras(patch.extras);
+    if (patch.changed) setThreadMemberRevision((value) => value + 1);
+  }, [store, threadExtras]);
 
   const openMessage = useCallback(async (message: Message) => {
     // The preview pane is rendered inside the reader, so it may only describe
@@ -1572,22 +1583,13 @@ const emptyMessageList = useMemo(() => (query.trim()
       store.pinFlags([message.id]);
       updateUnreadViewRecentlyRead(message, true);
       applyLocalSeenChange(message, true);
-      // A message opened from the conversation strip may only exist in the
-      // server-resolved thread extras (outside the loaded view); keep its
-      // read state in sync there too, or the strip's unread dot would stick.
-      const patchThreadExtrasSeen = (seen: boolean) => setThreadExtras((current) => current
-        ? { ...current, members: current.members.map((member) => member.id === message.id ? { ...member, seen } : member) }
-        : current);
-      patchThreadExtrasSeen(true);
       if (isDemo) {
         store.unpinFlags([message.id]);
-        patchThreadExtrasSeen(true);
       } else {
         void api.markSeen(message.id, true).catch((error: unknown) => {
-          const readMessage = { ...message, seen: true, flags: [...new Set([...message.flags, "\\Seen"])] };
+          const readMessage = withSeenFlag(message, true);
           updateUnreadViewRecentlyRead(readMessage, false);
           applyLocalSeenChange(readMessage, false);
-          patchThreadExtrasSeen(false);
           showToast(t("mail.error.markRead", { message: mailErrorToastMessage(error, t("mail.error.markReadFallback"), t) }), "error");
         }).finally(() => {
           store.unpinFlags([message.id]);
@@ -1954,7 +1956,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       if (!isDemo) await api.updateMessageFlags(selected.id, { seen: nextSeen });
       showToast(nextSeen ? t("mail.action.markedRead") : t("mail.action.markedUnread"));
     } catch (error) {
-      const changedMessage = { ...selected, seen: nextSeen, flags: nextSeen ? [...new Set([...selected.flags, "\\Seen"])] : selected.flags.filter((flag) => flag !== "\\Seen") };
+      const changedMessage = withSeenFlag(selected, nextSeen);
       updateUnreadViewRecentlyRead(changedMessage, selected.seen);
       applyLocalSeenChange(changedMessage, selected.seen);
       showToast(mailErrorToastMessage(error, t("mail.error.updateRead"), t), "error");

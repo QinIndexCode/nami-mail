@@ -28,6 +28,7 @@ import {
 } from "./desktop-behaviors.mjs";
 // The tray icon, badge, menu and visibility flag live here now (see tray.mts).
 import { createTrayController, loadDesktopIcon } from "./tray.mjs";
+import { createGuiActivationWiring, installOpenUrlHandling } from "./gui-activation-wiring.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
 import { DesktopDiagnostics, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { installDesktopRuntimeDiagnostics } from "./desktop-runtime-diagnostics.mjs";
@@ -196,8 +197,6 @@ let localApiAccessToken: string | undefined;
 let desktopUpdater: DesktopUpdater | undefined;
 let rendererCacheCleanup: RendererCacheCleanupResult | undefined;
 let localApiCachePolicyInstalled = false;
-/** A mailto URL received (macOS open-url) before the window existed. */
-let pendingMailtoUrl: string | undefined;
 const appUserModelId = app.isPackaged ? "com.nami.mail" : "com.nami.mail.dev";
 const localApiAccessHeader = "x-nami-api-token";
 // Desktop-only behaviors (tray badge, login item, global shortcut) live in
@@ -565,6 +564,19 @@ const trayController = createTrayController({
   loadAppIcon: loadDesktopIcon,
   copy: nativeCopy,
   showError: (title, message) => dialog.showErrorBox(title, message),
+});
+
+// Queue second-launch compose requests until the current app document can receive IPC.
+const guiActivation = createGuiActivationWiring({
+  hasMainWindow: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+  waitForBoot: () => desktopBootPromise ?? Promise.resolve(),
+  createMainWindow: async () => { await createMainWindow(); await startDesktopUpdaterIfNeeded(); },
+  focusMainWindow: () => trayController.focusWindow(),
+  deliverCompose: (mailtoUrl) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("nami:compose-new", mailtoUrl);
+  },
+  onError: (error) => console.error("Nami Mail could not activate its main window for a second launch.", error),
+  launchMailtoUrl: extractMailtoUrl(process.argv),
 });
 
 async function rememberCloseBehavior(closeBehavior: CloseBehavior): Promise<void> {
@@ -1110,7 +1122,10 @@ async function createMainWindowShell(): Promise<void> {
   mainWindow.on("close", handleMainWindowClose);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
+    guiActivation.notifyWindowClosed();
   });
+  // Readiness returns only when the app URL (not the splash) finishes loading.
+  guiActivation.watchWindowDocument(mainWindow, isLocalAppUrl);
   // The frameless window has no OS caption buttons, so the renderer tracks the
   // maximize state itself to swap the maximize/restore glyphs.
   mainWindow.on("maximize", () => mainWindow?.webContents.send("nami:window-maximized-changed", true));
@@ -1126,7 +1141,11 @@ async function createMainWindowShell(): Promise<void> {
 // once the local service is listening. The splash phase consumed the first
 // ready-to-show (the window is already visible by then), so the real app's
 // first paint is recorded at did-finish-load here.
-async function loadMainWindowApp(): Promise<void> {
+function loadMainWindowApp(): Promise<void> {
+  return guiActivation.loadAppDocument(runMainWindowAppLoad);
+}
+
+async function runMainWindowAppLoad(): Promise<void> {
   if (!mainWindow) throw new Error("Nami Mail window shell was not created.");
   if (!localServer) throw new Error("Nami Mail local service was not started.");
   // CSS image loads do not pass through the renderer's fetch wrapper. The
@@ -1146,16 +1165,6 @@ async function loadMainWindowApp(): Promise<void> {
     // Demo mode fills the mail list with real message rows so the smoke can
     // measure scroll/layout cost on the actual list instead of an empty one.
     appUrl.searchParams.set("demo", "1");
-  }
-  // A cold start or a pre-window open-url hand-off queues one mailto compose.
-  // did-finish-load fires after the renderer bundle ran, so the web app's
-  // subscription is already registered by the time the event is sent.
-  const coldMailtoUrl = pendingMailtoUrl ?? extractMailtoUrl(process.argv);
-  pendingMailtoUrl = undefined;
-  if (coldMailtoUrl) {
-    mainWindow.webContents.once("did-finish-load", () => {
-      mainWindow?.webContents.send("nami:compose-new", coldMailtoUrl);
-    });
   }
   // did-finish-load fires after the renderer bundle ran and the app mounted;
   // it precedes the splash dismissal (which waits for the first data load).
@@ -2046,24 +2055,32 @@ if (desktopCliArguments !== undefined) {
     return desktopUpdater?.installDownloadedUpdate() ?? { accepted: false };
   });
   app.on("second-instance", (_event, commandLine) => {
-    void recordSingleInstanceSmokeActivation(commandLine);
+    void recordSingleInstanceSmokeActivation(commandLine).catch((error) => {
+      console.error("Nami Mail could not record the second-instance smoke activation.", error);
+    });
     const mailtoUrl = extractMailtoUrl(commandLine);
     if (mailtoUrl) {
       desktopHostMode = "gui";
-      void (async () => {
-        if (!mainWindow && localServer) {
-          await createMainWindow();
-          await startDesktopUpdaterIfNeeded();
-        }
-        trayController.focusWindow();
-        mainWindow?.webContents.send("nami:compose-new", mailtoUrl);
-      })();
+      // The coordinator decides whether this can be delivered now; activate()
+      // waits for boot and the current window's app document when it cannot.
+      guiActivation.queueMailto(mailtoUrl);
+      void guiActivation.activate();
       return;
     }
     const pairingRequests = readAgentPairingRequestIds(commandLine);
     if (pairingRequests.length) {
       desktopHostMode = "gui";
-      void ensureMainWindowForAgentPairing().then(() => scheduleAgentPairingRequests(pairingRequests));
+      void (async () => {
+        try {
+          // Pairing may arrive before boot finished; ensureMainWindowForAgentPairing
+          // cannot create a window until the local service exists.
+          await desktopBootPromise;
+          await ensureMainWindowForAgentPairing();
+          scheduleAgentPairingRequests(pairingRequests);
+        } catch (error) {
+          console.error("Nami Mail could not open the window for an Agent pairing request.", error);
+        }
+      })();
       return;
     }
     if (commandLine.includes("--agent-host")) {
@@ -2078,13 +2095,7 @@ if (desktopCliArguments !== undefined) {
       return;
     }
     desktopHostMode = "gui";
-    void (async () => {
-      if (!mainWindow && localServer) {
-        await createMainWindow();
-        await startDesktopUpdaterIfNeeded();
-      }
-      trayController.focusWindow();
-    })();
+    void guiActivation.activate();
   });
   app.on("window-all-closed", () => {
     // While shutdown teardown is in flight the window is deliberately
@@ -2092,18 +2103,7 @@ if (desktopCliArguments !== undefined) {
     // must not quit the app until the local service finished closing.
     if (desktopHostMode === "gui" && !isQuitting) app.quit();
   });
-  app.on("open-url", (event, url) => {
-    event.preventDefault();
-    const mailtoUrl = extractMailtoUrl([url]);
-    if (!mailtoUrl) return;
-    if (mainWindow) {
-      trayController.focusWindow();
-      mainWindow.webContents.send("nami:compose-new", mailtoUrl);
-    } else {
-      // macOS can deliver open-url before `ready`; createMainWindow drains it.
-      pendingMailtoUrl = mailtoUrl;
-    }
-  });
+  installOpenUrlHandling(app, guiActivation);
   app.on("before-quit", (event) => {
     desktopAgentBrokerRecoveryGate = "closed";
     desktopDiagnostics.recordStartupTiming("quit-requested");

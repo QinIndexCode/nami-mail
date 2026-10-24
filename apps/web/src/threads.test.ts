@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { collapseDuplicateMembers, countThreadMessages, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
+import { applySeenToThread, collapseDuplicateMembers, countThreadMessages, groupMessagesByThread, mergeThreadMembers, mergeThreadSnapshot, shouldCollapseThread, sortThreadByTimeline, type ThreadSnapshot } from "./threads";
 import type { Message } from "./types";
 
 function message(overrides: Partial<Message> & { id: string }): Message {
@@ -312,6 +312,63 @@ describe("shouldCollapseThread", () => {
 
   it("never collapses when there is no selected thread", () => {
     expect(shouldCollapseThread(null, "oldest", true)).toBe(false);
+  });
+});
+
+describe("applySeenToThread", () => {
+  const snapshot = (ids: string[]): ThreadSnapshot => ({
+    anchorId: ids[0]!,
+    members: ids.map((id) => message({ id, subject: "Thread" })),
+  });
+
+  it("updates a member held only by the server-resolved extras", () => {
+    const extras = snapshot(["sent-only"]);
+    const strip = new Map([["root", message({ id: "root" })]]);
+    const result = applySeenToThread(extras, strip, "sent-only", true);
+    expect(result.changed).toBe(true);
+    expect(result.extras!.members[0]!.seen).toBe(true);
+    expect(result.extras!.members[0]!.flags).toContain("\\Seen");
+  });
+
+  it("updates a member held only by the strip ref and leaves a null extras alone", () => {
+    const strip = new Map([["root", message({ id: "root" })]]);
+    const result = applySeenToThread(null, strip, "root", true);
+    expect(result.changed).toBe(true);
+    expect(result.extras).toBeNull();
+    expect(result.strip.get("root")!.seen).toBe(true);
+  });
+
+  it("reports no change when the id is in neither source", () => {
+    const extras = snapshot(["root"]);
+    const strip = new Map([["root", message({ id: "root" })]]);
+    const result = applySeenToThread(extras, strip, "missing", true);
+    expect(result.changed).toBe(false);
+    expect(result.extras).toBe(extras);
+    expect(result.strip.get("root")!.seen).toBe(false);
+  });
+
+  it("keeps every other field and every other member untouched", () => {
+    const target = message({ id: "root", subject: "Keep me", snippet: "snippet", seen: false });
+    const other = message({ id: "other", seen: false });
+    const extras = { anchorId: "root", members: [target, other] };
+    const strip = new Map([["root", target], ["other", other]]);
+    const result = applySeenToThread(extras, strip, "root", true);
+    const updated = result.extras!.members[0]!;
+    expect(updated.subject).toBe("Keep me");
+    expect(updated.snippet).toBe("snippet");
+    expect(result.extras!.members[1]).toBe(other);
+    expect(result.strip.get("other")).toBe(other);
+  });
+
+  it("keeps seen and the IMAP \\Seen flag in step on both mark and unmark", () => {
+    const extras = snapshot(["root"]);
+    const strip = new Map<string, Message>();
+    const marked = applySeenToThread(extras, strip, "root", true);
+    expect(marked.extras!.members[0]!.seen).toBe(true);
+    expect(marked.extras!.members[0]!.flags).toContain("\\Seen");
+    const unmarked = applySeenToThread(marked.extras, marked.strip, "root", false);
+    expect(unmarked.extras!.members[0]!.seen).toBe(false);
+    expect(unmarked.extras!.members[0]!.flags).not.toContain("\\Seen");
   });
 });
 

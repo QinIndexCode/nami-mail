@@ -176,13 +176,17 @@ export function useRealtimeSync({
     // banner) and intentionally does NOT trigger onRefresh — a background bulk
     // download would otherwise hammer the mailbox API once per batch. The
     // finished-pass mail.synced event is what reconciles the list at the end.
+    //
+    // Only a frame that parses and validates counts as stream liveness. The
+    // timestamp suppresses the fallback poll, so recording it before the checks
+    // would let a stream of malformed frames postpone recovery indefinitely.
     sseHandlersRef.current.syncProgress = (event: MessageEvent<string>) => {
-      lastSseEventAtRef.current = Date.now();
       try {
         const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; folder?: unknown; processed?: unknown; totalEstimate?: unknown } };
         const payload = parsed.payload;
         if (!payload || typeof payload.accountId !== "string" || typeof payload.folder !== "string"
           || typeof payload.processed !== "number" || typeof payload.totalEstimate !== "number") return;
+        lastSseEventAtRef.current = Date.now();
         onSyncProgress({
           accountId: payload.accountId,
           folder: payload.folder,
@@ -198,14 +202,13 @@ export function useRealtimeSync({
     // re-read the list. The frame also proves the stream is alive -- lastSseEventAt
     // is what suppresses a redundant poll tick.
     sseHandlersRef.current.taskProgress = (event: MessageEvent<string>) => {
-      lastSseEventAtRef.current = Date.now();
-      if (!onTaskProgress) return;
       try {
         const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; taskId?: unknown; total?: unknown; updated?: unknown; failed?: unknown } };
         const payload = parsed.payload;
         if (!payload || typeof payload.accountId !== "string" || typeof payload.taskId !== "string"
           || typeof payload.total !== "number" || typeof payload.updated !== "number" || typeof payload.failed !== "number") return;
-        onTaskProgress({
+        lastSseEventAtRef.current = Date.now();
+        onTaskProgress?.({
           accountId: payload.accountId,
           taskId: payload.taskId,
           total: payload.total,
@@ -220,12 +223,12 @@ export function useRealtimeSync({
     // server settles with; a frame outside it is a protocol mismatch, and
     // reconciling on it would only hide the mismatch behind a refresh.
     sseHandlersRef.current.taskSettled = (event: MessageEvent<string>) => {
-      lastSseEventAtRef.current = Date.now();
       try {
         const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; taskId?: unknown; status?: unknown } };
         const payload = parsed.payload;
         if (!payload || typeof payload.accountId !== "string" || typeof payload.taskId !== "string"
           || !isTaskTerminalStatus(payload.status)) return;
+        lastSseEventAtRef.current = Date.now();
         onTaskSettled?.({ accountId: payload.accountId, taskId: payload.taskId, status: payload.status });
       } catch {
         // Malformed frame — ignored like the others; the poll stays the fallback.
@@ -237,7 +240,6 @@ export function useRealtimeSync({
     // read; today the shell's refresh is view-scoped, so all it needs is the
     // signal.
     sseHandlersRef.current.mailChanged = (event: MessageEvent<string>) => {
-      lastSseEventAtRef.current = Date.now();
       try {
         const parsed = JSON.parse(event.data) as { payload?: { accountId?: unknown; folders?: unknown } };
         const payload = parsed.payload;
@@ -245,6 +247,7 @@ export function useRealtimeSync({
         const folders = Array.isArray(payload.folders)
           ? payload.folders.filter((folder): folder is string => typeof folder === "string")
           : [];
+        lastSseEventAtRef.current = Date.now();
         onMailChanged?.({ accountId: payload.accountId, folders });
       } catch {
         // Malformed frame — ignored like the others; the poll stays the fallback.

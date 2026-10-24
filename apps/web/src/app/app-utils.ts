@@ -377,7 +377,8 @@ export const IMAGE_PROXY_PATH = "/api/images/proxy";
  * would perform under its own IP, so the proxy takes it over instead. The URL is
  * resolved against the document first so a protocol-relative `//host/pixel`
  * arrives at the proxy as an absolute URL the server can parse at all.
- */
+ * Taking it over does not hide the open: the proxy request still leaves this
+ * machine, so the sender can still observe the time and source address. */
 function proxiedImageSource(source: string): string | null {
   const value = source.trim();
   if (!value) return null;
@@ -509,6 +510,11 @@ const REMOTE_SRCSET_SELECTOR = 'img, source, input[type="image" i]';
  * server (address allow-list, DNS rebinding caught at resolve time, per-hop
  * redirect re-checks, byte and wall-clock ceilings), but nothing called it, so
  * the images went direct.
+ *
+ * The proxy removes the renderer's direct connection, not the disclosure: its
+ * request still leaves this machine at open time, so the sender can still see
+ * the open. Blocking remote images by default, per-message authorization, or
+ * per-sender allowlists remain open product decisions; this rewrite is not one.
  *
  * Applied AFTER `sanitizeMailHtml`, whose DOMPurify pass must keep its own
  * configuration untouched. Kept as a separate export so that contract stays

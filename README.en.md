@@ -258,7 +258,7 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - This is not whole-database SQLite encryption. Account address/provider, folders, UID, timestamps, flags, size, delivery state, record identifiers, ordinary app settings, and custom background images can remain plaintext metadata. DPAPI and application-layer encryption substantially reduce leakage from direct static-file reads or offline copies, but cannot stop a malicious process under the same Windows user from calling DPAPI, nor defend an unlocked running app or an administrator. Do not describe the current implementation as whole-database encryption equivalent to SQLCipher.
 - The service listens on `127.0.0.1` only and is not exposed to the LAN.
 - The master key, database, and outbound attachment directories are covered by `.gitignore`. A backup must protect the whole data directory; the DPAPI-wrapped desktop key is additionally bound to the current Windows user context.
-- Mail HTML is sanitized before display and removes remote images, scripts, forms, and embedded content by default to reduce tracking and script risk.
+- Mail HTML is sanitized before display, removing scripts, forms, and embedded content. Remote images are still loaded automatically through the local service proxy: the proxy requests the original image URL from this machine, which changes where the request originates (the renderer never connects directly) but does **not** prevent a sender from observing opens through a unique image URL. Default blocking, per-message authorization, and per-sender allowlists are still pending a product decision.
 
 ## Public Repository Boundary
 

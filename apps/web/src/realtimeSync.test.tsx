@@ -198,7 +198,7 @@ describe("useRealtimeSync connection state", () => {
   });
 });
 
-function EventHarness(props: Pick<RealtimeSyncOptions, "onTaskProgress" | "onTaskSettled" | "onMailChanged">): null {
+function EventHarness(props: Partial<Pick<RealtimeSyncOptions, "onRefresh" | "onTaskProgress" | "onTaskSettled" | "onMailChanged">>): null {
   useRealtimeSync({
     enabled: true,
     pushEnabled: true,
@@ -289,6 +289,44 @@ describe("useRealtimeSync event vocabulary", () => {
 
     await dispatch("mail-changed", { type: "mail-changed", payload: { folders: ["INBOX"] } });
     expect(onMailChanged).toHaveBeenCalledTimes(2);
+
+    unmount();
+  });
+});
+
+describe("useRealtimeSync fallback poll liveness", () => {
+  it("a malformed frame does not postpone the poll while a valid one still resets it", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let tick: (() => void) | undefined;
+    vi.spyOn(window, "setInterval").mockImplementation(((callback: () => void) => {
+      tick = callback;
+      return 1;
+    }) as unknown as typeof window.setInterval);
+    const onRefresh = vi.fn();
+    const unmount = await mountEvents({ onRefresh });
+
+    // A validated frame marks the stream healthy at t0.
+    await dispatch("task-settled", {
+      type: "task-settled",
+      payload: { accountId: "a1", taskId: "t1", status: "completed" },
+    });
+    // A malformed frame arriving just before the poll tick must not count as
+    // liveness; otherwise it would reset the window and starve the fallback.
+    now += 59_000;
+    await dispatch("task-settled", { type: "task-settled", payload: { accountId: "a1" } });
+    now += 1_000;
+    await act(async () => { tick?.(); });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+
+    // A valid frame at t0+60s suppresses the next tick as before.
+    await dispatch("task-settled", {
+      type: "task-settled",
+      payload: { accountId: "a1", taskId: "t1", status: "completed" },
+    });
+    now += 1_000;
+    await act(async () => { tick?.(); });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
 
     unmount();
   });

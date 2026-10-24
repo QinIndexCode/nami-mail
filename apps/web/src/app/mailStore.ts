@@ -95,7 +95,8 @@ function resolve<T>(current: T, update: Updater<T>): T {
   return typeof update === "function" ? (update as (value: T) => T)(current) : update;
 }
 
-function withSeenFlag(message: Message, seen: boolean): Message {
+/** Applies a read/unread flag to one message, keeping `seen` and `\Seen` in step. */
+export function withSeenFlag(message: Message, seen: boolean): Message {
   const flags = new Set(message.flags);
   if (seen) flags.add("\\Seen");
   else flags.delete("\\Seen");
