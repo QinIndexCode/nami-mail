@@ -10,6 +10,9 @@ import { loadDatabaseConstructor, type Database } from "./native-sqlite.js";
 // attachments) are not covered here.
 const PLAINTEXT_HEADER = Buffer.from("SQLite format 3\u0000", "latin1");
 const STAGING_SUFFIX = ".encrypting";
+// Where an unreadable staging copy is preserved when it is the only survivor:
+// quarantine, not deletion, so the matching key (or a backup) can still reach it.
+const UNREADABLE_STAGING_SUFFIX = ".unreadable";
 // Distinct HKDF purpose so the file cipher never shares key material with the
 // per-field envelopes in crypto.ts.
 const FILE_KEY_PURPOSE = "sqlite-file-v1";
@@ -23,7 +26,12 @@ export type DatabaseEncryptionOutcome =
   // A previous conversion was killed after it destroyed the plaintext original
   // but before the sealed copy reached its final name. The staging file is the
   // only surviving database and was adopted.
-  | { status: "recovered"; bytes: number; verifiedTables: number };
+  | { status: "recovered"; bytes: number; verifiedTables: number }
+  // The only surviving copy of a killed conversion could not be opened with the
+  // current master key, so it was preserved beside the store instead of deleted
+  // and the app continues with a fresh database. The old copy is recoverable only
+  // with the key that sealed it (or a backup of that key).
+  | { status: "quarantined" };
 
 /** Raw-hex key literal, quoted for `PRAGMA key = <literal>` interpolation. */
 export function databaseKeyLiteral(masterKey: Buffer): string {
@@ -131,13 +139,33 @@ function readableTablesWithKey(databasePath: string, masterKey: Buffer): string[
 }
 
 /**
+ * Whether the main file is a store this key can use: intact plaintext (the
+ * conversion has not run yet) or sealed for this key.
+ */
+function mainFileUsable(databasePath: string, masterKey: Buffer): boolean {
+  if (!fs.existsSync(databasePath)) return false;
+  if (fs.statSync(databasePath).size === 0) return false;
+  if (isPlaintextSqlite(readHeader(databasePath))) return true;
+  return readableTablesWithKey(databasePath, masterKey) !== undefined;
+}
+
+/**
  * Adopts an orphaned staging copy when a conversion died between destroying the
  * plaintext original and the final rename. Discarding it in that state (the
  * previous behaviour) deleted the only readable database and let the next open
  * create an empty one, turning a crash into silent total local data loss.
  *
- * Returns `undefined` when the main file is authoritative, in which case the
- * staging leftover has been removed.
+ * Returns `undefined` when the caller should look at the main file instead:
+ * either the main file is authoritative (the staging leftover has been removed),
+ * or the main file is present but unreadable -- the staged copy is left in place
+ * so the key that sealed it can still adopt it on a later boot, while the
+ * caller's own readability assert refuses to boot on the destroyed original.
+ * Returns `{ status: "quarantined" }` when the main file is gone AND the staged
+ * copy will not open with this key: the copy is then the only survivor,
+ * unreadable here, and is preserved under the `.unreadable` name rather than
+ * deleted -- deleting it turned "a crash plus a changed key" into silent total
+ * local data loss too, because the caller would have created a fresh store on
+ * top of nothing.
  */
 function recoverInterruptedConversion(
   databasePath: string,
@@ -147,9 +175,32 @@ function recoverInterruptedConversion(
   if (!fs.existsSync(stagingPath)) return undefined;
   const stagingTables = readableTablesWithKey(stagingPath, masterKey);
   if (!stagingTables) {
-    // Not a usable copy of this store; the original is authoritative.
-    removeIfExists(stagingPath);
-    return undefined;
+    if (mainFileUsable(databasePath, masterKey)) {
+      // Not a usable copy of this store, and the original is authoritative, so
+      // this is dead weight from an attempt that never finished.
+      removeIfExists(stagingPath);
+      return undefined;
+    }
+    if (fs.existsSync(databasePath)) {
+      // The main file is present but unreadable (a conversion already destroyed
+      // it and died before the rename). The staged copy is the only copy that
+      // still has the data -- even though this key cannot open it -- so it stays
+      // under its own name: with the key that sealed it, a later boot reaches
+      // the adoption branch below. This key gets the loud refusal instead of a
+      // silent fresh store, via `assertReadableWithKey` in the caller.
+      return undefined;
+    }
+    // The main file is gone: the staged copy is the only survivor, and this key
+    // cannot open it. Quarantine it rather than delete, so the matching key (or
+    // a backup) can still reach it, and let the app boot on a fresh store.
+    const quarantinePath = `${databasePath}${UNREADABLE_STAGING_SUFFIX}`;
+    removeIfExists(quarantinePath);
+    try {
+      fs.renameSync(stagingPath, quarantinePath);
+    } catch {
+      // The staging name is its own quarantine then; nothing may delete it.
+    }
+    return { status: "quarantined" };
   }
   if (readableTablesWithKey(databasePath, masterKey)) {
     // The sealed copy is already in place; this is dead weight from an attempt

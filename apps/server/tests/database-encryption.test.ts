@@ -217,6 +217,38 @@ describe("database encryption at rest", () => {
     expect(() => ensureDatabaseEncrypted(databasePath, masterKey(11))).toThrow(
       /could not be opened with the current master key/u,
     );
+    // The staged copy is deliberately NOT removed in this branch: the main file
+    // is destroyed, so the staging is the only copy that still has the data,
+    // and the key that sealed it must still be able to adopt it on a later
+    // boot. The refusal above is what this key gets instead of a silent fresh
+    // store.
+    expect(fs.existsSync(`${databasePath}.encrypting`)).toBe(true);
+  });
+
+  it("quarantines an unreadable staged copy when the main file is gone, instead of deleting it", () => {
+    // The narrowest crash window: the converter removed the plaintext original
+    // and died before the rename, and the master key changed before the next
+    // boot. Deleting the staging here (the previous behaviour) discarded the
+    // only surviving database and the next open silently created an empty one.
+    const databasePath = storePath("staging-quarantine");
+    writePlaintextStore(databasePath, CANARY);
+    const reference = storePath("staging-quarantine-reference");
+    writePlaintextStore(reference, CANARY);
+    ensureDatabaseEncrypted(reference, masterKey(12));
+    sealedCopyAsStaging(databasePath, reference);
+    fs.rmSync(databasePath);
+
+    const outcome = ensureDatabaseEncrypted(databasePath, masterKey(13));
+
+    expect(outcome.status).toBe("quarantined");
     expect(fs.existsSync(`${databasePath}.encrypting`)).toBe(false);
+    // The copy survives under its quarantine name, sealed for the key it was
+    // actually encrypted with.
+    expect(fs.existsSync(`${databasePath}.unreadable`)).toBe(true);
+    expect(() => readWithKey(`${databasePath}.unreadable`, masterKey(13))).toThrow();
+    expect(readWithKey(`${databasePath}.unreadable`, masterKey(12))).toBe(CANARY);
+    // And the next boot does not loop on the quarantined file: with it out of
+    // the way the store is simply absent, so a fresh one is created.
+    expect(ensureDatabaseEncrypted(databasePath, masterKey(13))).toEqual({ status: "absent" });
   });
 });

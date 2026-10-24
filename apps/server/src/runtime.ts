@@ -394,6 +394,18 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         "Nami Mail adopted the sealed store left by an interrupted encryption conversion",
       );
     }
+    if (encryptionOutcome.status === "quarantined") {
+      // Louder by comparison: the surviving copy of an interrupted conversion
+      // would not open with this key, so it was preserved beside the store (the
+      // `.unreadable` file) instead of deleted, and the app is starting on a
+      // fresh, empty database. Only the master key that sealed the copy (or a
+      // backup of the whole data directory from before the key change) can
+      // recover it -- staying quiet here would look exactly like data loss.
+      serverLog.warn(
+        { status: encryptionOutcome.status },
+        "Nami Mail could not open the surviving database copy with the current master key; it was preserved beside the new store and the app starts empty",
+      );
+    }
     const database = openDatabase(config.databasePath, { encryptionKey: runtimeMasterKey });
     db = database;
     noteStartupPhase("server:open-database");
