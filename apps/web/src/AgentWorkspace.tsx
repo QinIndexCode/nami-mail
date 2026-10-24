@@ -38,7 +38,7 @@ import { api, ApiError } from "./api";
 import { mergeConversationList } from "./agent/conversationListMerge";
 
 import { type AgentSlashCommand, type AgentSlashSubcommand } from "@nami/agent-contracts";
-import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex, type SlashMenuItem } from "./slashMenu";
+import { buildSlashMenu, slashCompletionText, slashKeepsMenuOpen, slashMenuActiveIndex } from "./slashMenu";
 import { mentionActiveIndex, mentionQuery } from "./mentionMenu";
 import { AgentMark } from "./AgentMark";
 
@@ -58,6 +58,7 @@ import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { announceDemoReady, readDemoPresentation } from "./demoPresentation";
 import { useDismissTransition } from "./hooks/useDismissTransition";
+import { ComposerMenus } from "./agent/ComposerMenus";
 import { configuredProviderId, resolveConversationProvider } from "./agent/agent-utils";
 import { AgentMessageRow } from "./agent/AgentMessageRow";
 import AgentTranscriptContextMenu from "./agent/AgentTranscriptContextMenu";
@@ -1466,24 +1467,6 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   // Slash commands are mail-operation scoped: only the mail-assistant mode
   // builds the menu, plain chat ignores the leading "/".
   const slashMenu = useMemo(() => mode === "agent" ? buildSlashMenu(composer, { streaming, dismissed: slashDismissed }) : null, [composer, slashDismissed, mode, streaming]);
-  const slashMenuOpen = slashMenu !== null && slashMenu.length > 0;
-
-  // Both composer menus unmount through a short fade-out: the last rendered
-  // items stay mounted (inert, aria-hidden) for the exit transition instead of
-  // vanishing mid-frame. useDismissTransition clears the snapshot when the
-  // fade ends, and reopening mid-fade cancels the pending unmount.
-  const [slashMenuExit, setSlashMenuExit] = useState<SlashMenuItem[] | null>(null);
-  const { closing: slashMenuClosing, requestClose: requestSlashMenuExit, reset: resetSlashMenuExit } =
-    useDismissTransition(useCallback(() => setSlashMenuExit(null), []));
-  useEffect(() => {
-    if (slashMenuOpen) {
-      resetSlashMenuExit();
-      setSlashMenuExit(slashMenu);
-    } else if (slashMenuExit !== null && !slashMenuClosing) {
-      requestSlashMenuExit();
-    }
-  }, [slashMenu, slashMenuClosing, slashMenuExit, slashMenuOpen, requestSlashMenuExit, resetSlashMenuExit]);
-  const slashMenuItems = slashMenuOpen ? slashMenu : slashMenuExit;
 
   const activeSlashIndex = slashMenuActiveIndex(slashMenu, slashIndex);
   const completeSlash = useCallback((command: AgentSlashCommand, sub?: AgentSlashSubcommand) => {
@@ -1533,17 +1516,6 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
   mentionTermRef.current = mentionTerm;
   const mentionOpen = mentionTerm !== null;
   const activeMentionIndex = mentionActiveIndex(mentionItems, mentionIndex);
-  const [mentionMenuExit, setMentionMenuExit] = useState<MentionItem[] | null>(null);
-  const { closing: mentionMenuClosing, requestClose: requestMentionMenuExit, reset: resetMentionMenuExit } =
-    useDismissTransition(useCallback(() => setMentionMenuExit(null), []));
-  useEffect(() => {
-    if (mentionOpen) {
-      resetMentionMenuExit();
-      setMentionMenuExit(mentionItems);
-    } else if (mentionMenuExit !== null && !mentionMenuClosing) {
-      requestMentionMenuExit();
-    }
-  }, [mentionItems, mentionMenuClosing, mentionMenuExit, mentionOpen, requestMentionMenuExit, resetMentionMenuExit]);
   useEffect(() => {
     if (!mentionOpen) return;
     let cancelled = false;
@@ -2167,65 +2139,19 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                 void sendMessage();
               }
             }} placeholder={t("agent.composer.placeholder")} disabled={composerDisabled} rows={1} aria-expanded={(slashMenu !== null && slashMenu.length > 0) || mentionOpen} aria-controls={slashMenu !== null && slashMenu.length > 0 ? "agent-slash-menu" : mentionOpen ? "agent-mention-menu" : undefined} aria-activedescendant={slashMenu !== null && slashMenu.length > 0 ? (activeSlashIndex >= 0 ? `agent-slash-menu-item-${activeSlashIndex}` : undefined) : mentionOpen && mentionItems.length > 0 ? (activeMentionIndex >= 0 ? `agent-mention-menu-item-${activeMentionIndex}` : undefined) : undefined} />
-            {slashMenuItems && (
-              <div className={`agent-slash-menu${slashMenuOpen ? "" : " closing"}`} id="agent-slash-menu" role="listbox" aria-hidden={slashMenuOpen ? undefined : true} aria-label={t("agent.commands.label")}>
-                {slashMenuItems.map((item, index) => (
-                  <button
-                    type="button"
-                    role="option"
-                    id={`agent-slash-menu-item-${index}`}
-                    aria-selected={index === activeSlashIndex}
-                    key={item.kind === "mail-reference" ? "mail-reference" : item.kind === "sub" ? `${item.command.id}.${item.sub.name}` : item.command.id}
-                    className={`agent-slash-item${item.kind === "sub" ? " agent-slash-item-sub" : ""}${index === activeSlashIndex ? " selected" : ""}`}
-                    onMouseDown={(event) => { event.preventDefault(); if (item.kind === "mail-reference") startMailReference(); else if (item.kind === "sub") completeSlash(item.command, item.sub); else completeSlash(item.command); }}
-                  >
-                    {item.kind === "mail-reference" ? (
-                      <>
-                        <span className="agent-slash-item-name">/@</span>
-                        <span className="agent-slash-item-desc">{t("agent.mention.label")}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="agent-slash-item-name">/{item.kind === "sub" ? `${item.command.name} ${item.sub.name}` : item.command.name}</span>
-                        <span className="agent-slash-item-desc">{item.kind === "sub" ? t(item.sub.descriptionKey) : t(item.command.descriptionKey)}</span>
-                        {item.kind === "sub" ? (item.sub.usageKey && <span className="agent-slash-item-usage">{t(item.sub.usageKey)}</span>) : (item.command.usageKey && <span className="agent-slash-item-usage">{t(item.command.usageKey)}</span>)}
-                      </>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            {(mentionOpen || mentionMenuExit) && (
-              <div className={`agent-mention-menu${mentionOpen ? "" : " closing"}`} id="agent-mention-menu" role="listbox" aria-hidden={mentionOpen ? undefined : true} aria-label={t("agent.mention.label")} onScroll={(event) => {
-                const el = event.currentTarget;
-                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) void loadMoreMentions();
-              }}>
-                {mentionOpen && mentionLoading && mentionItems.length === 0 ? (
-                  <div className="agent-mention-empty"><LoaderCircle size={13} className="spin" /><span>{t("agent.mention.loading")}</span></div>
-                ) : mentionOpen && mentionItems.length === 0 ? (
-                  <div className="agent-mention-empty"><span>{t("agent.mention.empty")}</span></div>
-                ) : (
-                  (mentionOpen ? mentionItems : mentionMenuExit!).map((item, index) => (
-                    <button
-                      type="button"
-                      role="option"
-                      id={`agent-mention-menu-item-${index}`}
-                      aria-selected={index === activeMentionIndex}
-                      key={item.id}
-                      className={`agent-mention-item${index === activeMentionIndex ? " selected" : ""}`}
-                      onMouseDown={(event) => { event.preventDefault(); introduceMailReference(item); }}
-                    >
-                      <span className="agent-mention-avatar" aria-hidden="true">{(item.subject ?? "").trim() ? item.subject!.trim()[0].toUpperCase() : "?"}</span>
-                      <span className="agent-mention-main">
-                        <span className="agent-mention-subject">{item.subject || t("agent.reference.noSubject")}</span>
-                        <span className="agent-mention-meta">{item.sender}<span aria-hidden="true">{" · "}</span>{item.accountEmail}</span>
-                      </span>
-                    </button>
-                  ))
-                )}
-                {mentionOpen && mentionLimitReached && <div className="agent-mention-limit" role="status">{t("agent.mention.maxReached")}</div>}
-              </div>
-            )}
+            <ComposerMenus
+              slashMenu={slashMenu}
+              activeSlashIndex={activeSlashIndex}
+              completeSlash={completeSlash}
+              startMailReference={startMailReference}
+              mentionOpen={mentionOpen}
+              mentionItems={mentionItems}
+              mentionLoading={mentionLoading}
+              mentionLimitReached={mentionLimitReached}
+              activeMentionIndex={activeMentionIndex}
+              introduceMailReference={introduceMailReference}
+              loadMoreMentions={() => void loadMoreMentions()}
+            />
             {pendingMemorySuggestions.length > 0 && (
               <div className="agent-memory-suggestions" role="status">
                 {pendingMemorySuggestions.map((summary) => (
