@@ -33,6 +33,10 @@ jobs:
       # Match Pages' install policy: native prebuilds are still installed, but
       # Electron downloads and other install scripts are unnecessary here.
       - run: npm ci --ignore-scripts
+      # The web build guards on the generated pdf.js assets (cmaps, fonts,
+      # wasm); they are not tracked in git, so materialize them before the
+      # throwaway checkout builds the site.
+      - run: npm run assets:pdfjs
       # build-site below repairs the hero badge in this throwaway checkout, so a
       # forgotten version bump would merge unnoticed. Check the version surfaces
       # and the release references the repair cannot rewrite, before that runs.
