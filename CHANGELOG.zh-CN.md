@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+- 0.6.0 已切版；此后的变更在此累积，随下一版本发布。
+
+## [0.6.0] - 2026-10-25
+
 ### 新增
 
 - **附件在线预览·基线（S0）**：新增 `scripts/copy-pdfjs-assets.mjs`，在 `predev`/`prebuild`/`pretest` 前把 pdf.js 的 `cmaps`、`standard_fonts`、`iccs`、`wasm` 资产（200 个文件）复制到 `apps/web/public/pdfjs/`，并生成含安装版本、逐文件 sha256 与字节数的 `manifest.json`；`npm run assets:pdfjs:check` 无需构建即可校验，`apps/web/vite.config.ts` 的 `nami-pdfjs-assets-guard` 兜住绕过 npm 脚本的直接 `vite build`。同时把 CSP 的 12 条指令与桌面端“权限默认拒绝、只允许本应用源导航”的加固策略分别抽成可单测的 `apps/server/src/security/csp.ts` 与 `apps/desktop/src/window-hardening.mts`，行为零变化。维护者感受：预览重构的第一批地基可独立验证，缺 pdf.js 资产会在构建时而不是线上预览时暴露。

@@ -157,17 +157,16 @@ describe("styles.css size ratchet", () => {
   // markdown 79 / 注释 3）按该格式展开后就是这个量级，没有额外装饰规则。
   // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
   // 「带边框的面板 + 列表行」外壳。
-  // 2026-10-24 指令菜单过渡的一次上调（18_173 → 18_194）：斜杠指令与 /@ 引用
-  // 菜单补上出现/消失动画——两条基类 animation（复用既有 agent-message-in
-  // keyframes，零新增帧定义）与一条 .closing 退场规则（transition + opacity +
-  // transform + pointer-events + animation:none，共 10 行，全部在
-  // features/agent.css）。实测聚合 18_182 行，阈值取实测 +12 行缓冲。
   // 2026-10-25 磨砂一致性的一次上调（18_194 → 18_214）：背景图模式下确认卡与
   // 用户气泡此前是实底板卡、与周围的磨砂控件（composer/搜索/模式切换）材质
   // 不一致；base/layout.css 的 background-active 块补两条磨砂规则（各 4 属性 +
   // 注释 4 行）。实测聚合 18_202 行，阈值取实测 +12 行缓冲。
+  // 2026-10-25 WYSIWYG 收缩（18_214 → 18_194）：壁纸路径撤掉全部自适应遮罩
+  // （全局/区域两层纱、暗调图专属模糊与重纱），密度由强度滑杆直出（明暗同
+  // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
+  // 合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 18_214;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_194;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
