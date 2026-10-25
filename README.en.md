@@ -1,5 +1,5 @@
 # Nami Mail
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 
 <p align="center">
   <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
@@ -38,19 +38,20 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-<!-- whats-new: v0.5.1 -->
-## What's New in 0.5.1
+<!-- whats-new: v0.6.0 -->
+## What's New in 0.6.0
 
-0.5.1 is a critical patch for the Windows in-app updater.
+0.6.0 is a milestone release: whole-database encryption, a unified task layer, and in-place attachment preview. **After upgrading to 0.6.0 and completing its first launch, you cannot roll back to an older version** (schema migration + encryption driver switch).
 
-- **Restart and update no longer exits silently**: the background helper is launched through `cmd.exe /d /s /c start` instead of a `detached` Node.js spawn, so it no longer dies with the exiting Electron parent before running any logic (Node.js issue #51018).
-- **In-app silent upgrades restored**: from 0.5.1 onward, later versions install in place and relaunch automatically.
-- **NSIS in-place upgrade arguments completed**: running processes are handled predictably, and custom installation paths (a non-default drive, for example) are preserved.
-- **Relaunch drift and update loops fixed**: the relaunched app starts from its own directory, and a failed update purges its cached archive instead of prompting forever.
+- **Encryption at rest**: the mail database and sensitive caches are encrypted on disk, with the master key protected by Windows DPAPI for the current user; a file copy no longer reveals mail content. The first launch converts the database automatically, with multiple recovery paths if interrupted.
+- **Unified task layer**: batch move, flag, archive, undo, send, and snooze become persistent tasks — effective on click and safe across restarts; old tasks stop writing to the wrong message after a provider mailbox rebuild.
+- **Send returns immediately**: clicking send responds instantly, delivery finishes in the background, and the Sent folder shows the message right away without duplicates.
+- **Attachment preview (13 kinds)**: PDF, images, audio/video, Markdown, Office, and archives read in place; remote images and avatars go through a same-origin proxy.
+- **External CLI / MCP that explains itself**: permission failures carry their own fix, and `namimail status` shows identity, tier, and expiry in one command.
 
-> **Already running 0.4.3 or 0.5.0?** In-app update cannot succeed from those builds, because the updater helper bundled inside them carries the flaw. Download `Nami-Mail-Setup-0.5.1.exe` from the [Release page](https://github.com/QinIndexCode/nami-mail/releases) and run it once, manually. Existing mail, accounts, settings, and encryption keys are preserved — no re-login or reconfiguration needed.
+> **Already running 0.5.1?** You can update in-app — the first real automatic upgrade since the updater fix. The first launch runs the encryption conversion; give it a moment, and back up `%APPDATA%\Nami Mail` first if you want a safety net. **Still on 0.4.3 or 0.5.0?** Those builds cannot update in-app; install 0.5.1 or 0.6.0 manually first.
 
-See the [release notes](docs/releases/v0.5.1.en.md) and [changelog](CHANGELOG.en.md) for details.
+See the [release notes](docs/releases/v0.6.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
@@ -255,7 +256,7 @@ OAuth callbacks return to local `/api/oauth/google/callback` or `/api/oauth/micr
 - The command-line Node development service still uses an isolated development data path from `MASTER_KEY_PATH`; it is not the Windows desktop protection path.
 - Credentials and OAuth refresh tokens are stored with AES-256-GCM encryption. Encrypted mail payloads contain Message-ID, subject, sender, recipients, preview, plain/HTML body, reply-thread fields, and attachment metadata. Legacy plaintext fields are migrated and cleared before the local API starts; WAL truncation and `VACUUM` clear old pages.
 - The persistent outbound queue encrypts subject, recipients, body, HTML, Message-ID, and diagnostics with separate purpose-derived keys. Request fingerprints and Message-ID lookup values use a derived-key HMAC. Pending attachment content, names, and MIME types are also encrypted on disk; legacy plaintext attachments migrate at startup. Received attachment bytes are not copied into the local database and are streamed from the provider when downloaded.
-- This is not whole-database SQLite encryption. Account address/provider, folders, UID, timestamps, flags, size, delivery state, record identifiers, ordinary app settings, and custom background images can remain plaintext metadata. DPAPI and application-layer encryption substantially reduce leakage from direct static-file reads or offline copies, but cannot stop a malicious process under the same Windows user from calling DPAPI, nor defend an unlocked running app or an administrator. Do not describe the current implementation as whole-database encryption equivalent to SQLCipher.
+- As of 0.6.0 the database file is encrypted with SQLite3MultipleCiphers (ChaCha20-Poly1305 by default), opened with a `PRAGMA key` derived from the DPAPI-unsealed master key; existing plaintext databases migrate automatically on first launch, and the application-layer encryption above continues to bound how decrypted data flows. Whole-database encryption is not full-disk encryption: it cannot stop a malicious process under the same Windows user from calling DPAPI, nor defend an unlocked running app or an administrator, and the data is unrecoverable if the master key is lost. After upgrading to 0.6.0 and completing its first launch you **cannot roll back** to an older version.
 - The service listens on `127.0.0.1` only and is not exposed to the LAN.
 - The master key, database, and outbound attachment directories are covered by `.gitignore`. A backup must protect the whole data directory; the DPAPI-wrapped desktop key is additionally bound to the current Windows user context.
 - Mail HTML is sanitized before display, removing scripts, forms, and embedded content. Remote images are still loaded automatically through the local service proxy: the proxy requests the original image URL from this machine, which changes where the request originates (the renderer never connects directly) but does **not** prevent a sender from observing opens through a unique image URL. Default blocking, per-message authorization, and per-sender allowlists are still pending a product decision.

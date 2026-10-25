@@ -1,5 +1,5 @@
 # Privacy and Local Data
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 
 [简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
@@ -28,13 +28,13 @@ The codebase currently contains no Nami Mail analytics SDK, crash-reporting serv
 | Received attachment content | Not copied into the local SQLite database; it is streamed from the mail provider under control when you download it. |
 | Agent Provider, conversations, and RAG pages | Provider configuration, including an optional API key, is encrypted under the root key. Conversation records, source citations, and cleaned local RAG chunks are encrypted under the corresponding account data key. On first enablement, cached local mail is indexed through a bounded background queue. This neither rewrites original mail nor sends mail to a model provider merely because it is indexed. |
 | Translation service configuration | LibreTranslate-compatible endpoint, timeout, and the optional API key are stored encrypted on the device; the built-in and LLM paths keep no local model or result cache, and translation results live only in the current reader view. |
-| Runtime metadata | Account addresses/providers, folders, UIDs, timestamps, flags, sizes, delivery states, record identifiers, ordinary settings, and background images can remain in plaintext. |
+| Runtime metadata | As of 0.6.0, stored inside the encrypted database file through whole-database encryption; image caches, the cache index, and custom background images are sealed per file outside the database, with cache names HMAC-opaque. |
 
 For the Windows desktop app, Electron `safeStorage` protects the master key with the current Windows user's DPAPI. The file is in the user data directory at `data/master.key.dpapi`. The desktop app does not fall back to creating a new plaintext master key. The command-line development service is different: it uses a separate development data path from `MASTER_KEY_PATH` and is not equivalent to desktop DPAPI protection.
 
-This is not SQLCipher or full-disk encryption. Application-layer encryption reduces the risk of reading static files directly or copying them offline, but it cannot defend against an administrator, a malicious process able to call DPAPI as the same Windows user, or an already unlocked and running app.
+As of 0.6.0 the database file itself is encrypted with SQLite3MultipleCiphers (ChaCha20-Poly1305 by default), opened with a `PRAGMA key` derived from the DPAPI-unsealed master key; the application-layer encryption above remains in place to bound how decrypted data flows. Whole-database encryption is not full-disk encryption and cannot defend against an administrator, a malicious process able to call DPAPI as the same Windows user, or an already unlocked and running app; if the master key is lost the database content is unrecoverable, and a backup must cover the entire data directory.
 
-This page describes the encryption boundary of the **v0.5.1 release**. The development trunk has since introduced whole-database at-rest encryption, which is not in the table above because it has not shipped yet: the server uses SQLite3MultipleCiphers with a key derived from the master key as its `PRAGMA key`; an existing database is copied and verified through `PRAGMA rekey` by `ensureDatabaseEncrypted` at startup; the desktop master key stays under DPAPI and the command-line service keeps its separate `MASTER_KEY_PATH` development path. Whole-database encryption changes the threat model (the static file can no longer be read offline) and brings operational consequences (a migration cost on the first start of an existing database, and data that cannot be recovered once the master key is lost). Those behaviours and consequences will be stated item by item in the release notes at the version cut. Until then, the table above remains accurate for an installed v0.5.1.
+This page describes the encryption boundary of the **v0.6.0 release**. 0.6.0 migrates the schema from v2 to v4 and enables the whole-database encryption described above: an existing plaintext database is upgraded on first launch by `ensureDatabaseEncrypted` through checkpoint → a copied `PRAGMA rekey` → verification → an atomic swap, with multiple recovery paths if interrupted (verified adoption, quarantine of an unreadable copy, clean restart while the main database is intact). **After upgrading you cannot roll back to 0.5.1 or earlier.**
 
 ## Local and UI Protections
 

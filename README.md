@@ -1,4 +1,4 @@
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 <p align="center">
   <a href="https://qinindexcode.github.io/nami-mail/">
     <img src="docs/nami-mail-wordmark.svg" alt="Nami Mail" width="480" />
@@ -53,19 +53,20 @@ This page is the short tour. For installation, in-app updates, OAuth client setu
 - **Privacy by construction** — the master key is protected by Windows DPAPI and sensitive data is encrypted at rest with AES-256-GCM. No central cloud, no telemetry tier: credentials and mail never leave the device.
 - **CLI and MCP ecosystem** — a Windows SID-DACL–secured broker exposes a standard MCP stdio server and command-line tooling, so external scripts and IDEs can integrate without weakening the local boundary.
 
-<!-- whats-new: v0.5.1 -->
-## What's New in 0.5.1
+<!-- whats-new: v0.6.0 -->
+## What's New in 0.6.0
 
-0.5.1 is a critical patch for the Windows in-app updater.
+0.6.0 is a milestone release: whole-database encryption, a unified task layer, and in-place attachment preview. **After upgrading and completing its first launch, you cannot roll back to an older version.**
 
-- **Restart and update no longer exits silently** — the background helper is launched through `cmd.exe /d /s /c start` instead of a `detached` Node.js spawn, so it no longer dies with the exiting Electron parent before running any logic (Node.js issue #51018).
-- **In-app silent upgrades restored** — from 0.5.1 onward, later versions install in place and relaunch automatically.
-- **NSIS in-place upgrade arguments completed** — running processes are handled predictably and custom installation paths (a non-default drive, for example) are preserved.
-- **Relaunch drift and update loops fixed** — the relaunched app starts from its own directory, and a failed update purges its cached archive instead of prompting forever.
+- **Encryption at rest** — the mail database and sensitive caches are encrypted on disk with the master key protected by Windows DPAPI; the first launch converts the existing database automatically, with multiple recovery paths if interrupted.
+- **Unified task layer** — batch move, flag, archive, undo, send, and snooze become persistent tasks: effective on click, safe across restarts, and immune to provider mailbox rebuilds.
+- **Send returns immediately** — the UI responds instantly, delivery finishes in the background, and the Sent folder shows the message right away without duplicates.
+- **Attachment preview (13 kinds)** — PDF, images, audio/video, Markdown, Office, and archives read in place on a budgeted fetch → decode → render pipeline; remote images go through a same-origin proxy.
+- **External CLI / MCP that explains itself** — permission failures carry an actionable suggestion, and `namimail status` shows caller identity, tier, and expiry in one command.
 
-> **Already running 0.4.3 or 0.5.0?** In-app update cannot succeed from those builds, because the updater helper bundled inside them carries the flaw. Download `Nami-Mail-Setup-0.5.1.exe` from the [Release page](https://github.com/QinIndexCode/nami-mail/releases) and run it once, manually. Existing mail, accounts, settings, and encryption keys are preserved — no re-login or reconfiguration needed.
+> **Already running 0.5.1?** You can update in-app — the first real automatic upgrade since the updater fix. **Still on 0.4.3 or 0.5.0?** Those builds cannot update in-app; install 0.5.1 or 0.6.0 manually first.
 
-See the [0.5.1 release notes](docs/releases/v0.5.1.en.md) and the [changelog](CHANGELOG.en.md) for the full detail.
+See the [0.6.0 release notes](docs/releases/v0.6.0.en.md) and the [changelog](CHANGELOG.en.md) for the full detail.
 
 ## Quick Start
 
@@ -102,7 +103,7 @@ The complete set is indexed in [docs/README.en.md](docs/README.en.md), with a Ch
 
 - Data lives in `data/nami-mail.db`; the desktop master key at `data/master.key.dpapi` is wrapped by DPAPI for the current Windows user and never enters a URL, an ordinary environment variable, IPC, or a log.
 - Credentials, OAuth refresh tokens, sensitive mail payloads, the outbound queue, and pending attachments are encrypted with AES-256-GCM. Mail HTML is sanitized before display, removing scripts, forms, and embedded content. Remote images are still loaded automatically through the local service proxy: the proxy requests the original image URL from this machine, which changes where the request originates (the renderer never connects directly) but does **not** prevent a sender from observing opens through a unique image URL. Default blocking, per-message authorization, and per-sender allowlists are still pending a product decision.
-- This is **not** whole-database encryption. Account addresses, folders, UIDs, timestamps, flags, sizes, and ordinary settings can remain plaintext metadata. DPAPI plus application-layer encryption raises the bar well above a plain SQLite file, but it is not the same guarantee as whole-file encryption. Whole-database encryption at rest has landed on the development trunk and has not shipped, so the release notes will state it when they apply to an installed build.
+- As of 0.6.0 the database file is encrypted at rest with SQLite3MultipleCiphers (ChaCha20-Poly1305 by default), and image caches are sealed per file; the master key is wrapped by DPAPI for the current Windows user, and existing plaintext databases migrate automatically on first launch. This is not full-disk encryption and does not defend against an administrator or a same-user process able to call DPAPI; the data is unrecoverable if the master key is lost, and after upgrading you **cannot roll back** to an older version.
 - The local service binds to `127.0.0.1` only. A backup must protect the entire data directory, because the wrapped key is bound to the current Windows user.
 
 Read more in [privacy and local data](docs/PRIVACY.en.md).

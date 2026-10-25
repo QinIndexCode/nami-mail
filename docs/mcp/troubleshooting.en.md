@@ -2,7 +2,7 @@
 
 [Chinese](troubleshooting.zh-CN.md) | [Security](security.en.md)
 
-> **Current-build status: available.** The 0.5.1 installer ships the `namimail` command, PATH shim, MCP stdio child process, Broker, service mode, and pairing UI. The error codes below are recovery signals for a live MCP client. External service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE` before opening GUI, SQLite, a master key, or a translation model.
+> **Current-build status: available.** The 0.6.0 installer ships the `namimail` command, PATH shim, MCP stdio child process, Broker, service mode, and pairing UI. The error codes below are recovery signals for a live MCP client. External service mode still fails closed with `BROKER_SECURITY_UNAVAILABLE` before opening GUI, SQLite, a master key, or a translation model.
 
 ## What to do today
 

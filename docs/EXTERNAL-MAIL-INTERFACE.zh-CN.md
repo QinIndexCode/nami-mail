@@ -1,5 +1,5 @@
 # 外部 Mail 接口
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 
 [English](EXTERNAL-MAIL-INTERFACE.en.md) | [文档导航](README.md) | [CLI](cli/README.zh-CN.md) | [MCP](mcp/README.zh-CN.md)
 
