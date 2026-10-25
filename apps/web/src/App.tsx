@@ -427,12 +427,11 @@ export default function App() {
   // to have; force dark so probes observe one deterministic palette.
   const theme = isDesktopSmoke ? "dark" : resolveTheme(settings.theme, systemTheme);
   const activeBackgroundUrl = backgroundUrl(settings);
-  // In light theme the pale canvas dilutes the picture; render the background
-  // more densely there so presets stay visible. Dark theme is left untouched.
-  const backgroundOpacity =
-    activeBackgroundUrl && theme === "light"
-      ? Math.min(1, (settings.backgroundIntensity * 1.22) / 100)
-      : settings.backgroundIntensity / 100;
+  // One density formula for both themes: the intensity slider is the single
+  // honest control (what you see is what you get), and no scrim layers sit on
+  // top of the art — the frame tint and vignette are window chrome, not
+  // readability compensations.
+  const backgroundOpacity = settings.backgroundIntensity / 100;
   // Identity of the list on screen. The list component keys its viewport on
   // `listSnapshotKey` (bumped with each settled row swap above) so a switch
   // remounts the viewport once, at the data change, and can fade the arriving

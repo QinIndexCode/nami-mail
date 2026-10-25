@@ -39,11 +39,11 @@ export type BackgroundPresetOption = {
 
 export const backgroundPresetOptions: readonly BackgroundPresetOption[] = [
   { id: "none", labelKey: "settings.backgroundPreset.none.label", descriptionKey: "settings.backgroundPreset.none.description" },
-  { id: "paper", labelKey: "settings.backgroundPreset.paper.label", descriptionKey: "settings.backgroundPreset.paper.description", image: `${import.meta.env.BASE_URL}backgrounds/paper.svg` },
-  { id: "mist", labelKey: "settings.backgroundPreset.mist.label", descriptionKey: "settings.backgroundPreset.mist.description", image: `${import.meta.env.BASE_URL}backgrounds/mist.svg` },
-  { id: "coast", labelKey: "settings.backgroundPreset.coast.label", descriptionKey: "settings.backgroundPreset.coast.description", image: `${import.meta.env.BASE_URL}backgrounds/coast.svg` },
-  { id: "dawn", labelKey: "settings.backgroundPreset.dawn.label", descriptionKey: "settings.backgroundPreset.dawn.description", image: `${import.meta.env.BASE_URL}backgrounds/dawn.svg` },
-  { id: "night", labelKey: "settings.backgroundPreset.night.label", descriptionKey: "settings.backgroundPreset.night.description", image: `${import.meta.env.BASE_URL}backgrounds/night.svg` },
+  { id: "paper", labelKey: "settings.backgroundPreset.paper.label", descriptionKey: "settings.backgroundPreset.paper.description", image: `${import.meta.env.BASE_URL}backgrounds/paper.png` },
+  { id: "mist", labelKey: "settings.backgroundPreset.mist.label", descriptionKey: "settings.backgroundPreset.mist.description", image: `${import.meta.env.BASE_URL}backgrounds/mist.png` },
+  { id: "coast", labelKey: "settings.backgroundPreset.coast.label", descriptionKey: "settings.backgroundPreset.coast.description", image: `${import.meta.env.BASE_URL}backgrounds/coast.png` },
+  { id: "dawn", labelKey: "settings.backgroundPreset.dawn.label", descriptionKey: "settings.backgroundPreset.dawn.description", image: `${import.meta.env.BASE_URL}backgrounds/dawn.png` },
+  { id: "night", labelKey: "settings.backgroundPreset.night.label", descriptionKey: "settings.backgroundPreset.night.description", image: `${import.meta.env.BASE_URL}backgrounds/night.png` },
 ];
 
 export type TranslatedOption<T extends string> = { value: T; labelKey: string; detailKey: string };
