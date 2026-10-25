@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
   Brain,
@@ -2200,28 +2200,25 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
                     </button>
                     {permissionPopover.mounted && (
                       <AgentPickerPopover id="agent-permission-picker" anchor="left" visible={permissionPopover.visible} label={t("agent.permission.label")}>
-                        {permissionOptions.map((option, index) => {
+                        {permissionOptions.map((option) => {
                           const active = agentAccessLevel === option.level;
                           return (
-                            <Fragment key={option.level}>
-                              {index > 0 && <div className="agent-popover-divider" role="separator" />}
-                              <button type="button" role="menuitemradio" aria-checked={active} className={`agent-popover-option${active ? " active" : ""}${option.level === "full-access" ? " danger" : ""}`} onClick={() => {
-                                if (option.level === "full-access" && !active) {
-                                  setPermissionOpen(false);
-                                  openAccessConfirm("full-access");
-                                  return;
-                                }
+                            <button type="button" role="menuitemradio" aria-checked={active} key={option.level} className={`agent-popover-option${active ? " active" : ""}${option.level === "full-access" ? " danger" : ""}`} onClick={() => {
+                              if (option.level === "full-access" && !active) {
                                 setPermissionOpen(false);
-                                if (!active) onAgentAccessLevelChange?.(option.level);
-                              }}>
-                                <span className="agent-popover-option-icon" aria-hidden="true">{option.icon}</span>
-                                <span className="agent-popover-option-main">
-                                  <strong>{option.label}</strong>
-                                  <small>{option.hint}</small>
-                                </span>
-                                {active && <Check size={13} className="agent-popover-option-check" />}
-                              </button>
-                            </Fragment>
+                                openAccessConfirm("full-access");
+                                return;
+                              }
+                              setPermissionOpen(false);
+                              if (!active) onAgentAccessLevelChange?.(option.level);
+                            }}>
+                              <span className="agent-popover-option-icon" aria-hidden="true">{option.icon}</span>
+                              <span className="agent-popover-option-main">
+                                <strong>{option.label}</strong>
+                                <small>{option.hint}</small>
+                              </span>
+                              {active && <Check size={13} className="agent-popover-option-check" />}
+                            </button>
                           );
                         })}
                       </AgentPickerPopover>

@@ -1826,7 +1826,7 @@ border-bottom:none;
 background:color-mix(in srgb, var(--panel-solid) 92%, var(--canvas));
 max-width:840px;
 max-height:360px;
-box-shadow:0 -8px 18px -12px color-mix(in srgb, var(--danger) 28%, transparent);
+box-shadow:0 -8px 18px -12px color-mix(in srgb, var(--warning) 26%, transparent);
 border-radius:16px 16px 0 0;
 margin:4px auto 0;
 padding:14px 16px 24px;
@@ -1904,7 +1904,7 @@ display:flex
 }
 .agent-confirmation-heading>svg
 {
-color:var(--danger);
+color:var(--warning);
 flex:none
 }
 .agent-confirmation-heading>span
@@ -1916,7 +1916,7 @@ display:flex
 }
 .agent-confirmation-heading strong
 {
-color:color-mix(in srgb, var(--danger) 68%, var(--text));
+color:color-mix(in srgb, var(--warning) 58%, var(--text));
 font-size:11px
 }
 .agent-confirmation-heading small
@@ -2824,7 +2824,10 @@ height:0
 }
 .agent-popover.anchor-left
 {
-left:0
+left:0;
+/* Only the permission picker anchors left: three labelled tiers need room to
+   breathe, and a cramped two-line column reads heavier than the family look. */
+min-width:208px
 }
 .agent-popover.anchor-right
 {
