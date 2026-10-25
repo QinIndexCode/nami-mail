@@ -1,6 +1,7 @@
 ## [Unreleased]
 
 - 0.6.0 is cut; changes from here on accumulate for the next release.
+- **The update is now visible, and the installer console no longer flashes**: the update helper shows a small topmost progress window (stage-localized text for waiting / verify / extract / install / restart), so the desktop is no longer silent for the whole install; the launcher drops the cmd.exe start indirection and spawns powershell.exe directly as a hidden child — the console-allocation flash is gone, and so is the shell that misparsed metacharacter paths. The helper script now carries a UTF-8 BOM: Windows PowerShell 5.1 parses BOM-less files as the system ANSI codepage, and on zh-CN machines a multibyte sequence swallowed a closing quote and broke the entire script (reproduced locally, pinned by a regression assertion).
 
 ## [0.6.0] - 2026-10-25
 
