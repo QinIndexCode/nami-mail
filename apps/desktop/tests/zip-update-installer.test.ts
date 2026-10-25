@@ -95,6 +95,10 @@ async function stopLockHolder(child: ChildProcess, releasePath: string): Promise
 
 test("the ZIP installer helper binds verified archive bytes to one extracted installer stream and records recoverable failures", () => {
   const script = createZipUpdateInstallerScript();
+  // The localized progress text is non-ASCII: without a BOM, Windows PowerShell
+  // 5.1 parses the file as the system ANSI codepage and on zh-CN machines a
+  // multibyte sequence swallows a closing quote — the script fails to parse.
+  assert.equal(script.charCodeAt(0), 0xfeff, "The helper script must carry a UTF-8 BOM.");
   assert.match(script, /Add-Type -AssemblyName System\.IO\.Compression/);
   assert.match(script, /\[IO\.File\]::Open\(\$ArchivePath, \[IO\.FileMode\]::Open, \[IO\.FileAccess\]::Read, \[IO\.FileShare\]::Read\)/);
   assert.match(script, /Get-StreamSha512 \$archiveStream/);
@@ -114,9 +118,19 @@ test("the ZIP installer helper binds verified archive bytes to one extracted ins
     "The final read lock must be opened only after the trusted writer hash is sealed.",
   );
   assert.match(script, /Assert-ValidSignature/);
-  assert.match(script, /Start-Process -FilePath \$installerPath -ArgumentList @\('\/S', '--updated'\) -PassThru -Wait/);
+  // The installer runs without -Wait so the progress window keeps pumping.
+  assert.match(script, /Start-Process -FilePath \$installerPath -ArgumentList @\('\/S', '--updated'\) -PassThru/);
+  assert.doesNotMatch(script, /-PassThru -Wait/);
+  assert.match(script, /while \(-not \$installer\.HasExited\)/);
   assert.match(script, /if \(\$installer\.ExitCode -ne 0\) \{ throw "Nami Mail installer exited with code \$\(\$installer\.ExitCode\)\." \}/);
   assert.match(script, /\$installationSucceeded = \$true/);
+  // The progress window is opt-in and stage-driven.
+  assert.match(script, /\[switch\]\$ShowProgress/);
+  assert.match(script, /function Set-ProgressStage/);
+  assert.match(script, /function Hide-ProgressWindow/);
+  assert.match(script, /Set-ProgressStage 'wait'/);
+  assert.match(script, /Set-ProgressStage 'install'/);
+  assert.match(script, /Hide-ProgressWindow\r?\nexit 0/);
   assert.match(script, /function Remove-TransientFile/);
   assert.match(script, /function Remove-TransientDirectory/);
   assert.match(script, /\$archiveRemoved = Remove-TransientFile \$ArchivePath/);

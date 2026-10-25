@@ -565,6 +565,9 @@ export class DesktopUpdater {
               ? { kind: "authenticode", signer: updateTrust.signer }
               : { kind: "ed25519" } as ZipUpdateInstallerTrust,
             parentProcessId: process.pid,
+            // The real update flow must be visible: the helper shows its small
+            // progress window (tests leave this unset and stay silent).
+            showProgress: true,
           });
         },
         this.options.quitForInstall,
