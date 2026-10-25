@@ -1,6 +1,6 @@
 {
   "name": "nami-mail",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "description": "Local-first, multi-account desktop mail client.",
   "author": "Nami Mail",

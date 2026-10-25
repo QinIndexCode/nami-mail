@@ -2,7 +2,7 @@
 
 [Chinese](configuration.zh-CN.md) | [Installation](installation.en.md) | [Examples](examples.en.md)
 
-> **Current-build status: configure an MCP client.** The 0.5.1 installer ships the `namimail` command and PATH shim, and `namimail mcp start` runs the MCP stdio bridge against a paired, running Agent host. The JSON below can be pasted into a current IDE or MCP client.
+> **Current-build status: configure an MCP client.** The 0.6.0 installer ships the `namimail` command and PATH shim, and `namimail mcp start` runs the MCP stdio bridge against a paired, running Agent host. The JSON below can be pasted into a current IDE or MCP client.
 
 ## Process declaration
 

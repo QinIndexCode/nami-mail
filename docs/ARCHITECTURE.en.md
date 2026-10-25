@@ -1,5 +1,5 @@
 # Architecture and Trust Boundaries
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 
 [简体中文](ARCHITECTURE.zh-CN.md) | [English](ARCHITECTURE.en.md)
 

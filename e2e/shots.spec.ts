@@ -18,8 +18,20 @@ import { roundScreenshotFile } from "../scripts/round-screenshots.mjs";
  * committed images.
  */
 const targets = [
-  { lang: "zh-CN", inbox: "docs/nami-mail-inbox-zh.png", agent: "docs/nami-mail-agent-zh.png" },
-  { lang: "en-US", inbox: "docs/nami-mail-inbox-en.png", agent: "docs/nami-mail-agent-en.png" },
+  {
+    lang: "zh-CN",
+    inbox: "docs/nami-mail-inbox-zh.png",
+    agent: "docs/nami-mail-agent-zh.png",
+    // Anchors the transcript on the successful cross-check answer so the shot
+    // shows analysis + write-confirmation, not the scripted SMTP failure tail.
+    frame: "已结合你上传的数据与历史邮件核对",
+  },
+  {
+    lang: "en-US",
+    inbox: "docs/nami-mail-inbox-en.png",
+    agent: "docs/nami-mail-agent-en.png",
+    frame: "Cross-checked your data against the mail history",
+  },
 ] as const;
 
 test.skip(!process.env.NAMI_MAIL_CAPTURE_SHOTS, "Set NAMI_MAIL_CAPTURE_SHOTS=1 to regenerate the README screenshots.");
@@ -49,6 +61,26 @@ for (const target of targets) {
     await expect(page.locator(".agent-workspace")).toBeVisible();
     await expect(page.locator(".agent-workspace .agent-conversation-title, .agent-workspace .agent-message").first()).toBeVisible();
     await page.waitForTimeout(1_200);
+    // The scripted conversation ends on a simulated SMTP failure (recovery is
+    // part of the demo). The README shot frames the successful middle instead:
+    // the cross-checked answer, the draft request, and the confirmation card.
+    // The restore flow re-anchors the transcript after the workspace opens, so
+    // the offset is set twice — the second pass wins over any pending animation.
+    const frameTranscript = () =>
+      page
+        .locator(".agent-workspace .agent-message", { hasText: target.frame })
+        .first()
+        .evaluate((element) => {
+          const container = element.closest(".agent-transcript");
+          if (!container) return;
+          const offset =
+            element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop;
+          container.scrollTop = Math.max(0, offset - 8);
+        });
+    await frameTranscript();
+    await page.waitForTimeout(300);
+    await frameTranscript();
+    await page.waitForTimeout(200);
     await page.locator(".app-frame").screenshot({ path: target.agent });
     await roundScreenshotFile(target.agent);
   });

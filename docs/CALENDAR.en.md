@@ -1,5 +1,5 @@
 # Calendar and Mail Invitations
-<!-- shipped-as: v0.5.1 -->
+<!-- shipped-as: v0.6.0 -->
 
 [简体中文](CALENDAR.zh-CN.md) | [English](CALENDAR.en.md)
 

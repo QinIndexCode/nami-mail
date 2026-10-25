@@ -2,7 +2,7 @@
 
 [Chinese](output-schema.zh-CN.md) | [Exit codes](exit-codes.en.md)
 
-> **Current-build status: implemented.** The 0.5.1 build ships the external CLI with a Broker-connected JSON output. The envelope below is a callable response, not a future design.
+> **Current-build status: implemented.** The 0.6.0 build ships the external CLI with a Broker-connected JSON output. The envelope below is a callable response, not a future design.
 
 `--output json` is the scripting interface. Each invocation writes one stable envelope to standard output, for both success and failure:
 
@@ -15,7 +15,7 @@
   "error": null,
   "meta": {
     "durationMs": 18,
-    "version": "0.5.1"
+    "version": "0.6.0"
   }
 }
 ```
