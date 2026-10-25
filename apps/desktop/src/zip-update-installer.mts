@@ -30,6 +30,9 @@ export type ZipUpdateInstallerPlan = {
   currentExecutablePath: string;
   trust: ZipUpdateInstallerTrust;
   parentProcessId: number;
+  /** The real updater sets this so the helper shows its progress window;
+   *  tests leave it unset to keep the helper fully silent. */
+  showProgress?: boolean;
 };
 
 type AuthenticodeResult = {
@@ -46,14 +49,6 @@ function powershellPath(): string {
     "WindowsPowerShell",
     "v1.0",
     "powershell.exe",
-  );
-}
-
-function comspecPath(): string {
-  return process.env.COMSPEC?.trim() || path.join(
-    process.env.SystemRoot?.trim() || "C:\\Windows",
-    "System32",
-    "cmd.exe",
   );
 }
 
@@ -145,7 +140,12 @@ export function createZipUpdateInstallerScript(): string {
   // extraction and process creation. Windows path-based process creation still
   // cannot make an absolute guarantee against a same-user attacker that races
   // a rename after the final check.
-  return String.raw`param(
+  // The script carries localized (non-ASCII) progress text, and Windows
+  // PowerShell 5.1 reads BOM-less files as the system ANSI codepage — on a
+  // zh-CN machine that mangles the UTF-8 Chinese until a multibyte sequence
+  // swallows a closing quote and the whole script fails to parse. The BOM
+  // makes the encoding explicit.
+  return "\uFEFF" + String.raw`param(
   [int]$ParentProcessId,
   [string]$ArchivePath,
   [Int64]$ArchiveSize,
@@ -153,11 +153,12 @@ export function createZipUpdateInstallerScript(): string {
   [string]$TargetVersion,
   [string]$VersionDirectory,
   [string]$InstallerName,
-  [string]$CurrentExecutablePath,
-  [string]$CurrentExecutableSha512,
-  [string]$ExpectedSignerThumbprint,
-  [string]$WorkDirectory,
-  [string]$ResultPath
+      [string]$CurrentExecutablePath,
+      [string]$CurrentExecutableSha512,
+      [string]$ExpectedSignerThumbprint,
+      [string]$WorkDirectory,
+      [string]$ResultPath,
+      [switch]$ShowProgress
 )
 
 $ErrorActionPreference = 'Stop'
@@ -167,6 +168,55 @@ $currentExecutableLock = $null
 $installationSucceeded = $false
 $shouldRestartPreviousVersion = $false
 $stage = 'wait'
+# A small topmost status window so the update is never invisible: silent NSIS
+# plus a hidden helper used to leave the desktop with no feedback for the whole
+# install. Opt-in via -ShowProgress (the real updater passes it; tests keep the
+# helper silent). Text follows the user's UI culture; failures never block the
+# update itself.
+$script:ProgressForm = $null
+$script:ProgressLabel = $null
+$script:ProgressTexts = $null
+if ($ShowProgress) {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $isZh = [System.Threading.Thread]::CurrentThread.CurrentUICulture.Name -like 'zh*'
+    $script:ProgressTexts = if ($isZh) {
+      @{ wait = '正在等待 Nami Mail 退出…'; verify = '正在校验更新包…'; extract = '正在解压安装程序…'; install = '正在安装更新，请稍候…'; restart = '更新完成，正在重启…' }
+    } else {
+      @{ wait = 'Waiting for Nami Mail to exit…'; verify = 'Verifying the update package…'; extract = 'Extracting the installer…'; install = 'Installing the update, please wait…'; restart = 'Update finished, restarting…' }
+    }
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'Nami Mail'
+    $form.FormBorderStyle = 'None'
+    $form.TopMost = $true
+    $form.ShowInTaskbar = $true
+    $form.Size = New-Object System.Drawing.Size(380, 92)
+    $form.StartPosition = 'CenterScreen'
+    $label = New-Object System.Windows.Forms.Label
+    $label.Dock = 'Fill'
+    $label.TextAlign = 'MiddleCenter'
+    $label.Font = New-Object System.Drawing.Font('Segoe UI', 11)
+    $label.Text = $script:ProgressTexts.wait
+    $form.Controls.Add($label)
+    $form.Show()
+    $form.Refresh()
+    $script:ProgressForm = $form
+    $script:ProgressLabel = $label
+  } catch {}
+}
+function Set-ProgressStage([string]$Key) {
+  try {
+    if ($script:ProgressLabel -and $script:ProgressTexts.ContainsKey($Key)) {
+      $script:ProgressLabel.Text = $script:ProgressTexts[$Key]
+      $script:ProgressForm.Refresh()
+      [System.Windows.Forms.Application]::DoEvents()
+    }
+  } catch {}
+}
+function Hide-ProgressWindow {
+  try { if ($script:ProgressForm) { $script:ProgressForm.Close(); $script:ProgressForm.Dispose() } } catch {}
+}
 
 function Assert-ValidSignature([string]$FilePath, [string]$ExpectedThumbprint) {
   $signature = Get-AuthenticodeSignature -LiteralPath $FilePath
@@ -229,9 +279,11 @@ function Write-InstallFailure([string]$Version, [string]$FailureStage, [string]$
 
 try {
   Add-Type -AssemblyName System.IO.Compression
+  Set-ProgressStage 'wait'
   $deadline = [DateTime]::UtcNow.AddSeconds(90)
   while (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'Nami Mail did not exit before update installation.' }
+    if ($script:ProgressForm) { [System.Windows.Forms.Application]::DoEvents() }
     Start-Sleep -Milliseconds 200
   }
 
@@ -243,6 +295,7 @@ try {
   # Do not re-open ArchivePath after hashing it: another same-user process
   # could otherwise replace the ZIP between integrity verification and unzip.
   $stage = 'verify-archive'
+  Set-ProgressStage 'verify'
   $archiveStream = [IO.File]::Open($ArchivePath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   try {
     if ($archiveStream.Length -ne $ArchiveSize) {
@@ -256,6 +309,7 @@ try {
     $archive = [IO.Compression.ZipArchive]::new($archiveStream, [IO.Compression.ZipArchiveMode]::Read, $true)
     try {
       $stage = 'extract'
+      Set-ProgressStage 'extract'
       if ($archive.Entries.Count -ne 1) { throw 'Update ZIP must contain exactly one installer.' }
       $entry = $archive.Entries[0]
       if ($entry.FullName -cne $InstallerName -or $entry.FullName.Contains('/') -or $entry.FullName.Contains('\')) {
@@ -293,7 +347,14 @@ try {
     Assert-ValidSignature $installerPath $ExpectedSignerThumbprint
   }
   $stage = 'install'
-  $installer = Start-Process -FilePath $installerPath -ArgumentList @('/S', '--updated') -PassThru -Wait
+  Set-ProgressStage 'install'
+  # Poll instead of -Wait so the progress window keeps pumping; a frozen
+  # "not responding" window is worse than no window.
+  $installer = Start-Process -FilePath $installerPath -ArgumentList @('/S', '--updated') -PassThru
+  while (-not $installer.HasExited) {
+    if ($script:ProgressForm) { [System.Windows.Forms.Application]::DoEvents() }
+    Start-Sleep -Milliseconds 200
+  }
   if ($installer.ExitCode -ne 0) { throw "Nami Mail installer exited with code $($installer.ExitCode)." }
   Remove-Item -LiteralPath $ResultPath -Force -ErrorAction SilentlyContinue
   $installationSucceeded = $true
@@ -317,6 +378,7 @@ try {
 
 if ($shouldRestartPreviousVersion) {
   $stage = 'restart'
+  Set-ProgressStage 'restart'
   try {
     # The parent process has exited, so hold the previous executable while
     # checking its pre-exit hash and creating its process.
@@ -334,8 +396,10 @@ if ($shouldRestartPreviousVersion) {
     try { Write-InstallFailure $TargetVersion $stage $ResultPath } catch {}
   }
 } elseif ($installationSucceeded -and (Test-Path -LiteralPath $CurrentExecutablePath)) {
+  Set-ProgressStage 'restart'
   Start-Process -FilePath $CurrentExecutablePath -WorkingDirectory (Split-Path -Parent $CurrentExecutablePath)
 }
+Hide-ProgressWindow
 exit 0
 `;
 }
@@ -389,33 +453,24 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
       "-ResultPath",
       resultPath,
     ];
-    // Launch via Windows shell (cmd.exe /d /s /c start "") instead of direct Node
-    // `detached: true` on powershell.exe. In Node.js on Windows, detached spawns
-    // pass DETACHED_PROCESS (0x00000008) to CreateProcessW, which causes CUI
-    // subsystem applications like powershell.exe with ignored stdio to abort
-    // host initialization and exit silently with code 0 before running the script.
-    // The `start ""` shell command launches the PowerShell process with its own
-    // independent console session, detached from Node and surviving parent exit.
-    //
-    // Node only quotes spawn arguments that contain whitespace, so a token such
-    // as "C:\Users\A&B\...\install.ps1" used to reach cmd.exe unquoted and the
-    // bare "&" split the command there: the launcher exited 1 and the helper
-    // never started (auto-updates stayed unavailable for such users). The
-    // command line is therefore assembled explicitly with every token quoted —
-    // Windows paths cannot contain double quotes, so plain quoting disarms the
-    // cmd metacharacters — and handed over verbatim.
-    const commandLine = [
-      "start",
-      '""',
-      `"${powershellPath()}"`,
-      ...psArguments.map((argument) => `"${argument}"`),
-    ].join(" ");
-    const child = spawn(comspecPath(), ["/d", "/s", "/c", commandLine], {
+    if (plan.showProgress) psArguments.push("-ShowProgress");
+    // Spawn powershell.exe directly as a hidden child — no cmd.exe, no `start`.
+    // The earlier cmd/start indirection existed to dodge Node issue #51018
+    // (detached spawns pass DETACHED_PROCESS, which aborts CUI host init), but
+    // `start` allocates a fresh console for the child, and that console flashes
+    // on screen during every update. A plain child with windowsHide gets
+    // CREATE_NO_WINDOW: fully hidden, no flash. The child survives this
+    // process's exit (Windows never terminates children on parent exit), and
+    // without cmd in the chain there is no shell to misparse metacharacters —
+    // a path like C:\Users\A&B\... reaches PowerShell intact.
+    const child = spawn(powershellPath(), psArguments, {
       env: minimalSpawnEnvironment(),
       stdio: "ignore",
       windowsHide: true,
-      windowsVerbatimArguments: true,
     });
+    // The helper now outlives the launcher (cmd used to exit immediately after
+    // `start`; without it the direct child keeps running), so success means
+    // "the process was created", not "the process exited".
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill();
@@ -425,13 +480,9 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
         clearTimeout(timer);
         reject(error);
       });
-      child.once("exit", (code) => {
+      child.once("spawn", () => {
         clearTimeout(timer);
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Update helper launcher exited with code ${code ?? "null"}.`));
-        }
+        resolve();
       });
     });
     child.unref();
