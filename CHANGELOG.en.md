@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+- 0.6.0 is cut; changes from here on accumulate for the next release.
+
+## [0.6.0] - 2026-10-25
+
 ### Added
 
 - **Attachment preview foundation (S0)**: a new `scripts/copy-pdfjs-assets.mjs` stages pdf.js's `cmaps`, `standard_fonts`, `iccs` and `wasm` assets (200 files) into `apps/web/public/pdfjs/` before `predev`/`prebuild`/`pretest` and writes a `manifest.json` with the installed version, a per-file sha256 and byte size; `npm run assets:pdfjs:check` verifies the copy without a build, and the `nami-pdfjs-assets-guard` in `apps/web/vite.config.ts` catches a direct `vite build` that bypasses the npm scripts. The twelve CSP directives and the desktop "deny permissions by default, only navigate to this app's own origin" policy move into unit-testable `apps/server/src/security/csp.ts` and `apps/desktop/src/window-hardening.mts` with no behaviour change. What it means for maintainers: the first slice of the preview rework is independently verifiable, and missing pdf.js assets fail the build instead of a runtime preview.
