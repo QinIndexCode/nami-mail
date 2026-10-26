@@ -191,18 +191,36 @@ if ($ShowProgress) {
     $form.FormBorderStyle = 'None'
     $form.TopMost = $true
     $form.ShowInTaskbar = $true
-    $form.Size = New-Object System.Drawing.Size(380, 92)
+    $form.Size = New-Object System.Drawing.Size(420, 132)
     $form.StartPosition = 'CenterScreen'
-    $label = New-Object System.Windows.Forms.Label
-    $label.Dock = 'Fill'
-    $label.TextAlign = 'MiddleCenter'
-    $label.Font = New-Object System.Drawing.Font('Segoe UI', 11)
-    $label.Text = $script:ProgressTexts.wait
-    $form.Controls.Add($label)
+    $form.BackColor = [System.Drawing.Color]::FromArgb(23, 24, 29)
+    $brand = New-Object System.Windows.Forms.Label
+    $brand.Text = 'Nami Mail'
+    $brand.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $brand.ForeColor = [System.Drawing.Color]::FromArgb(157, 161, 176)
+    $brand.Location = New-Object System.Drawing.Point(18, 12)
+    $brand.AutoSize = $true
+    $form.Controls.Add($brand)
+    # Deliberately NOT named $stage — that variable is the helper's own failure
+    # stage tracker, and clobbering it corrupts every Write-InstallFailure record.
+    $stageLabel = New-Object System.Windows.Forms.Label
+    $stageLabel.Text = $script:ProgressTexts.wait
+    $stageLabel.Font = New-Object System.Drawing.Font('Segoe UI', 11.5)
+    $stageLabel.ForeColor = [System.Drawing.Color]::FromArgb(240, 241, 245)
+    $stageLabel.Location = New-Object System.Drawing.Point(18, 44)
+    $stageLabel.Size = New-Object System.Drawing.Size(384, 28)
+    $form.Controls.Add($stageLabel)
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Style = 'Marquee'
+    $bar.MarqueeAnimationSpeed = 28
+    $bar.Location = New-Object System.Drawing.Point(18, 100)
+    $bar.Size = New-Object System.Drawing.Size(384, 5)
+    $form.Controls.Add($bar)
     $form.Show()
     $form.Refresh()
     $script:ProgressForm = $form
-    $script:ProgressLabel = $label
+    $script:ProgressLabel = $stageLabel
+    $script:ProgressBar = $bar
   } catch {}
 }
 function Set-ProgressStage([string]$Key) {
