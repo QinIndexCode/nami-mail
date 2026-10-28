@@ -1,6 +1,7 @@
 import { useRef, useState, type KeyboardEvent } from "react";
-import { applyMarkdownFormat, type MarkdownFormat } from "./composeMarkdown";
+import { applyMarkdownFormat, getMarkdownPlaceholders, type MarkdownFormat } from "./composeMarkdown";
 import type { ComposeViewMode } from "./ComposeMarkdownToolbar";
+import { useI18n } from "./i18n";
 
 export type UseComposeMarkdownOptions = {
   setText: (text: string) => void;
@@ -11,6 +12,7 @@ export function useComposeMarkdown({
   setText,
   initialViewMode,
 }: UseComposeMarkdownOptions) {
+  const { t } = useI18n();
   const [markdownEnabled, setMarkdownEnabled] = useState<boolean>(() => {
     try {
       return localStorage.getItem("nami:compose-markdown-enabled") !== "false";
@@ -35,7 +37,8 @@ export function useComposeMarkdown({
     const textarea = textareaRef.current;
     if (!textarea) return;
     const { selectionStart, selectionEnd, value } = textarea;
-    const result = applyMarkdownFormat(value, selectionStart, selectionEnd, format);
+    const placeholders = getMarkdownPlaceholders(t);
+    const result = applyMarkdownFormat(value, selectionStart, selectionEnd, format, placeholders);
     setText(result.text);
     requestAnimationFrame(() => {
       if (textareaRef.current) {

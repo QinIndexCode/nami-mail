@@ -41,6 +41,34 @@ export function calculateTextStats(text: string): TextStats {
   return { words, characters, readingMinutes };
 }
 
+export type MarkdownPlaceholders = {
+  bold?: string;
+  italic?: string;
+  listItem?: string;
+  quote?: string;
+  code?: string;
+  linkText?: string;
+  tableHeader1?: string;
+  tableHeader2?: string;
+  tableCellA?: string;
+  tableCellB?: string;
+};
+
+export function getMarkdownPlaceholders(t: (key: string) => string): MarkdownPlaceholders {
+  return {
+    bold: t("compose.markdown.placeholder.bold"),
+    italic: t("compose.markdown.placeholder.italic"),
+    listItem: t("compose.markdown.placeholder.listItem"),
+    quote: t("compose.markdown.placeholder.quote"),
+    code: t("compose.markdown.placeholder.code"),
+    linkText: t("compose.markdown.placeholder.linkText"),
+    tableHeader1: t("compose.markdown.placeholder.tableHeader1"),
+    tableHeader2: t("compose.markdown.placeholder.tableHeader2"),
+    tableCellA: t("compose.markdown.placeholder.tableCellA"),
+    tableCellB: t("compose.markdown.placeholder.tableCellB"),
+  };
+}
+
 /**
  * Pure function to apply Markdown syntax around current selection or cursor position.
  */
@@ -49,6 +77,7 @@ export function applyMarkdownFormat(
   selectionStart: number,
   selectionEnd: number,
   format: MarkdownFormat,
+  placeholders?: MarkdownPlaceholders,
 ): { text: string; newSelectionStart: number; newSelectionEnd: number } {
   const selectedText = value.slice(selectionStart, selectionEnd);
   const before = value.slice(0, selectionStart);
@@ -56,7 +85,7 @@ export function applyMarkdownFormat(
 
   switch (format) {
     case "bold": {
-      const placeholder = selectedText || "粗体文本";
+      const placeholder = selectedText || placeholders?.bold || "粗体文本";
       const replacement = `**${placeholder}**`;
       return {
         text: before + replacement + after,
@@ -65,7 +94,7 @@ export function applyMarkdownFormat(
       };
     }
     case "italic": {
-      const placeholder = selectedText || "斜体文本";
+      const placeholder = selectedText || placeholders?.italic || "斜体文本";
       const replacement = `*${placeholder}*`;
       return {
         text: before + replacement + after,
@@ -88,7 +117,7 @@ export function applyMarkdownFormat(
       };
     }
     case "bulletList": {
-      const placeholder = selectedText || "列表项";
+      const placeholder = selectedText || placeholders?.listItem || "列表项";
       const lines = placeholder.split(/\r?\n/);
       const listContent = lines.map((l) => (l.startsWith("- ") ? l : `- ${l}`)).join("\n");
       const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
@@ -100,7 +129,7 @@ export function applyMarkdownFormat(
       };
     }
     case "numberedList": {
-      const placeholder = selectedText || "列表项";
+      const placeholder = selectedText || placeholders?.listItem || "列表项";
       const lines = placeholder.split(/\r?\n/);
       const listContent = lines.map((l, i) => (/^\d+\.\s/.test(l) ? l : `${i + 1}. ${l}`)).join("\n");
       const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
@@ -112,7 +141,7 @@ export function applyMarkdownFormat(
       };
     }
     case "quote": {
-      const placeholder = selectedText || "引用文本";
+      const placeholder = selectedText || placeholders?.quote || "引用文本";
       const lines = placeholder.split(/\r?\n/);
       const quoteContent = lines.map((l) => (l.startsWith("> ") ? l : `> ${l}`)).join("\n");
       const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
@@ -127,15 +156,15 @@ export function applyMarkdownFormat(
       if (selectedText.includes("\n")) {
         // Multi-line code block
         const prefix = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
-        const replacement = `${prefix}\`\`\`\n${selectedText}\n\`\`\`\n`;
+        const replacement = prefix + "```\n" + selectedText + "\n```\n";
         return {
           text: before + replacement + after,
           newSelectionStart: before.length + replacement.length,
           newSelectionEnd: before.length + replacement.length,
         };
       }
-      const placeholder = selectedText || "code";
-      const replacement = `\`${placeholder}\``;
+      const placeholder = selectedText || placeholders?.code || "code";
+      const replacement = "`" + placeholder + "`";
       return {
         text: before + replacement + after,
         newSelectionStart: selectedText ? selectionStart : selectionStart + 1,
@@ -143,7 +172,7 @@ export function applyMarkdownFormat(
       };
     }
     case "link": {
-      const textPart = selectedText || "链接文字";
+      const textPart = selectedText || placeholders?.linkText || "链接文字";
       const replacement = `[${textPart}](https://)`;
       const urlStart = before.length + textPart.length + 3;
       return {
@@ -162,8 +191,12 @@ export function applyMarkdownFormat(
       };
     }
     case "table": {
+      const h1 = placeholders?.tableHeader1 || "列 1";
+      const h2 = placeholders?.tableHeader2 || "列 2";
+      const cA = placeholders?.tableCellA || "内容 A";
+      const cB = placeholders?.tableCellB || "内容 B";
       const prefix = before.length > 0 && !before.endsWith("\n") ? "\n\n" : "";
-      const replacement = `${prefix}| 列 1 | 列 2 |\n| --- | --- |\n| 内容 A | 内容 B |\n\n`;
+      const replacement = `${prefix}| ${h1} | ${h2} |\n| --- | --- |\n| ${cA} | ${cB} |\n\n`;
       return {
         text: before + replacement + after,
         newSelectionStart: before.length + replacement.length,

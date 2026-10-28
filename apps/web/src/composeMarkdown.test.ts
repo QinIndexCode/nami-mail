@@ -111,6 +111,40 @@ describe("composeMarkdown", () => {
       expect(res.text).toContain("| 列 1 | 列 2 |");
       expect(res.text).toContain("| 内容 A | 内容 B |");
     });
+
+    it("uses localized placeholders when provided", () => {
+      const englishPlaceholders = {
+        bold: "bold text",
+        italic: "italic text",
+        listItem: "list item",
+        quote: "quote text",
+        code: "code",
+        linkText: "link text",
+        tableHeader1: "Column 1",
+        tableHeader2: "Column 2",
+        tableCellA: "Content A",
+        tableCellB: "Content B",
+      };
+
+      const boldRes = applyMarkdownFormat("", 0, 0, "bold", englishPlaceholders);
+      expect(boldRes.text).toBe("**bold text**");
+
+      const italicRes = applyMarkdownFormat("", 0, 0, "italic", englishPlaceholders);
+      expect(italicRes.text).toBe("*italic text*");
+
+      const listRes = applyMarkdownFormat("", 0, 0, "bulletList", englishPlaceholders);
+      expect(listRes.text).toBe("- list item");
+
+      const quoteRes = applyMarkdownFormat("", 0, 0, "quote", englishPlaceholders);
+      expect(quoteRes.text).toBe("> quote text");
+
+      const linkRes = applyMarkdownFormat("", 0, 0, "link", englishPlaceholders);
+      expect(linkRes.text).toBe("[link text](https://)");
+
+      const tableRes = applyMarkdownFormat("", 0, 0, "table", englishPlaceholders);
+      expect(tableRes.text).toContain("| Column 1 | Column 2 |");
+      expect(tableRes.text).toContain("| Content A | Content B |");
+    });
   });
 
   describe("markdownToEmailHtml", () => {

@@ -67,6 +67,7 @@ function agentFailure(reply: { code: (statusCode: number) => { send: (body: unkn
 const polishBodySchema = z.object({
   text: z.string().trim().min(1).max(MAX_POLISH_TEXT_LENGTH, "正文过长，无法润色。"),
   locale: z.string().trim().min(2).max(32).optional(),
+  markdown: z.boolean().optional(),
 }).strict();
 
 export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps): void {
@@ -220,6 +221,7 @@ export function registerAgentRoutes(app: FastifyInstance, deps: AgentRouteDeps):
       const result = await agentService.polishDraft({
         text: parsed.data.text,
         ...(parsed.data.locale ? { locale: parsed.data.locale } : {}),
+        ...(parsed.data.markdown !== undefined ? { markdown: parsed.data.markdown } : {}),
       }, { signal: controller.signal });
       return { ok: true as const, text: result.text };
     } catch (error) {

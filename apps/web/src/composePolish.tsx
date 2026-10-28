@@ -32,12 +32,12 @@ export type PolishBlockReason = "no-model" | "too-large" | "empty" | null;
  * call is bounded and fails with the same `ApiError` shape as every other
  * endpoint.
  */
-async function polishDraft(text: string, locale?: string): Promise<string> {
+async function polishDraft(text: string, locale?: string, markdown?: boolean): Promise<string> {
   const bounded = boundedRequest(POLISH_TIMEOUT_MS);
   try {
     const response = await requestResponse("/api/agent/polish", {
       method: "POST",
-      body: JSON.stringify({ text, ...(locale ? { locale } : {}) }),
+      body: JSON.stringify({ text, ...(locale ? { locale } : {}), ...(markdown !== undefined ? { markdown } : {}) }),
       signal: bounded.signal,
     });
     if (!response.ok) throw await apiError(response);
@@ -150,8 +150,9 @@ export function useComposePolish(input: {
   applyText: (next: string) => void;
   notify: (message: string, kind?: ToastKind) => void;
   t: Translate;
+  markdownEnabled?: boolean;
 }): ComposePolish {
-  const { text, applyText, notify, t } = input;
+  const { text, applyText, notify, t, markdownEnabled } = input;
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null);
   const [polishing, setPolishing] = useState(false);
   const [undoText, setUndoText] = useState<string | null>(null);
@@ -178,7 +179,7 @@ export function useComposePolish(input: {
     const previous = text;
     setPolishing(true);
     setUndoText(null);
-    void polishDraft(text, document.documentElement.lang || undefined)
+    void polishDraft(text, document.documentElement.lang || undefined, markdownEnabled)
       .then((polished) => {
         applyText(polished);
         setUndoText(previous);
@@ -197,7 +198,7 @@ export function useComposePolish(input: {
         notify(polishErrorMessage(reason, t), "error");
       })
       .finally(() => setPolishing(false));
-  }, [applyText, blocked, notify, polishing, t, text]);
+  }, [applyText, blocked, markdownEnabled, notify, polishing, t, text]);
 
   const undo = useCallback(() => {
     if (undoText === null) return;

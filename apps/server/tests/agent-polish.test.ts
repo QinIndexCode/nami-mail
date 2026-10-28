@@ -242,6 +242,52 @@ describe("POST /api/agent/polish", () => {
     });
   });
 
+  it("includes markdown preservation directive in prompt when markdown is true", async () => {
+    const internals = await start();
+    addDefaultProvider(service);
+    const requests: RuntimeChatRequest[] = [];
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
+      requests.push(request);
+      yield { type: "text_delta", delta: "# Polished heading\n\n- item 1" };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/polish",
+      payload: { text: "# Heading\n\n- item 1", markdown: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, text: "# Polished heading\n\n- item 1" });
+    const userTurn = requests[0]?.chat.messages[1]?.content ?? "";
+    expect(userTurn).toContain("The user is composing this email in Markdown mode");
+    expect(userTurn).toContain("Strictly preserve all Markdown elements");
+  });
+
+  it("includes plain text directive in prompt when markdown is false", async () => {
+    const internals = await start();
+    addDefaultProvider(service);
+    const requests: RuntimeChatRequest[] = [];
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* (request) {
+      requests.push(request);
+      yield { type: "text_delta", delta: "Plain polished text." };
+      yield { type: "completed", reason: "stop" };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/polish",
+      payload: { text: "Plain text.", markdown: false },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, text: "Plain polished text." });
+    const userTurn = requests[0]?.chat.messages[1]?.content ?? "";
+    expect(userTurn).toContain("The user is composing this email in plain text mode");
+    expect(userTurn).toContain("Strictly output clean plain text without introducing any Markdown syntax");
+  });
+
   it("keeps the polish cap at the same order as the translation cap", () => {
     // Two different features looking at the same bytes; if one cap shrinks the
     // other has to move with it, and this is the test that says so.

@@ -427,7 +427,7 @@ describe("compose body polish", () => {
     await flush();
 
     expect(h.fetch).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(String(h.fetch.mock.calls[0]?.[1]?.body))).toEqual({ text: ORIGINAL, locale: "zh-CN" });
+    expect(JSON.parse(String(h.fetch.mock.calls[0]?.[1]?.body))).toEqual({ text: ORIGINAL, locale: "zh-CN", markdown: true });
     expect(bodyInput().disabled).toBe(true);
     expect(bodyInput().className).toContain("is-polishing");
     expect(bodyInput().getAttribute("aria-busy")).toBe("true");

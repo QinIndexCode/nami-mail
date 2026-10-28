@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ComposeModal } from "./ComposeModal";
 import { I18nProvider } from "./i18n";
+import { localePreferenceStorageKey } from "./localePreference";
 import { api } from "./api";
 import type { Account, OutboundSubmission } from "./types";
 
@@ -27,6 +28,16 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, String(value)),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    },
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -174,5 +185,37 @@ describe("ComposeModal markdown and html features", () => {
     expect(callArgs.text).toBe("Hello **world**");
     expect(callArgs.html).toContain("<strong>world</strong>");
     expect(callArgs.html).toContain("font-family: -apple-system");
+  });
+
+  it("inserts localized English placeholder when formatting without selection in English", () => {
+    localStorage.setItem(localePreferenceStorageKey, "en-US");
+
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <ComposeModal
+            accounts={[account]}
+            draft={{ to: "target@example.com", subject: "Placeholder Test", text: "" }}
+            onClose={() => {}}
+            onSent={() => {}}
+            onDraftSaved={() => undefined}
+            onDraftDiscarded={() => undefined}
+            onSubmissionChanged={() => undefined}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("#compose-body")!;
+    textarea.focus();
+
+    const boldBtn = container.querySelector<HTMLButtonElement>("button[aria-label='Bold (Ctrl+B)']");
+    expect(boldBtn).toBeTruthy();
+    act(() => {
+      boldBtn?.click();
+    });
+
+    expect(textarea.value).toBe("**bold text**");
+    localStorage.removeItem("nami-mail.locale");
   });
 });

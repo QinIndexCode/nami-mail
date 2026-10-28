@@ -54,7 +54,6 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [error, setError] = useState("");
   const [deliveryNotice, setDeliveryNotice] = useState("");
   const [sendAtLocal, setSendAtLocal] = useState("");
-  const polish = useComposePolish({ text, applyText: setText, notify: onSent, t });
   const toRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-contact-suggestions", onApplyRecipient: setTo });
   const ccRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-cc-contact-suggestions", onApplyRecipient: setCc });
   const {
@@ -66,6 +65,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     handleFormat,
     handleBodyKeyDown,
   } = useComposeMarkdown({ setText, initialViewMode });
+  const polish = useComposePolish({ text, applyText: setText, notify: onSent, t, markdownEnabled });
 
 
   const [ccOpen, setCcOpen] = useState(() => Boolean(draft.cc?.trim()));
