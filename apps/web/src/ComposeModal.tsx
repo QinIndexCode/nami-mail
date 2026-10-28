@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { BookUser, CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { BookUser, CalendarClock, FilePenLine, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -9,7 +9,6 @@ import { pollSubmittingSubmission, submissionInFlight } from "./sendingStatus";
 import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
 import { useDialogFocus } from "./hooks/useDialogFocus";
-import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useI18n } from "./i18n";
 import { ComposePolishControls, useComposePolish } from "./composePolish";
@@ -17,6 +16,12 @@ import { useRecipientSuggestions } from "./useRecipientSuggestions";
 import type { Account, MailTemplate, OutboundAttachment } from "./types";
 import { AttachmentFileIcon, formatFileSize, datetimeLocalFromDate, isoFromDatetimeLocal, IconButton, type ComposeDraft, type PendingAttachmentUpload, type ToastKind } from "./mailUi";
 import { durableGet, durableSet } from "./durablePreferences";
+import ComposeMarkdownToolbar, { type ComposeViewMode } from "./ComposeMarkdownToolbar";
+import ComposeMarkdownPreview from "./ComposeMarkdownPreview";
+import ComposeWordCounter from "./ComposeWordCounter";
+import { markdownToEmailHtml } from "./composeMarkdown";
+import { useComposeMarkdown } from "./useComposeMarkdown";
+import ComposeTemplatePicker from "./ComposeTemplatePicker";
 export const COMPOSE_MAXIMIZED_STORAGE_KEY = "nami-mail.compose-maximized";
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
@@ -28,7 +33,7 @@ function createLocalId(prefix: string): string {
 }
 const createSubmissionIdempotencyKey = (): string => createLocalId("sub");
 
-export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
+export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef, initialViewMode, initialIsMaximized }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null>; initialViewMode?: ComposeViewMode; initialIsMaximized?: boolean }) {
   const { t } = useI18n();
   const signatureForAccount = (accountId: string): string =>
     accounts.find((account) => account.id === accountId)?.signature ?? "";
@@ -42,7 +47,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [attachments, setAttachments] = useState<OutboundAttachment[]>(draft.attachments ?? []);
   const [pendingUploads, setPendingUploads] = useState<PendingAttachmentUpload[]>([]);
   const [recentAttachmentTokens, setRecentAttachmentTokens] = useState<Set<string>>(() => new Set());
-  const [isMaximized, setIsMaximized] = useState(() => durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY) === "true");
+  const [isMaximized, setIsMaximized] = useState(() => initialIsMaximized ?? (durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY) === "true"));
   const [busy, setBusy] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"discard" | "delete" | null>(null);
@@ -52,13 +57,17 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const polish = useComposePolish({ text, applyText: setText, notify: onSent, t });
   const toRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-contact-suggestions", onApplyRecipient: setTo });
   const ccRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-cc-contact-suggestions", onApplyRecipient: setCc });
+  const {
+    markdownEnabled,
+    viewMode,
+    setViewMode,
+    textareaRef,
+    handleToggleMarkdown,
+    handleFormat,
+    handleBodyKeyDown,
+  } = useComposeMarkdown({ setText, initialViewMode });
 
 
-  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
-  const { mounted: templatePickerMounted, closing: templatePickerClosing, beginClose: beginTemplatePickerClose } = usePopupExitTransition(templatePickerOpen, () => setTemplatePickerOpen(false));
-  const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
-  const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
-  const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
   const [ccOpen, setCcOpen] = useState(() => Boolean(draft.cc?.trim()));
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -80,41 +89,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
 
   const recipients = () => to.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
   const copiedRecipients = () => cc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
-  // Template quick-reply: templates are a local encrypted store, so the
-  // picker loads only on first open and never sends template text anywhere.
-  const templateLoadInFlightRef = useRef(false);
-  const loadComposeTemplates = async () => {
-    // Toggling the picker and the retry button can both fire while the first
-    // request is still running; the store is local and the result idempotent, so
-    // the only thing worth preventing is the duplicate request.
-    if (isDemo || composeTemplates || templateLoadInFlightRef.current) return;
-    templateLoadInFlightRef.current = true;
-    setTemplateLoadBusy(true);
-    setTemplateLoadFailed(false);
-    try {
-      const result = await api.templates();
-      setComposeTemplates(result.items);
-    } catch {
-      setTemplateLoadFailed(true);
-    } finally {
-      templateLoadInFlightRef.current = false;
-      setTemplateLoadBusy(false);
-    }
-  };
-  const toggleTemplatePicker = () => {
-    if (busy || discarding) return;
-    if (templatePickerOpen) {
-      beginTemplatePickerClose();
-      return;
-    }
-    setTemplatePickerOpen(true);
-    void loadComposeTemplates();
-  };
   const applyTemplate = (template: MailTemplate) => {
     const applied = applyTemplateToDraft({ subject, body: text }, template);
     setSubject(applied.subject);
     setText(applied.body);
-    beginTemplatePickerClose();
     onSent(t("compose.templates.inserted"));
   };
   const initialDraft = initialDraftRef.current;
@@ -418,12 +396,14 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     setDeliveryNotice("");
     try {
       if (!isDemo) {
+        const sendHtml = markdownEnabled && text.trim() ? markdownToEmailHtml(text) : undefined;
         const sendRequest = {
           accountId,
           to: recipientValues,
           cc: ccValues.length ? ccValues : undefined,
           subject,
           text,
+          html: sendHtml,
           inReplyTo: draft.inReplyTo,
           references: draft.references,
           discardDraftId: draft.sourceDraftId,
@@ -624,8 +604,44 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             )}
           </div>
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
-          <textarea id="compose-body" className={`compose-body${polish.polishing ? " is-polishing" : ""}`} value={text} onChange={(event) => setText(event.target.value)} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding || polish.polishing} aria-busy={polish.polishing || undefined} />
+          <div className="compose-editor-container">
+            <ComposeMarkdownToolbar
+              onFormat={handleFormat}
+              markdownEnabled={markdownEnabled}
+              onToggleMarkdown={handleToggleMarkdown}
+              viewMode={viewMode}
+              onChangeViewMode={setViewMode}
+              isMaximized={isMaximized}
+              disabled={busy || discarding || polish.polishing}
+            />
+            <div className={`compose-editor-main${viewMode === "split" && isMaximized ? " is-split" : ""}`}>
+              {viewMode !== "preview" && (
+                <>
+                  <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
+                  <textarea
+                    ref={textareaRef}
+                    id="compose-body"
+                    className={`compose-body${polish.polishing ? " is-polishing" : ""}${viewMode === "split" ? " in-split" : ""}`}
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    onKeyDown={handleBodyKeyDown}
+                    placeholder={t("compose.bodyPlaceholder")}
+                    disabled={busy || discarding || polish.polishing}
+                    aria-busy={polish.polishing || undefined}
+                  />
+                </>
+              )}
+              {(viewMode === "preview" || (viewMode === "split" && isMaximized)) && (
+                <ComposeMarkdownPreview
+                  content={text}
+                  className={viewMode === "split" ? "in-split" : ""}
+                />
+              )}
+            </div>
+            <div className="compose-editor-meta">
+              <ComposeWordCounter text={text} />
+            </div>
+          </div>
           <section className="compose-attachments" aria-label={t("compose.attachment.aria", { count: attachmentSummary.attachedCount, status: attachmentStatus })}>
             <div className="compose-attachments-heading"><span><Paperclip size={16} />{t("compose.attachments")}</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10{t("common.dotSeparator")}{formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? `${t("common.dotSeparator")}${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? t("compose.attachment.uploading") : t("compose.attachment.add")}</button></div>
             <input ref={fileInputRef} className="visually-hidden" type="file" tabIndex={-1} multiple onChange={(event) => void addFiles(event)} />
@@ -647,38 +663,11 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             <div className="compose-footer-tools">
               <ComposePolishControls polish={polish} t={t} />
               <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FilePenLine size={17} />}{t("compose.saveDraft")}</button>
-              <div className="compose-template-wrap">
-                <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker} aria-expanded={templatePickerOpen} aria-controls={templatePickerOpen ? "compose-template-picker" : undefined} aria-haspopup="listbox"><LayoutTemplate size={15} />{t("compose.templates")}</button>
-                {templatePickerMounted && (
-                  <div className={`compose-template-picker${templatePickerClosing ? " closing" : ""}`} id="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
-                    {isDemo ? (
-                      <p className="compose-template-empty" role="status">{t("compose.templates.demoUnavailable")}</p>
-                    ) : templateLoadBusy ? (
-                      <p className="compose-template-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
-                    ) : templateLoadFailed ? (
-                      <div className="compose-template-empty" role="alert">
-                        <span>{t("compose.templates.loadFailed")}</span>
-                        <button className="secondary-button" type="button" onClick={() => void loadComposeTemplates()}>
-                          <RefreshCw size={14} aria-hidden="true" />{t("common.retry")}
-                        </button>
-                      </div>
-                    ) : composeTemplates && composeTemplates.length === 0 ? (
-                      <p className="compose-template-empty" role="status">{t("compose.templates.empty")}</p>
-                    ) : (
-                      <ul className="compose-template-list">
-                        {composeTemplates?.map((template, index) => (
-                          <li key={template.id}>
-                            <button type="button" role="option" id={`compose-template-option-${index}`} onClick={() => applyTemplate(template)}>
-                              <span>{template.name}</span>
-                              {template.subject && <small>{template.subject}</small>}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
+              <ComposeTemplatePicker
+                disabled={busy || discarding}
+                isDemo={isDemo}
+                onApplyTemplate={applyTemplate}
+              />
             </div>
             <div className="compose-footer-send-group">
               {sendAtLocal ? (
