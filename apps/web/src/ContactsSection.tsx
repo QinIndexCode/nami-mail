@@ -1,4 +1,4 @@
-import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
+import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Mail, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
@@ -18,6 +18,7 @@ export type ContactsSectionProps = {
   /** Test seam: preloaded contacts skip the API load. */
   initialContacts?: Contact[];
   onOverlayOpenChange?: (open: boolean) => void;
+  onComposeTo?: (contact: Contact) => void;
 };
 
 type ContactDraft = {
@@ -62,7 +63,7 @@ function emptyDraft(): ContactDraft {
   return { email: "", name: "", notes: "", autoCollected: false, avatarDataUrl: null };
 }
 
-export default function ContactsSection({ demoMode = false, initialContacts, onOverlayOpenChange }: ContactsSectionProps) {
+export default function ContactsSection({ demoMode = false, initialContacts, onOverlayOpenChange, onComposeTo }: ContactsSectionProps) {
   const { t } = useI18n();
   const [contacts, setContacts] = useState<Contact[]>(initialContacts ?? []);
   const [query, setQuery] = useState("");
@@ -477,6 +478,11 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                                 : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
                             </div>
                             <div className="contact-actions">
+                              {onComposeTo && (
+                                <button className="icon-button" type="button" aria-label={t("settings.contacts.sendMail")} data-tooltip={t("settings.contacts.sendMail")} disabled={Boolean(busyContactId)} onClick={() => onComposeTo(contact)}>
+                                  <Mail size={15} />
+                                </button>
+                              )}
                               <button className="icon-button" type="button" aria-label={t("settings.contacts.edit")} data-tooltip={t("settings.contacts.edit")} disabled={Boolean(busyContactId)} onClick={() => startEdit(contact)}>
                                 <Pencil size={15} />
                               </button>

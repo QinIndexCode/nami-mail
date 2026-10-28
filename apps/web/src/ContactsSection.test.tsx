@@ -27,10 +27,10 @@ const contacts: Contact[] = [
   },
 ];
 
-function renderSection(options: { demoMode?: boolean; initialContacts?: Contact[] } = {}): string {
+function renderSection(options: { demoMode?: boolean; initialContacts?: Contact[]; onComposeTo?: (contact: Contact) => void } = {}): string {
   return renderToStaticMarkup(
     <I18nProvider>
-      <ContactsSection demoMode={options.demoMode} initialContacts={options.initialContacts} />
+      <ContactsSection demoMode={options.demoMode} initialContacts={options.initialContacts} onComposeTo={options.onComposeTo} />
     </I18nProvider>,
   );
 }
@@ -57,6 +57,11 @@ describe("contacts section", () => {
     expect(markup).toContain("bob@example.com");
     expect(markup).toContain(zh("settings.contacts.edit"));
     expect(markup).toContain(zh("settings.contacts.delete"));
+  });
+
+  it("renders a compose mail button for each contact when onComposeTo is provided", () => {
+    const markup = renderSection({ initialContacts: contacts, onComposeTo: () => undefined });
+    expect(markup).toContain(zh("settings.contacts.sendMail"));
   });
 
   it("shows the search / pagination toolbar and only the first page of rows once there are more contacts than one page holds", () => {

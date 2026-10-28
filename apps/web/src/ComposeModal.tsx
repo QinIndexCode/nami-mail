@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { BookUser, CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -13,7 +13,8 @@ import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useI18n } from "./i18n";
 import { ComposePolishControls, useComposePolish } from "./composePolish";
-import type { Account, Contact, MailTemplate, OutboundAttachment } from "./types";
+import { useRecipientSuggestions } from "./useRecipientSuggestions";
+import type { Account, MailTemplate, OutboundAttachment } from "./types";
 import { AttachmentFileIcon, formatFileSize, datetimeLocalFromDate, isoFromDatetimeLocal, IconButton, type ComposeDraft, type PendingAttachmentUpload, type ToastKind } from "./mailUi";
 import { durableGet, durableSet } from "./durablePreferences";
 export const COMPOSE_MAXIMIZED_STORAGE_KEY = "nami-mail.compose-maximized";
@@ -49,10 +50,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [deliveryNotice, setDeliveryNotice] = useState("");
   const [sendAtLocal, setSendAtLocal] = useState("");
   const polish = useComposePolish({ text, applyText: setText, notify: onSent, t });
-  const [toSuggestions, setToSuggestions] = useState<Contact[]>([]);
-  const [toSuggestionsOpen, setToSuggestionsOpen] = useState(false);
-  const { mounted: toSuggestionsMounted, closing: toSuggestionsClosing, beginClose: beginToSuggestionsClose } = usePopupExitTransition(toSuggestionsOpen, () => setToSuggestionsOpen(false));
-  const [toSuggestionIndex, setToSuggestionIndex] = useState(0);
+  const toRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-contact-suggestions", onApplyRecipient: setTo });
+  const ccRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-cc-contact-suggestions", onApplyRecipient: setCc });
+
+
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const { mounted: templatePickerMounted, closing: templatePickerClosing, beginClose: beginTemplatePickerClose } = usePopupExitTransition(templatePickerOpen, () => setTemplatePickerOpen(false));
   const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
@@ -67,7 +68,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const discardConfirmDialogRef = useRef<HTMLElement>(null);
   const submissionAttemptRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const uploadInFlightRef = useRef(false);
-  const toSearchRef = useRef(0);
+
   const initialDraftRef = useRef({
     accountId: initialAccountId,
     to: draft.to ?? "",
@@ -79,43 +80,6 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
 
   const recipients = () => to.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
   const copiedRecipients = () => cc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
-  // Debounced address-book lookup for recipient autocomplete. The lookup is a
-  // local encrypted store, so suggestions never leave the machine.
-  const searchContacts = (value: string) => {
-    const requestId = ++toSearchRef.current;
-    // The field can already hold complete addresses separated by commas,
-    // semicolons, or whitespace; only the trailing token is the live query.
-    const needle = value.split(/[,;\s]+/).pop() ?? "";
-    if (isDemo || !needle) {
-      setToSuggestions([]);
-      setToSuggestionsOpen(false);
-      return;
-    }
-    window.setTimeout(() => {
-      if (toSearchRef.current !== requestId) return;
-      void api.contacts(needle, 8).then((result) => {
-        if (toSearchRef.current !== requestId) return;
-        setToSuggestions(result.items);
-        setToSuggestionsOpen(result.items.length > 0);
-      }).catch(() => {
-        if (toSearchRef.current !== requestId) return;
-        setToSuggestions([]);
-        setToSuggestionsOpen(false);
-      });
-    }, 180);
-  };
-  const applyRecipientSuggestion = (contact: Contact) => {
-    // recipients() accepts commas, semicolons, and whitespace as separators,
-    // so replace only the trailing token and keep its preceding separator.
-    const match = to.match(/([\s,;]+)([^\s,;]*)$/);
-    setTo(match ? `${to.slice(0, to.length - match[0].length)}${match[1]}${contact.email}` : contact.email);
-    setToSuggestions([]);
-    setToSuggestionsOpen(false);
-    toSearchRef.current += 1;
-  };
-  // The highlighted suggestion drives aria-activedescendant; it clamps as the
-  // matched list can shrink while the menu stays open.
-  const suggestedIndex = toSuggestions.length > 0 ? Math.min(toSuggestionIndex, toSuggestions.length - 1) : 0;
   // Template quick-reply: templates are a local encrypted store, so the
   // picker loads only on first open and never sends template text anywhere.
   const templateLoadInFlightRef = useRef(false);
@@ -245,9 +209,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
-  useEffect(() => {
-    if (!toSuggestionsOpen) setToSuggestionIndex(0);
-  }, [toSuggestionsOpen]);
+
+
   useEffect(() => {
     durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, isMaximized ? "true" : "false");
   }, [isMaximized]);
@@ -624,22 +587,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           <div className="compose-row compose-to-row">
             <label htmlFor="compose-to"><span>{t("compose.to")}</span>
               <div className="compose-to-input-wrap">
-                <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => {
-                  if (event.key === "Escape") { beginToSuggestionsClose(); return; }
-                  if ((event.key === "ArrowDown" || event.key === "ArrowUp")) {
-                    if (!toSuggestionsOpen || toSuggestions.length === 0) return;
-                    event.preventDefault();
-                    const delta = event.key === "ArrowDown" ? 1 : -1;
-                    setToSuggestionIndex((index) => (index + delta + toSuggestions.length) % toSuggestions.length);
-                    return;
-                  }
-                  // While the suggestions are open, Enter applies the highlighted
-                  // contact instead of submitting the compose form.
-                  if (event.key === "Enter" && toSuggestionsOpen && toSuggestions.length > 0) {
-                    const active = toSuggestions[suggestedIndex];
-                    if (active) { event.preventDefault(); applyRecipientSuggestion(active); }
-                  }
-                }} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toSuggestionsOpen} aria-controls={toSuggestionsOpen ? "compose-contact-suggestions" : undefined} aria-activedescendant={toSuggestionsOpen && toSuggestions.length > 0 ? `compose-contact-suggestion-${suggestedIndex}` : undefined} />
+                <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); toRecipients.search(event.target.value); }} onKeyDown={(event) => toRecipients.onKeyDown(event, to)} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toRecipients.open} aria-controls={toRecipients.open ? "compose-contact-suggestions" : undefined} aria-activedescendant={toRecipients.activeDescendantId} />
+                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => toRecipients.toggle(to)} disabled={busy || discarding}><BookUser size={14} /></button>
                 {!ccOpen && !cc.trim() && (
                   <button type="button" className="compose-cc-toggle" onClick={() => setCcOpen(true)} disabled={busy || discarding}>
                     {t("compose.cc")}
@@ -647,10 +596,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
                 )}
               </div>
             </label>
-            {toSuggestionsMounted && (
-              <div className={`compose-contact-suggestions${toSuggestionsClosing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
-                {toSuggestions.map((contact, index) => (
-                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => applyRecipientSuggestion(contact)}>
+            {toRecipients.mounted && (
+              <div className={`compose-contact-suggestions${toRecipients.closing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+                {toRecipients.suggestions.map((contact, index) => (
+                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === toRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => toRecipients.applyContact(contact, to)}>
                     <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
                   </button>
                 ))}
@@ -658,7 +607,21 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             )}
           </div>
           <div className={`compose-row compose-cc-row${ccOpen || cc.trim() ? " is-open" : " is-collapsed"}`}>
-            <label htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
+            <label htmlFor="compose-cc"><span>{t("compose.cc")}</span>
+              <div className="compose-to-input-wrap">
+                <input id="compose-cc" type="text" value={cc} onChange={(event) => { setCc(event.target.value); ccRecipients.search(event.target.value); }} onKeyDown={(event) => ccRecipients.onKeyDown(event, cc)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} aria-autocomplete="list" aria-expanded={ccRecipients.open} aria-controls={ccRecipients.open ? "compose-cc-contact-suggestions" : undefined} aria-activedescendant={ccRecipients.activeDescendantId} />
+                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => ccRecipients.toggle(cc)} disabled={busy || discarding}><BookUser size={14} /></button>
+              </div>
+            </label>
+            {ccRecipients.mounted && (
+              <div className={`compose-contact-suggestions${ccRecipients.closing ? " closing" : ""}`} id="compose-cc-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+                {ccRecipients.suggestions.map((contact, index) => (
+                  <button key={contact.id} type="button" role="option" id={`compose-cc-contact-suggestion-${index}`} aria-selected={index === ccRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => ccRecipients.applyContact(contact, cc)}>
+                    <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
           <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
