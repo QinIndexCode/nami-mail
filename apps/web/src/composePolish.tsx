@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { LoaderCircle, PenLine, Undo2 } from "lucide-react";
 import { api } from "./api";
 import { ApiError, apiError, boundedRequest, requestResponse } from "./apiTransport";
-import { mailErrorMessage } from "./errorPresentation";
 import type { Translate } from "./i18n";
 import type { ToastKind } from "./mailUi";
 
@@ -44,8 +43,13 @@ async function polishDraft(text: string, locale?: string): Promise<string> {
     if (!response.ok) throw await apiError(response);
     const body = (await response.json().catch(() => ({}))) as { text?: unknown };
     const polished = typeof body.text === "string" ? body.text.trim() : "";
-    if (!polished) throw new ApiError("The polished text could not be read.", "polish_invalid_response");
+    if (!polished) throw new ApiError("The polished text could not be read.", "polish_invalid_response", 502);
     return polished;
+  } catch (error) {
+    if (bounded.timedOut()) {
+      throw new ApiError("The polish request timed out.", "polish_timeout", 504);
+    }
+    throw error;
   } finally {
     bounded.dispose();
   }
@@ -60,6 +64,49 @@ async function polishDraft(text: string, locale?: string): Promise<string> {
  */
 function isNoModelConfigured(reason: unknown): boolean {
   return reason instanceof ApiError && reason.code === "no_model_configured";
+}
+
+/**
+ * Maps model polish failures to user-facing copy. Provides specific, actionable
+ * guidance for model timeout, unavailability, authentication, rate limits, and
+ * cloud consent instead of generic mail-transport error text.
+ */
+export function polishErrorMessage(reason: unknown, t: Translate): string {
+  const code = reason instanceof ApiError
+    ? reason.code
+    : (reason && typeof reason === "object" && "code" in reason && typeof reason.code === "string" ? reason.code : undefined);
+  const status = reason instanceof ApiError
+    ? reason.status
+    : (reason && typeof reason === "object" && "status" in reason && typeof reason.status === "number" ? reason.status : undefined);
+
+  if (code === "no_model_configured") {
+    return t("compose.polish.needsModel");
+  }
+  if (code === "local_service_unavailable" || code === "local_service_timeout") {
+    return t("translation.error.localServiceUnavailable");
+  }
+  if (code === "polish_timeout" || code === "PROVIDER_TIMEOUT" || status === 504) {
+    return t("compose.polish.error.timeout");
+  }
+  if (code === "PROVIDER_UNAVAILABLE" || code === "HOST_UNAVAILABLE" || code === "TRANSPORT_UNAVAILABLE" || status === 503) {
+    return t("compose.polish.error.serviceUnavailable");
+  }
+  if (code === "PROVIDER_AUTH_FAILED" || status === 401) {
+    return t("compose.polish.error.authFailed");
+  }
+  if (code === "PROVIDER_RATE_LIMITED" || status === 429) {
+    return t("compose.polish.error.rateLimited");
+  }
+  if (code === "CLOUD_CONTENT_CONSENT_REQUIRED") {
+    return t("compose.polish.error.cloudConsent");
+  }
+  if (code === "CONTEXT_TOO_LARGE" || code === "payload_too_large" || status === 413) {
+    return t("compose.polish.error.contextTooLarge");
+  }
+  if (code === "polish_invalid_response") {
+    return t("compose.polish.error.invalidResponse");
+  }
+  return t("compose.polish.failed");
 }
 
 export type ComposePolish = {
@@ -147,7 +194,7 @@ export function useComposePolish(input: {
           notify(t("compose.polish.needsModel"), "error");
           return;
         }
-        notify(mailErrorMessage(reason, t("compose.polish.failed"), t), "error");
+        notify(polishErrorMessage(reason, t), "error");
       })
       .finally(() => setPolishing(false));
   }, [applyText, blocked, notify, polishing, t, text]);

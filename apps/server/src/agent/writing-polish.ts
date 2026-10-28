@@ -145,7 +145,21 @@ export async function polishDraftWithProvider(input: {
     if (outcome.error.code === "NOT_SUPPORTED") {
       throw new AgentServiceError("PROVIDER_ERROR", "This provider does not support chat streaming.", 502, false);
     }
-    throw new AgentServiceError("PROVIDER_ERROR", `Polish failed: ${outcome.error.message}`, 502, true);
+    const errCode = outcome.error.code;
+    const statusCode =
+      errCode === "PROVIDER_TIMEOUT" ? 504
+      : errCode === "PROVIDER_RATE_LIMITED" ? 429
+      : errCode === "PROVIDER_AUTH_FAILED" ? 401
+      : errCode === "PROVIDER_UNAVAILABLE" ? 503
+      : errCode === "CONTEXT_TOO_LARGE" ? 413
+      : 502;
+    throw new AgentServiceError(
+      errCode,
+      outcome.error.message ? `Polish failed: ${outcome.error.message}` : `Polish failed: ${errCode}`,
+      statusCode,
+      outcome.error.retryable ?? true,
+      outcome.error.suggestion,
+    );
   }
   const polished = outcome.text.trim();
   if (!polished) {

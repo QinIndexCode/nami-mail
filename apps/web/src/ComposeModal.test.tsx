@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { ComposeModal } from "./ComposeModal";
+import { ComposeModal, COMPOSE_MAXIMIZED_STORAGE_KEY } from "./ComposeModal";
+import { durableGet, durableSet } from "./durablePreferences";
 import { I18nProvider, translate } from "./i18n";
 import type { ComposeDraft } from "./mailUi";
 import type { Account, OutboundSubmission } from "./types";
@@ -150,6 +151,16 @@ const pressKey = (key: string) => {
 };
 
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, String(value)),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    },
+  });
   h.contacts.mockReset();
   h.templates.mockReset();
   h.agentProviders.mockReset();
@@ -554,5 +565,80 @@ describe("compose send against the durable acceptance", () => {
     expect(onDraftDiscarded).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
     expect(sendButton().disabled).toBe(false);
+  });
+
+  it("persists maximized state on every change and restores with escape", async () => {
+    durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, null);
+    const { onClose } = renderCompose("正文", {
+      accountId: "account-1",
+      to: "alice@example.com",
+    });
+    await flush();
+
+    const card = container.querySelector(".compose-card");
+    const backdrop = container.querySelector(".compose-backdrop");
+    expect(card?.classList.contains("is-maximized")).toBe(false);
+    expect(backdrop?.classList.contains("is-maximized")).toBe(false);
+
+    const maximizeBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${zh("compose.maximize")}"]`);
+    expect(maximizeBtn).toBeTruthy();
+
+    act(() => {
+      maximizeBtn?.click();
+    });
+    await flush();
+
+    expect(card?.classList.contains("is-maximized")).toBe(true);
+    expect(backdrop?.classList.contains("is-maximized")).toBe(true);
+    expect(maximizeBtn?.getAttribute("aria-label")).toBe(zh("compose.restore"));
+    expect(durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY)).toBe("true");
+
+    // Press Escape while maximized: restores window instead of closing modal
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    await flush();
+
+    expect(card?.classList.contains("is-maximized")).toBe(false);
+    expect(backdrop?.classList.contains("is-maximized")).toBe(false);
+    expect(maximizeBtn?.getAttribute("aria-label")).toBe(zh("compose.maximize"));
+    expect(durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY)).toBe("false");
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Click maximize again -> stores true
+    act(() => {
+      maximizeBtn?.click();
+    });
+    await flush();
+    expect(card?.classList.contains("is-maximized")).toBe(true);
+    expect(durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY)).toBe("true");
+
+    // Restore via button click -> stores false
+    act(() => {
+      maximizeBtn?.click();
+    });
+    await flush();
+    expect(card?.classList.contains("is-maximized")).toBe(false);
+    expect(durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY)).toBe("false");
+  });
+
+  it("opens directly in maximized mode when preference was previously stored as true", async () => {
+    durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, "true");
+    renderCompose("正文", {
+      accountId: "account-1",
+      to: "alice@example.com",
+    });
+    await flush();
+
+    const card = container.querySelector(".compose-card");
+    const backdrop = container.querySelector(".compose-backdrop");
+    const restoreBtn = container.querySelector<HTMLButtonElement>(`button[aria-label="${zh("compose.restore")}"]`);
+
+    expect(card?.classList.contains("is-maximized")).toBe(true);
+    expect(backdrop?.classList.contains("is-maximized")).toBe(true);
+    expect(restoreBtn).toBeTruthy();
+    expect(durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY)).toBe("true");
+
+    durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, null);
   });
 });

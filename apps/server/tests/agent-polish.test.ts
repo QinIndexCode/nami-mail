@@ -212,6 +212,36 @@ describe("POST /api/agent/polish", () => {
     });
   });
 
+  it.each([
+    ["PROVIDER_TIMEOUT", 504, "Model call timed out."],
+    ["PROVIDER_UNAVAILABLE", 503, "Model endpoint unavailable."],
+    ["PROVIDER_AUTH_FAILED", 401, "Invalid API key."],
+    ["PROVIDER_RATE_LIMITED", 429, "Rate limit reached."],
+  ] as const)("preserves %s as %i error on the wire", async (code, statusCode, message) => {
+    const internals = await start();
+    addDefaultProvider(service);
+    vi.spyOn(internals.runtime, "streamChat").mockImplementation(async function* () {
+      yield {
+        type: "error",
+        error: { code, message, retryable: true },
+      };
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/agent/polish",
+      payload: { text: "Kindly revert back." },
+    });
+
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      code,
+      message: `Polish failed: ${message}`,
+      retryable: true,
+    });
+  });
+
   it("keeps the polish cap at the same order as the translation cap", () => {
     // Two different features looking at the same bytes; if one cap shrinks the
     // other has to move with it, and this is the test that says so.

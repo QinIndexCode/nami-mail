@@ -189,7 +189,7 @@ describe("encrypted message storage", () => {
 
     expect(() => messagePayloadForRow(row, randomBytes(32))).toThrow();
     const encrypted = String(row.encrypted_payload);
-    const replacement = encrypted.endsWith("A") ? "B" : "A";
+    const replacement = encrypted.endsWith("A") ? "Q" : "A";
     row.encrypted_payload = `${encrypted.slice(0, -1)}${replacement}`;
     expect(() => messagePayloadForRow(row, key)).toThrow();
     db.close();
@@ -330,7 +330,7 @@ describe("encrypted message storage", () => {
 
     const encrypted = String(db.prepare("SELECT encrypted_payload FROM messages WHERE id = 'message-1'")
       .get() as { encrypted_payload: string });
-    const replacement = encrypted.endsWith("A") ? "B" : "A";
+    const replacement = encrypted.endsWith("A") ? "Q" : "A";
     db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = 'message-1'")
       .run(`${encrypted.slice(0, -1)}${replacement}`);
 
@@ -354,7 +354,7 @@ describe("encrypted message storage", () => {
 
     const encrypted = String(db.prepare("SELECT encrypted_payload FROM messages WHERE id = 'message-1'")
       .get() as { encrypted_payload: string });
-    const replacement = encrypted.endsWith("A") ? "B" : "A";
+    const replacement = encrypted.endsWith("A") ? "Q" : "A";
     db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = 'message-1'")
       .run(`${encrypted.slice(0, -1)}${replacement}`);
 
@@ -371,7 +371,7 @@ describe("encrypted message storage", () => {
     migrateMessageStorage(db, key);
     const row = db.prepare("SELECT encrypted_payload FROM messages WHERE id = 'message-1'")
       .get() as { encrypted_payload: string };
-    const replacement = row.encrypted_payload.endsWith("A") ? "B" : "A";
+    const replacement = row.encrypted_payload.endsWith("A") ? "Q" : "A";
     db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = 'message-1'")
       .run(`${row.encrypted_payload.slice(0, -1)}${replacement}`);
     db.prepare("DELETE FROM data_migrations WHERE id = 'message-payload-v1'").run();
@@ -408,7 +408,7 @@ describe("encrypted message storage", () => {
     };
     const tamperLastCharacter = (id: string): void => {
       const row = db.prepare("SELECT encrypted_payload FROM messages WHERE id = ?").get(id) as { encrypted_payload: string };
-      const replacement = row.encrypted_payload.endsWith("A") ? "B" : "A";
+      const replacement = row.encrypted_payload.endsWith("A") ? "Q" : "A";
       db.prepare("UPDATE messages SET encrypted_payload = ? WHERE id = ?")
         .run(`${row.encrypted_payload.slice(0, -1)}${replacement}`, id);
     };

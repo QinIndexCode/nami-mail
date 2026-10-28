@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -15,19 +15,17 @@ import { useI18n } from "./i18n";
 import { ComposePolishControls, useComposePolish } from "./composePolish";
 import type { Account, Contact, MailTemplate, OutboundAttachment } from "./types";
 import { AttachmentFileIcon, formatFileSize, datetimeLocalFromDate, isoFromDatetimeLocal, IconButton, type ComposeDraft, type PendingAttachmentUpload, type ToastKind } from "./mailUi";
+import { durableGet, durableSet } from "./durablePreferences";
+export const COMPOSE_MAXIMIZED_STORAGE_KEY = "nami-mail.compose-maximized";
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 
 function createLocalId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}_${crypto.randomUUID()}`;
-  }
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? `${prefix}_${crypto.randomUUID()}`
+    : `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
 }
-
-function createSubmissionIdempotencyKey(): string {
-  return createLocalId("sub");
-}
+const createSubmissionIdempotencyKey = (): string => createLocalId("sub");
 
 export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
   const { t } = useI18n();
@@ -43,6 +41,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [attachments, setAttachments] = useState<OutboundAttachment[]>(draft.attachments ?? []);
   const [pendingUploads, setPendingUploads] = useState<PendingAttachmentUpload[]>([]);
   const [recentAttachmentTokens, setRecentAttachmentTokens] = useState<Set<string>>(() => new Set());
+  const [isMaximized, setIsMaximized] = useState(() => durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY) === "true");
   const [busy, setBusy] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"discard" | "delete" | null>(null);
@@ -249,20 +248,21 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   useEffect(() => {
     if (!toSuggestionsOpen) setToSuggestionIndex(0);
   }, [toSuggestionsOpen]);
+  useEffect(() => {
+    durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, isMaximized ? "true" : "false");
+  }, [isMaximized]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (confirmAction) {
-        requestConfirmClose();
-        return;
-      }
+      if (confirmAction) { requestConfirmClose(); return; }
+      if (isMaximized) { setIsMaximized(false); return; }
       requestClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [confirmAction, requestClose, requestConfirmClose]);
+  }, [confirmAction, isMaximized, requestClose, requestConfirmClose]);
 
   const chooseFiles = () => fileInputRef.current?.click();
 
@@ -580,14 +580,14 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   };
 
   return (
-    <div className={`modal-backdrop compose-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
+    <div className={`modal-backdrop compose-backdrop${isMaximized ? " is-maximized" : ""}${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
       if (event.target !== event.currentTarget) return;
       if (confirmAction) requestConfirmClose();
       else requestClose();
     }}>
       <section
         ref={composeDialogRef}
-        className={`compose-card${closing ? " closing" : ""}${isDraggingFiles ? " is-dragging-files" : ""}`}
+        className={`compose-card${isMaximized ? " is-maximized" : ""}${closing ? " closing" : ""}${isDraggingFiles ? " is-dragging-files" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="compose-title"
@@ -606,7 +606,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
         )}
         <header className="compose-header">
           <div><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
-          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
+          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={isMaximized ? t("compose.restore") : t("compose.maximize")} onClick={() => setIsMaximized((prev) => !prev)} disabled={busy || uploading || discarding}>{isMaximized ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</IconButton><IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
         </header>
         <form noValidate onSubmit={submit}>
           <label className="compose-row" htmlFor="compose-account"><span>{t("compose.sender")}</span><ThemedSelect id="compose-account" value={accountId} onValueChange={(value) => {
