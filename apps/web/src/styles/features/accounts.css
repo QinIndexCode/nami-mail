@@ -139,11 +139,10 @@ display:flex
 text-overflow:ellipsis;
 white-space:nowrap;
 min-width:0;
-flex:1;
 font-size:12px;
 overflow:hidden
 }
-.accounts-copy-address { width:22px; height:22px; color:var(--text-faint); border-radius:var(--radius-xs); flex:none; padding:0; transition:color .12s,background .12s }
+.accounts-copy-address { width:20px; height:20px; color:var(--text-faint); border-radius:var(--radius-xs); flex:none; padding:0; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; transform:translateY(1px); transition:color .12s,background .12s }
 .accounts-copy-address:hover:not(:disabled) { color:var(--text); background:var(--hover) }
 .accounts-row-copy small
 {
