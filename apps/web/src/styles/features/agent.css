@@ -610,7 +610,7 @@ white-space:nowrap;
 z-index:1;
 background:0 0;
 border:0;
-border-radius:5px;
+border-radius:var(--radius-pill);
 flex:1 1 0;
 justify-content:center;
 align-items:center;

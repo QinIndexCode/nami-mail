@@ -268,7 +268,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 max-height:min(240px,40dvh);
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 flex-direction:column;
 padding:5px;
 display:flex;
@@ -336,7 +336,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 max-height:min(260px,40dvh);
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-md);
 padding:5px;
 position:absolute;
 top:calc(100% + 4px);
@@ -1320,7 +1320,7 @@ display:none
 {
 background:0 0;
 border:none;
-border-radius:var(--radius-xs, 4px);
+border-radius:var(--radius-xs);
 color:var(--text-soft);
 cursor:pointer;
 justify-content:center;
@@ -1360,7 +1360,7 @@ color:var(--text)
 {
 background:color-mix(in srgb, var(--focus-ring) 14%, transparent);
 color:var(--focus-ring);
-border-radius:3px;
+border-radius:var(--radius-xs);
 padding:0 3px;
 font-family:var(--font-mono, monospace);
 font-size:10px;
@@ -1389,13 +1389,13 @@ display:inline-flex
 {
 background:0 0;
 border:none;
-border-radius:3px;
+border-radius:var(--radius-xs);
 color:var(--text-faint);
 cursor:pointer;
 align-items:center;
 gap:4px;
 height:22px;
-padding:0 7px;
+padding:0 8px;
 font-size:11px;
 white-space:nowrap;
 flex-shrink:0;
@@ -1410,7 +1410,7 @@ color:var(--text)
 {
 background:var(--panel);
 color:var(--text);
-box-shadow:0 1px 3px rgba(0,0,0,.08);
+box-shadow:var(--shadow-sm);
 font-weight:600
 }
 .compose-editor-main
@@ -1488,7 +1488,7 @@ margin:0 0 10px
 {
 background:color-mix(in srgb, var(--focus-ring) 6%, transparent);
 border-left:3px solid var(--focus-ring);
-border-radius:0 var(--radius-xs, 4px) var(--radius-xs, 4px) 0;
+border-radius:var(--radius-xs);
 color:var(--text-soft);
 margin:10px 0;
 padding:6px 12px
@@ -1497,7 +1497,7 @@ padding:6px 12px
 {
 background:color-mix(in srgb, var(--focus-ring) 10%, transparent);
 color:var(--focus-ring-text, var(--text));
-border-radius:3px;
+border-radius:var(--radius-xs);
 padding:2px 5px;
 font-family:var(--font-mono, monospace);
 font-size:12px
