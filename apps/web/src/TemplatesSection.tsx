@@ -388,7 +388,10 @@ export default function TemplatesSection({ demoMode = false, initialTemplates, o
                         <div className="template-head">
                           <span className="template-icon" aria-hidden="true"><LayoutTemplate size={16} /></span>
                           <div className="template-copy">
-                            <strong>{template.name}{template.builtin && <em className="template-builtin-badge">{t("settings.templates.builtinBadge")}</em>}</strong>
+                            <div className="template-title-row">
+                              <strong>{template.name}</strong>
+                              {template.builtin && <em className="template-builtin-badge">{t("settings.templates.builtinBadge")}</em>}
+                            </div>
                             {template.subject && <small className="template-subject">{template.subject}</small>}
                             <small className="template-preview">{template.body}</small>
                           </div>

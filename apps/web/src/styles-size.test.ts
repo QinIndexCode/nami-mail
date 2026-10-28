@@ -166,8 +166,8 @@ describe("styles.css size ratchet", () => {
   // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
   // 合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  // 2026-10-28 账户与联系人管理界面样式深度统一与联系人复制邮箱（18_234 → 18_263）：统一搜索条规格、行内边距 (11px 12px)、悬浮与选中色、微型复制按钮与文字截断（实测 18_251 行 + 12 缓冲）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_263;
+  // 2026-10-28 账户、联系人与模板管理界面样式深度统一（18_263 → 18_279）：模板行增加内边距与圆角 (11px 12px / radius-sm)、微调悬浮与选中色、增加标题单行省略与徽标对齐、邮件主题单行省略（实测 18_267 行 + 12 缓冲）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_279;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
