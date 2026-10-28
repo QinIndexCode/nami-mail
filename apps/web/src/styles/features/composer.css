@@ -1378,7 +1378,7 @@ flex-shrink:0
 {
 background:var(--panel-muted);
 border:1px solid var(--line);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-pill);
 align-items:center;
 gap:2px;
 padding:2px;
@@ -1389,7 +1389,7 @@ display:inline-flex
 {
 background:0 0;
 border:none;
-border-radius:var(--radius-xs);
+border-radius:var(--radius-pill);
 color:var(--text-faint);
 cursor:pointer;
 align-items:center;
