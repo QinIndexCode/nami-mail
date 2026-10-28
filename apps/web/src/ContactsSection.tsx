@@ -12,6 +12,7 @@ import type { Contact, ContactInput } from "./types";
 import { getAvatar, setAvatar } from "./avatarStore";
 import { AvatarEditor } from "./AvatarEditor";
 import { FormNotice, type Notice } from "./FormNotice";
+import CopyButton from "./CopyButton";
 
 export type ContactsSectionProps = {
   demoMode?: boolean;
@@ -453,6 +454,17 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                     const selected = selectedIds.has(contact.id);
                     const globalIndex = pageStart + index;
                     const groupStart = showSourceGroups && (globalIndex === 0 || Boolean(orderedAll[globalIndex - 1]?.autoCollected) !== contact.autoCollected);
+                    const copyEmailButton = (
+                      <CopyButton
+                        className="icon-button contact-copy-email"
+                        text={contact.email}
+                        size={12}
+                        ariaLabel={t("settings.contacts.copyEmailAriaLabel", { email: contact.email })}
+                        announcement={t("settings.contacts.emailCopied", { email: contact.email })}
+                        onCopied={() => setNotice(null)}
+                        onFailed={() => setNotice({ kind: "error", message: t("settings.contacts.emailCopyFailed") })}
+                      />
+                    );
                     return (
                       <Fragment key={contact.id}>
                         {groupStart && (
@@ -472,11 +484,17 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                             <div className="contact-copy">
                               <div className="contact-title-row">
                                 <strong>{contact.name || contact.email}</strong>
+                                {!contact.name && copyEmailButton}
                                 {contact.autoCollected
                                   ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
                                   : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
                               </div>
-                              {contact.name && <small>{contact.email}</small>}
+                              {contact.name && (
+                                <div className="contact-email-line">
+                                  <small>{contact.email}</small>
+                                  {copyEmailButton}
+                                </div>
+                              )}
                               {contact.notes && <small className="contact-notes">{contact.notes}</small>}
                             </div>
                             <div className="contact-actions">

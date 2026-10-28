@@ -64,6 +64,13 @@ describe("contacts section", () => {
     expect(markup).toContain(zh("settings.contacts.sendMail"));
   });
 
+  it("renders a copy email button for contacts with and without display names", () => {
+    const markup = renderSection({ initialContacts: contacts });
+    expect(markup).toContain("contact-copy-email");
+    expect(markup).toContain(zh("settings.contacts.copyEmailAriaLabel", { email: "alice@example.com" }));
+    expect(markup).toContain(zh("settings.contacts.copyEmailAriaLabel", { email: "bob@example.com" }));
+  });
+
   it("shows the search / pagination toolbar and only the first page of rows once there are more contacts than one page holds", () => {
     const many: Contact[] = Array.from({ length: 7 }, (_, index) => ({
       id: `contact-${index}`,
