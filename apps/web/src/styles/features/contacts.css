@@ -122,6 +122,13 @@ gap:3px;
 min-width:0;
 display:flex
 }
+.contact-title-row
+{
+align-items:center;
+gap:6px;
+min-width:0;
+display:flex
+}
 .contact-copy strong
 {
 overflow-wrap:anywhere;
@@ -138,25 +145,26 @@ line-height:1.5
 {
 color:var(--text-soft)
 }
+.contact-auto-badge,.contact-manual-badge
+{
+border-radius:var(--radius-pill);
+align-items:center;
+font-size:9px;
+padding:1px 6px;
+flex:none;
+display:inline-flex
+}
 .contact-auto-badge
 {
 border:1px solid color-mix(in srgb, var(--warning) 55%, var(--line));
 color:color-mix(in srgb, var(--warning) 70%, var(--text));
-background:color-mix(in srgb, var(--warning) 8%, transparent);
-border-radius:var(--radius-pill);
-align-self:flex-start;
-padding:2px 8px;
-font-size:9px
+background:color-mix(in srgb, var(--warning) 8%, transparent)
 }
 .contact-manual-badge
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 45%, var(--line));
 color:color-mix(in srgb, var(--focus-ring) 65%, var(--text));
-background:color-mix(in srgb, var(--focus-ring) 6%, transparent);
-border-radius:var(--radius-pill);
-align-self:flex-start;
-padding:2px 8px;
-font-size:9px
+background:color-mix(in srgb, var(--focus-ring) 6%, transparent)
 }
 .contact-group-head
 {

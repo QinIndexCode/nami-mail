@@ -470,12 +470,14 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                         <div className="contact-head">
                             <span className="contact-avatar" aria-hidden="true"><UserRound size={16} /></span>
                             <div className="contact-copy">
-                              <strong>{contact.name || contact.email}</strong>
+                              <div className="contact-title-row">
+                                <strong>{contact.name || contact.email}</strong>
+                                {contact.autoCollected
+                                  ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
+                                  : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
+                              </div>
                               {contact.name && <small>{contact.email}</small>}
                               {contact.notes && <small className="contact-notes">{contact.notes}</small>}
-                              {contact.autoCollected
-                                ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
-                                : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
                             </div>
                             <div className="contact-actions">
                               {onComposeTo && (

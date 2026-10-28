@@ -166,8 +166,8 @@ describe("styles.css size ratchet", () => {
   // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
   // 合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  // 2026-10-28 有记录的一次调整（18_194 → 18_210）：写信窗口沉浸式最大化整页与全量尺寸丝滑插值过渡（实测 18_198 行 + 12 缓冲）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_210;
+  // 2026-10-28 有记录的一次调整（18_210 → 18_234）：联系人标签上移至标题行内、写信收件人地址簿选择图标垂直居中对齐、建议下拉菜单宽度合理收敛（实测 18_222 行 + 12 缓冲）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_234;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
