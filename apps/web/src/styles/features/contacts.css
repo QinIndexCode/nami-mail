@@ -69,18 +69,19 @@ display:flex
 {
 border-bottom:1px solid var(--line);
 align-items:flex-start;
-gap:8px;
-padding:11px 0;
+gap:10px;
+padding:11px 12px;
+border-radius:var(--radius-sm);
 transition:background .12s;
 display:flex
 }
 .contact-row:hover
 {
-background:color-mix(in srgb, var(--focus-ring) 3%, transparent)
+background:color-mix(in srgb, var(--focus-ring) 4%, transparent)
 }
 .contact-row.selected
 {
-background:color-mix(in srgb, var(--focus-ring) 7%, transparent)
+background:color-mix(in srgb, var(--focus-ring) 8%, transparent)
 }
 .contacts-row-check
 {
@@ -122,6 +123,20 @@ gap:3px;
 min-width:0;
 display:flex
 }
+.contact-title-row
+{
+align-items:center;
+gap:6px;
+min-width:0;
+display:flex
+}
+.contact-title-row strong
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+overflow:hidden;
+min-width:0
+}
 .contact-copy strong
 {
 overflow-wrap:anywhere;
@@ -134,29 +149,47 @@ overflow-wrap:anywhere;
 font-size:10px;
 line-height:1.5
 }
+.contact-email-line
+{
+align-items:center;
+gap:4px;
+min-width:0;
+display:flex
+}
+.contact-email-line small
+{
+text-overflow:ellipsis;
+white-space:nowrap;
+overflow:hidden;
+min-width:0
+}
+.contact-copy-email { width:20px; height:20px; color:var(--text-faint); border-radius:var(--radius-xs); flex:none; padding:0; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; transform:translateY(1px); transition:color .12s,background .12s }
+.contact-copy-email:hover:not(:disabled) { color:var(--text); background:var(--hover) }
+.contact-email-line .contact-copy-email { width:18px; height:18px }
 .contact-notes
 {
 color:var(--text-soft)
+}
+.contact-auto-badge,.contact-manual-badge
+{
+border-radius:var(--radius-pill);
+align-items:center;
+font-size:9px;
+padding:1px 6px;
+flex:none;
+display:inline-flex
 }
 .contact-auto-badge
 {
 border:1px solid color-mix(in srgb, var(--warning) 55%, var(--line));
 color:color-mix(in srgb, var(--warning) 70%, var(--text));
-background:color-mix(in srgb, var(--warning) 8%, transparent);
-border-radius:var(--radius-pill);
-align-self:flex-start;
-padding:2px 8px;
-font-size:9px
+background:color-mix(in srgb, var(--warning) 8%, transparent)
 }
 .contact-manual-badge
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 45%, var(--line));
 color:color-mix(in srgb, var(--focus-ring) 65%, var(--text));
-background:color-mix(in srgb, var(--focus-ring) 6%, transparent);
-border-radius:var(--radius-pill);
-align-self:flex-start;
-padding:2px 8px;
-font-size:9px
+background:color-mix(in srgb, var(--focus-ring) 6%, transparent)
 }
 .contact-group-head
 {

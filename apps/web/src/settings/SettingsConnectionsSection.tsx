@@ -11,6 +11,7 @@ import {
   Download,
   Laptop,
   LoaderCircle,
+  Lock,
   RefreshCw,
   Server,
   Shield,
@@ -519,22 +520,32 @@ export default function SettingsConnectionsSection({
             </summary>
             <div className="connections-collapsible-body">
               <div className="connections-tools-grid">
-                {EXPOSED_TOOLS.map((tool) => (
-                  <div key={tool.name} className="connections-tool-card">
-                    <div className="connections-tool-head">
-                      <span className="connections-tool-name">{tool.name}</span>
-                      <span
-                      className={`connections-tool-badge ${tool.type}`}
-                      title={tool.type === "write" && mcpWritesLocked ? t("settings.connections.mcp.writeLocked") : undefined}
-                    >
-                      {tool.type === "read"
-                        ? t("settings.connections.mcp.tagRead")
-                        : `${t("settings.connections.mcp.tagWrite")}${mcpWritesLocked ? ` · ${t("settings.connections.mcp.writeLocked")}` : ""}`}
-                    </span>
+                {EXPOSED_TOOLS.map((tool) => {
+                  const isLocked = tool.type === "write" && mcpWritesLocked;
+                  return (
+                    <div key={tool.name} className="connections-tool-card">
+                      <div className="connections-tool-head">
+                        <span className="connections-tool-name">{tool.name}</span>
+                      </div>
+                      <span className="connections-tool-desc">{t(`settings.connections.mcp.tool.${tool.key}.desc`)}</span>
+                      <div className="connections-tool-footer">
+                        <span
+                          className={`connections-tool-badge ${tool.type}${isLocked ? " locked" : ""}`}
+                          data-tooltip={isLocked ? t("settings.connections.mcp.writeLocked") : undefined}
+                        >
+                          {isLocked ? <Lock size={10} aria-hidden="true" /> : null}
+                          <span>
+                            {tool.type === "read"
+                              ? t("settings.connections.mcp.tagRead")
+                              : isLocked
+                                ? `${t("settings.connections.mcp.tagWrite")} · ${t("settings.connections.mcp.writeLocked")}`
+                                : t("settings.connections.mcp.tagWrite")}
+                          </span>
+                        </span>
+                      </div>
                     </div>
-                    <span className="connections-tool-desc">{t(`settings.connections.mcp.tool.${tool.key}.desc`)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </details>

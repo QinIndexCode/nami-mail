@@ -5,6 +5,7 @@ import TemplatesSection from "./TemplatesSection";
 import { useI18n } from "./i18n";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
+import type { Contact } from "./types";
 
 /**
  * Shared dialog shell for management surfaces that were split out of the
@@ -86,9 +87,10 @@ export type ContactsDialogProps = {
   demoMode?: boolean;
   onClose: () => void;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
+  onComposeTo?: (contact: Contact) => void;
 };
 
-export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef }: ContactsDialogProps) {
+export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef, onComposeTo }: ContactsDialogProps) {
   const { t } = useI18n();
   const [overlayOpen, setOverlayOpen] = useState(false);
   return (
@@ -99,7 +101,7 @@ export function ContactsDialog({ demoMode = false, onClose, fallbackFocusRef }: 
       fallbackFocusRef={fallbackFocusRef}
       focusSuspended={overlayOpen}
     >
-      <ContactsSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} />
+      <ContactsSection demoMode={demoMode} onOverlayOpenChange={setOverlayOpen} onComposeTo={onComposeTo} />
     </ManagementDialogShell>
   );
 }

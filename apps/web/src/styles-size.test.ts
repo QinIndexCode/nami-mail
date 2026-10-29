@@ -166,7 +166,8 @@ describe("styles.css size ratchet", () => {
   // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
   // 合 18_182 行，阈值取实测 +12 行缓冲。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 18_194;
+  // 2026-10-28 邮件撰写器 Markdown 模式、格式化工具栏与实时/分屏预览（18_279 → 18_575）：新增 Markdown 工具栏、视图模式切换、最大化分屏渲染容器、富文本预览排版（标题/引用/代码/表格）与字数统计（实测 18_563 行 + 12 缓冲）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_575;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
