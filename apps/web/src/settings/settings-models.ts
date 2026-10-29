@@ -373,3 +373,16 @@ export function mcpRequestFeedback(error: unknown, fallback: string, t: Translat
   }
   return fallback;
 }
+export function mcpDotClass(server: AgentMcpServerSummary): string {
+  const state = mcpServerVisualState(server);
+  if (state === "checked") return "";
+  if (state === "disabled") return " muted";
+  return state === "failed" ? " error" : " warning";
+}
+
+export function mcpSummary(server: AgentMcpServerSummary, t: Translate): string {
+  const parts = [t(`agent.mcpServers.status.${mcpServerVisualState(server)}`)];
+  if (server.toolCount !== undefined) parts.push(t("agent.mcpServers.status.tools", { count: server.toolCount }));
+  parts.push([server.command, ...server.args].join(" "));
+  return parts.join(" · ");
+}

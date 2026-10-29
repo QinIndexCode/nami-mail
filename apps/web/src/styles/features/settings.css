@@ -9,7 +9,7 @@ padding:24px
 border-radius:var(--radius-lg);
 flex-direction:column;
 width:min(1050px,100%);
-height:min(720px,75vh);
+height:min(760px,calc(100vh - 48px));
 padding:0;
 display:flex;
 overflow:hidden
