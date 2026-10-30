@@ -63,6 +63,8 @@ npm.cmd run smoke:runtime
 
 The `npm test` suite runs the Agent contracts, Agent core, server, Web, and desktop tests; installers and installed apps still require separate verification:
 
+Desktop smoke uses isolated data and demo mail: `npm.cmd run smoke:desktop`. The desktop service requests port `0` so the OS allocates a loopback port; the Windows dynamic port range is configurable, so smoke does not require the default range.
+
 Real Windows installer validation also requires:
 
 ```powershell

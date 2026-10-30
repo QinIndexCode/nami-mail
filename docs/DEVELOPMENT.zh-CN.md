@@ -63,6 +63,8 @@ npm.cmd run smoke:runtime
 
 `npm.cmd run test` 会运行 Agent contracts、Agent core、服务端、Web 与桌面测试；安装包与已安装应用仍需单独验证：
 
+桌面 smoke 使用隔离数据和演示邮件：`npm.cmd run smoke:desktop`。桌面服务向系统请求端口 `0`，由系统分配回环端口；Windows 动态端口范围可由系统配置，smoke 不要求端口处于默认范围。
+
 ```powershell
 $env:NAMI_MAIL_RELEASE_DIRECTORY="release-artifacts/<version>"
 npm.cmd run package:win
