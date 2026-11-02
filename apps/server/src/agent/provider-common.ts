@@ -121,6 +121,13 @@ export function safeMessage(
   return createAgentError({ code: "PROVIDER_ERROR", message: "The provider request could not complete.", retryable: true });
 }
 
+/** Detects an already-mapped agent error object (not an Error subclass). */
+export function isAgentErrorShape(value: unknown): value is AgentError {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.code === "string" && typeof entry.message === "string" && typeof entry.retryable === "boolean";
+}
+
 export function statusError(status: number, suggestion?: string): AgentError {
   const detail = suggestion === undefined ? {} : { suggestion };
   if (status === 401 || status === 403 || status === 407) {

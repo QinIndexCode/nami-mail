@@ -133,6 +133,18 @@ export function registerSettingsRoutes(app: FastifyInstance, deps: SettingsRoute
     if (candidate.backgroundPreset === "custom" && !hasStoredCustomBackground(context, candidate.customBackgroundFilename)) {
       return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "请先上传自定义背景图片。" });
     }
+    // The auto-reply model picks are validated against the provider registry
+    // at the write boundary, so a pick that can never work fails here instead
+    // of silently disabling auto-reply for every future message. Embedded
+    // hosts without an Agent service keep the runtime-time checks only.
+    if (parsed.data.autoReply && context.agentService) {
+      try {
+        context.agentService.validateAutoReplyProviders({ ...current.autoReply, ...parsed.data.autoReply });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "自动回复模型配置无效。";
+        return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message });
+      }
+    }
     const updated = updateAppSettings(context.db, parsed.data as AppSettingsPatch);
     if (updated.refreshIntervalSeconds !== current.refreshIntervalSeconds) {
       context.onRefreshIntervalChanged?.(updated.refreshIntervalSeconds);

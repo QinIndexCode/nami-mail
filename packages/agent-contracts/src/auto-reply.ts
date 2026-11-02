@@ -63,6 +63,13 @@ export const autoReplyConfigSchema = z.object({
   mode: autoReplyModeSchema.default("llm"),
   /** Dedicated provider ID for evaluating whether an incoming email requires a reply. When null/absent, uses default provider. */
   decisionProviderId: z.string().trim().min(1).max(128).nullable().optional().default(null),
+  /**
+   * Minimum calibrated "worth replying" probability (0–1) for the decision
+   * stage to classify a message as high-value. Applies to both decision
+   * strategies: the typed decision model's probability and the chat prompt's
+   * high/low verdict (which the chat path treats as 1/0).
+   */
+  decisionThreshold: z.number().min(0).max(1).default(0.7),
   /** Dedicated provider ID for drafting LLM replies when mode is "llm". When null/absent, uses default provider. */
   draftProviderId: z.string().trim().min(1).max(128).nullable().optional().default(null),
   template: autoReplyTemplateSchema.default(() => ({ text: "", skipConfirmation: false })),
@@ -84,6 +91,7 @@ export const autoReplyConfigPatchSchema = z.object({
   ).optional(),
   mode: autoReplyModeSchema.optional(),
   decisionProviderId: z.string().trim().min(1).max(128).nullable().optional(),
+  decisionThreshold: z.number().min(0).max(1).optional(),
   draftProviderId: z.string().trim().min(1).max(128).nullable().optional(),
   template: autoReplyTemplateSchema.optional(),
   scope: autoReplyScopeSchema.optional(),

@@ -96,7 +96,7 @@ The complete set is indexed in [docs/README.en.md](docs/README.en.md), with a Ch
 - **Using Nami Mail** — [installation and updates](docs/INSTALLING.en.md) · [email provider setup](docs/EMAIL-PROVIDERS.en.md) · [calendar and invites](docs/CALENDAR.en.md) · [auto-reply](docs/AUTO-REPLY.en.md) · [message translation](docs/TRANSLATION.en.md)
 - **NamiMail Agent** — [usage](docs/agent/usage.en.md) · [tools catalog](docs/agent/tools.en.md) · [model providers](docs/agent/providers.en.md) · [external MCP servers](docs/agent/mcp-servers.en.md) · [architecture](docs/agent/architecture.en.md)
 - **Automation and integration** — [CLI reference](docs/cli/README.en.md) · [MCP server](docs/mcp/README.en.md) · [external mail interface](docs/EXTERNAL-MAIL-INTERFACE.en.md) · [mail RAG](docs/rag/architecture.en.md)
-- **Engineering and security** — [privacy and local data](docs/PRIVACY.en.md) · [architecture and trust boundaries](docs/ARCHITECTURE.en.md) · [design system](docs/DESIGN-SYSTEM.en.md) · [local API contract](docs/LOCAL-API.en.md)
+- **Engineering and security** — [privacy and local data](docs/PRIVACY.en.md) · [architecture and trust boundaries](docs/ARCHITECTURE.en.md) · [design system](docs/DESIGN-SYSTEM.en.md) · [mail body translation API](docs/TRANSLATION-API.en.md)
 - **Project** — [development guide](docs/DEVELOPMENT.en.md) · [contributing](CONTRIBUTING.en.md) · [localization](docs/LOCALIZATION.en.md) · [release guide](docs/RELEASING.en.md) · [security policy](SECURITY.en.md) · [support](SUPPORT.en.md)
 
 ## Privacy and Local Data

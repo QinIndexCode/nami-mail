@@ -245,7 +245,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
     titleKey: "settings.nav.models.title",
     defaultTitleZh: "语言模型提供商",
     defaultTitleEn: "Language Models",
-    targetId: "models-settings",
+    // The live card's heading id; `models-settings` only exists in the demo
+    // placeholder, so a search hit could never scroll there in a real session.
+    targetId: "models-providers-title",
     keywords: [
       "模型", "大模型", "LLM", "OpenAI", "DeepSeek", "Ollama", "Claude", "Anthropic", "Gemini",
       "API Key", "APIKey", "密钥", "Token", "服务地址", "端点", "Endpoint", "默认模型", "超时时间",
@@ -256,19 +258,26 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
     ],
   },
 
-  // 8. MCP Tools (Internal)
+  // 8. Agent Tools (built-in catalog + MCP extensions)
   {
     id: "mcp-tools",
     categoryId: "mcp",
     titleKey: "settings.nav.mcp.title",
-    defaultTitleZh: "内置 MCP 工具服务",
-    defaultTitleEn: "Built-in MCP Tools",
-    targetId: "models-settings",
+    defaultTitleZh: "内置工具与 MCP 扩展",
+    defaultTitleEn: "Built-in Tools & MCP Extensions",
+    // The page's own heading; the old `models-settings` anchor now belongs to
+    // the language-model panel and would scroll to the wrong element.
+    targetId: "tools-settings-title",
     keywords: [
       "MCP", "工具", "插件", "Server", "stdio", "npx", "node", "filesystem", "模型上下文协议",
       "扩展", "环境变量", "命令行参数", "工作目录", "外部工具", "协议", "预设", "模板", "知识图谱", "数据库", "git",
       "mcp", "tools", "server", "command", "args", "env", "environment", "model context protocol",
       "cwd", "stdio", "gongju", "chajian", "fuwuqi",
+      "内置工具", "原生工具", "内置原生工具", "工具集", "工具目录", "工具列表", "能力清单",
+      "只读工具", "写入工具", "执行权限", "读写权限", "邮件工具", "日历工具", "通讯录工具", "系统工具",
+      "builtin tools", "built-in tools", "native tools", "tool catalog", "tool list", "capabilities",
+      "read tool", "write tool", "tool permissions", "agent tools", "mail tools", "calendar tools",
+      "contacts tools", "system tools", "neizhi gongju", "yuansheng gongju",
     ],
   },
 

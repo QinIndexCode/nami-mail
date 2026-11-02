@@ -52,6 +52,10 @@ export type AutoReplySimulateResult = {
     replyValue?: "high" | "low";
     sensitive?: boolean;
     reply?: string;
+    /** Which decision strategy the provider capability selected (typed = native decide()). */
+    strategy?: "typed" | "chat-prompt";
+    /** Calibrated worth-replying probability, present for the typed strategy. */
+    score?: number;
     error?: string;
   };
   finalAction:
@@ -69,11 +73,12 @@ export type AutoReplySimulateResult = {
   };
 };
 
-const DEFAULT_SIMULATE_CONFIG: AutoReplyConfig = {
+export const DEFAULT_SIMULATE_CONFIG: AutoReplyConfig = {
   enabled: true,
   accountIds: [],
   mode: "llm",
   decisionProviderId: null,
+  decisionThreshold: 0.7,
   draftProviderId: null,
   template: { text: "", skipConfirmation: false },
   scope: { contactsOnly: false, threadOnce: true, rules: [] },
@@ -173,6 +178,7 @@ export async function simulateAutoReply(
         memoryContext: "",
         decisionProviderId: config.decisionProviderId,
         draftProviderId: config.draftProviderId,
+        decisionThreshold: config.decisionThreshold,
       });
 
       decision = {
@@ -180,6 +186,9 @@ export async function simulateAutoReply(
         replyValue: evaluation.replyValue,
         sensitive: evaluation.sensitive,
         reply: evaluation.replyText,
+        ...(evaluation.decision
+          ? { strategy: evaluation.decision.strategy, score: evaluation.decision.score }
+          : {}),
       };
     } catch (error) {
       decision = {

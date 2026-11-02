@@ -112,16 +112,32 @@ export function writeRevokedIds(conversationId: string, ids: Set<string>): void 
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a provider summary may serve a text-generating call site (assistant
+ * turns, translation, polish, reply drafting). `roles` is optional so callers
+ * holding partial objects keep compiling; a summary without roles predates the
+ * role vocabulary and was chat-only by construction.
+ */
+export function providerServesChat(
+  provider: { configured?: boolean; roles?: readonly string[] },
+): boolean {
+  return (provider.configured ?? true) && (provider.roles?.includes("chat") ?? true);
+}
+
+/**
  * The provider the composer should start on: the server's default, else the
  * first fully configured one, else whatever exists. Shared by the workspace
  * and the settings models panel so both agree on the same fallback order.
+ * Only chat-capable providers are eligible: the composer cannot talk to a
+ * decision-only row, and the last-resort `providers[0]` keeps the current
+ * "show something unconfigured rather than nothing" behaviour.
  */
 export function configuredProviderId(
-  providers: readonly { id: string; configured: boolean }[],
+  providers: readonly { id: string; configured: boolean; roles?: readonly string[] }[],
   defaultProviderId: string | null,
 ): string {
-  return providers.find((provider) => provider.id === defaultProviderId)?.id
-    ?? providers.filter((provider) => provider.configured)[0]?.id
+  const chatProviders = providers.filter(providerServesChat);
+  return chatProviders.find((provider) => provider.id === defaultProviderId)?.id
+    ?? chatProviders[0]?.id
     ?? providers[0]?.id
     ?? "";
 }
@@ -130,14 +146,14 @@ export function configuredProviderId(
  * The provider a conversation should open on: the one recorded on the
  * conversation (the server keeps this authoritative — every model pin is
  * persisted server-side), falling back to the default when the record is
- * missing, unconfigured, or no longer exists.
+ * missing, unconfigured, chat-incapable, or no longer exists.
  */
 export function resolveConversationProvider(
   conversationProviderId: string | null | undefined,
-  providers: readonly { id: string; configured: boolean }[],
+  providers: readonly { id: string; configured: boolean; roles?: readonly string[] }[],
   defaultProviderId: string | null,
 ): string {
-  const recorded = conversationProviderId && providers.some((provider) => provider.id === conversationProviderId && provider.configured)
+  const recorded = conversationProviderId && providers.some((provider) => provider.id === conversationProviderId && providerServesChat(provider))
     ? conversationProviderId
     : null;
   return recorded ?? configuredProviderId(providers, defaultProviderId);

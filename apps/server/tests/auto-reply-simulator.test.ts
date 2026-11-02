@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { simulateAutoReply } from "../src/agent/auto-reply-simulator.js";
+import { simulateAutoReply, DEFAULT_SIMULATE_CONFIG } from "../src/agent/auto-reply-simulator.js";
 import type { AgentService } from "../src/agent-service.js";
 
 describe("auto-reply-simulator", () => {
@@ -54,6 +54,39 @@ describe("auto-reply-simulator", () => {
     expect(result.timings.screeningMs).toBeGreaterThanOrEqual(0);
     expect(result.timings.scopeMs).toBeGreaterThanOrEqual(0);
     expect(result.timings.llmMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("forwards the threshold to the evaluation and surfaces the decision strategy", async () => {
+    const fakeAgentService = {
+      evaluateAutoReply: vi.fn().mockResolvedValue({
+        replyValue: "low",
+        sensitive: false,
+        decision: { providerId: "provider-jev", strategy: "typed", score: 0.31 },
+      }),
+    } as unknown as AgentService;
+
+    const input = {
+      fromAddress: "colleague@company.com",
+      subject: "合作意向确认",
+      textBody: "你好，关于上周讨论的合作方案，请问本周是否有空进一步交流？",
+      mailbox: "INBOX",
+    };
+    const config = {
+      ...DEFAULT_SIMULATE_CONFIG,
+      decisionProviderId: "provider-jev",
+      decisionThreshold: 0.5,
+    };
+
+    const result = await simulateAutoReply(fakeAgentService, input, config);
+
+    expect(fakeAgentService.evaluateAutoReply).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionProviderId: "provider-jev", decisionThreshold: 0.5 }),
+    );
+    expect(result.decision?.evaluated).toBe(true);
+    expect(result.decision?.replyValue).toBe("low");
+    expect(result.decision?.strategy).toBe("typed");
+    expect(result.decision?.score).toBe(0.31);
+    expect(result.finalAction).toBe("ignored_low_value");
   });
 
   it("flags sensitive content requiring manual confirmation", async () => {

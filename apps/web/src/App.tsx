@@ -1559,6 +1559,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           }
         } catch (error) {
           showToast(mailErrorToastMessage(error, t("mail.error.readDraftAttachments"), t), "error");
+          return;
         }
       }
       actions.openCompose({

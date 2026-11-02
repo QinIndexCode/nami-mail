@@ -6,9 +6,13 @@ export type { AgentCitation, AgentToolActivity, AgentConfirmation };
 export type AgentStreamEvent = AgentUiStreamEvent;
 
 // The provider summary shape is single-sourced in @nami/agent-contracts (the
-// server's provider service serializes against the same schema).
+// server's provider service serializes against the same schema). `kind` is a
+// plain string there so a row from a newer build stays listable; this guard is
+// how the UI narrows it back before editing or re-submitting a provider.
+import { isAgentProviderKind } from "@nami/agent-contracts";
 import type { AgentProviderKind, AgentProviderSummary, ModelInputModalities } from "@nami/agent-contracts";
 export type { AgentProviderKind, AgentProviderSummary, ModelInputModalities };
+export { isAgentProviderKind };
 
 /** Non-secret provider details returned by the local Agent service. */
 export type AgentProviderList = {
@@ -74,6 +78,9 @@ export type AutoReplySimulateResult = {
     replyValue?: "high" | "low";
     sensitive?: boolean;
     reply?: string;
+    /** Which decision strategy the provider capability selected (typed = native decide()). */
+    strategy?: "typed" | "chat-prompt";
+    score?: number;
     error?: string;
   };
   finalAction:

@@ -2,13 +2,14 @@
 /**
  * Behavioural coverage for the settings "models" panel: the card layout, the
  * form round-trip (payload, key visibility), the dirty-form guard a background
- * list refresh must respect, default selection, the two-step delete, MCP CRUD
- * and the demo-mode notice.
+ * list refresh must respect, default selection, the two-step delete and the
+ * demo-mode notice. (MCP server CRUD lives with SettingsToolsSection, the only
+ * surface that renders it.)
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { AgentMcpServerSummary, AgentProviderList, AgentProviderSummary } from "../agentTypes";
+import type { AgentProviderList, AgentProviderSummary } from "../agentTypes";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,6 +18,8 @@ const h = vi.hoisted(() => {
     id: "provider-local",
     label: "本机 Ollama",
     kind: "ollama",
+    roles: ["chat"],
+    supported: true,
     endpoint: "http://127.0.0.1:11434/v1",
     model: "llama3.2",
     timeoutMs: 45_000,
@@ -31,6 +34,8 @@ const h = vi.hoisted(() => {
     id: "provider-cloud",
     label: "团队模型",
     kind: "openai-compatible",
+    roles: ["chat"],
+    supported: true,
     endpoint: "https://models.example.test/v1",
     model: "nami-chat",
     timeoutMs: 30_000,
@@ -41,21 +46,7 @@ const h = vi.hoisted(() => {
     streaming: true,
     vision: false,
   };
-  const server: AgentMcpServerSummary = {
-    id: "mcp-1",
-    label: "filesystem",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem"],
-    envKeys: ["TOKEN"],
-    cwd: "/tmp",
-    timeoutMs: 30_000,
-    enabled: true,
-    toolCount: 3,
-    toolNames: ["read", "write", "list"],
-    createdAt: "2026-08-10T00:00:00.000Z",
-    updatedAt: "2026-08-10T00:00:00.000Z",
-  };
-  return { local, cloud, server };
+  return { local, cloud };
 });
 
 vi.mock("../api", () => ({
@@ -72,11 +63,6 @@ vi.mock("../api", () => ({
     updateAgentProvider: vi.fn(),
     checkAgentProvider: vi.fn(),
     deleteAgentProvider: vi.fn(),
-    agentMcpServers: vi.fn(),
-    createAgentMcpServer: vi.fn(),
-    updateAgentMcpServer: vi.fn(),
-    checkAgentMcpServer: vi.fn(),
-    deleteAgentMcpServer: vi.fn(),
   },
 }));
 
@@ -97,15 +83,10 @@ beforeEach(() => {
   document.body.append(container);
   onProvidersChanged = vi.fn();
   mockApi.agentProviders.mockResolvedValue({ items: [h.local, h.cloud], defaultProviderId: h.local.id });
-  mockApi.agentMcpServers.mockResolvedValue({ items: [h.server] });
   mockApi.createAgentProvider.mockImplementation(async (input) => ({ ...h.cloud, ...input, id: "provider-new" } as AgentProviderSummary));
   mockApi.updateAgentProvider.mockImplementation(async (id: string, input) => ({ ...h.cloud, ...input, id } as AgentProviderSummary));
   mockApi.checkAgentProvider.mockResolvedValue({ ...h.cloud, health: { state: "ready" } } as AgentProviderSummary);
   mockApi.deleteAgentProvider.mockResolvedValue(undefined as never);
-  mockApi.createAgentMcpServer.mockImplementation(async (input) => ({ ...h.server, ...input, id: "mcp-new" } as AgentMcpServerSummary));
-  mockApi.updateAgentMcpServer.mockImplementation(async (id: string, input) => ({ ...h.server, ...input, id } as AgentMcpServerSummary));
-  mockApi.checkAgentMcpServer.mockResolvedValue(h.server);
-  mockApi.deleteAgentMcpServer.mockResolvedValue(undefined as never);
   vi.clearAllMocks();
 });
 
@@ -146,8 +127,8 @@ async function render(props: Partial<React.ComponentProps<typeof SettingsModelsS
   if (settle) await flush();
 }
 
-const rows = (kind: "provider" | "mcp") =>
-  Array.from(container.querySelectorAll<HTMLElement>(`[data-model-row="${kind}"][data-provider-id], [data-model-row="${kind}"][data-mcp-id]`));
+const rows = () =>
+  Array.from(container.querySelectorAll<HTMLElement>('[data-model-row="provider"][data-provider-id]'));
 const byText = (selector: string, text: string) =>
   Array.from(container.querySelectorAll<HTMLElement>(selector)).find((node) => node.textContent?.includes(text));
 const query = <T extends Element>(selector: string): T => {
@@ -179,21 +160,15 @@ async function submit(formSelector: string): Promise<void> {
 }
 
 describe("settings models panel", () => {
-  it("renders one row per provider and MCP server with their status summaries", async () => {
+  it("renders one row per provider with its status summary", async () => {
     await render();
 
-    const providerRows = rows("provider");
+    const providerRows = rows();
     expect(providerRows).toHaveLength(2);
     expect(providerRows[0]!.textContent).toContain("本机 Ollama");
     expect(providerRows[0]!.textContent).toContain("llama3.2");
     expect(providerRows[0]!.getAttribute("data-default")).toBe("true");
     expect(providerRows[1]!.getAttribute("data-default")).toBe("false");
-
-    const mcpRows = rows("mcp");
-    expect(mcpRows).toHaveLength(1);
-    expect(mcpRows[0]!.textContent).toContain("filesystem");
-    expect(mcpRows[0]!.textContent).toContain("npx");
-    expect(mcpRows[0]!.textContent).toContain("3 个工具");
   });
 
   it("offers the set-default action only on the non-default provider", async () => {
@@ -208,15 +183,15 @@ describe("settings models panel", () => {
     mockApi.agentProviders.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
 
     await render({ initialProviders: [h.local], initialDefaultProviderId: h.local.id }, false);
-    expect(rows("provider")).toHaveLength(1);
-    expect(rows("provider")[0]!.textContent).toContain("本机 Ollama");
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]!.textContent).toContain("本机 Ollama");
 
     await act(async () => {
       release!({ items: [h.local, h.cloud], defaultProviderId: h.local.id });
       await Promise.resolve();
     });
     await flush();
-    expect(rows("provider")).toHaveLength(2);
+    expect(rows()).toHaveLength(2);
   });
 
   it("opens the add form, saves the documented payload and then checks the connection", async () => {
@@ -359,97 +334,10 @@ describe("settings models panel", () => {
     await flush();
 
     expect(mockApi.deleteAgentProvider).toHaveBeenCalledWith("provider-cloud");
-    expect(rows("provider")).toHaveLength(1);
+    expect(rows()).toHaveLength(1);
     expect(container.querySelector('[data-models-form="provider"]')).toBeNull();
   });
 
-  it("creates and checks an MCP server through its own card", async () => {
-    await render();
-
-    click(query('[data-models-card="mcp"] .settings-inline-actions button'));
-    expect(container.querySelector('[data-models-form="mcp"]')).not.toBeNull();
-
-    type(query<HTMLInputElement>("#mcp-server-label"), "filesystem");
-    type(query<HTMLInputElement>("#mcp-server-command"), "npx");
-    type(query<HTMLTextAreaElement>("#mcp-server-args"), "-y\n\n@modelcontextprotocol/server-filesystem");
-    type(query<HTMLInputElement>("#mcp-server-cwd"), "/tmp");
-    type(container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input")[0]!, "TOKEN");
-    type(container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input")[1]!, " secret-value ");
-    await submit('[data-models-form="mcp"]');
-
-    expect(mockApi.createAgentMcpServer).toHaveBeenCalledWith({
-      label: "filesystem",
-      command: "npx",
-      args: ["-y", "@modelcontextprotocol/server-filesystem"],
-      env: { TOKEN: "secret-value" },
-      cwd: "/tmp",
-      timeoutMs: 30_000,
-      enabled: true,
-    });
-    expect(mockApi.checkAgentMcpServer).toHaveBeenCalledWith("mcp-new");
-  });
-
-  it("removes a saved environment key by dropping its row", async () => {
-    await render();
-
-    click(byText('[data-mcp-id="mcp-1"] .secondary-button', "编辑")!);
-    await flush();
-    // The saved key plus one spare row.
-    expect(container.querySelectorAll(".settings-model-env-line")).toHaveLength(2);
-
-    click(container.querySelector<HTMLButtonElement>(".settings-model-env-line .icon-button")!);
-    await submit('[data-models-form="mcp"]');
-
-    expect(mockApi.updateAgentMcpServer).toHaveBeenCalledWith("mcp-1", expect.objectContaining({
-      label: "filesystem",
-      env: {},
-      envRemove: ["TOKEN"],
-    }));
-  });
-
-  it("keeps the same env <input> node while a key and a value are typed", async () => {
-    // Regression lock: the row key used to be built from the row's own content,
-    // so every keystroke changed the React key, the <input> was unmounted and
-    // remounted, and focus/caret was lost after the first character.
-    await render();
-
-    click(query('[data-models-card="mcp"] .settings-inline-actions button'));
-    await flush();
-    const envInputs = () => container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input");
-    const keyInput = envInputs()[0]!;
-    const valueInput = envInputs()[1]!;
-
-    type(keyInput, "T");
-    expect(envInputs()[0]).toBe(keyInput);
-    type(envInputs()[0]!, "TO");
-    expect(envInputs()[0]).toBe(keyInput);
-
-    type(valueInput, "s");
-    expect(envInputs()[1]).toBe(valueInput);
-    type(envInputs()[1]!, "se");
-    expect(envInputs()[1]).toBe(valueInput);
-
-    // Two keystrokes in, both values landed on the original nodes.
-    expect(envInputs()[0]!.value).toBe("TO");
-    expect(envInputs()[1]!.value).toBe("se");
-  });
-
-  it("adds an env row without disturbing the rows already typed into", async () => {
-    await render();
-
-    click(query('[data-models-card="mcp"] .settings-inline-actions button'));
-    await flush();
-    const envInputs = () => container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input");
-    type(envInputs()[0]!, "TOKEN");
-    const firstKey = envInputs()[0]!;
-
-    click(byText(".settings-model-add-env", t("agent.mcpServers.fields.addEnv"))!);
-    await flush();
-
-    expect(container.querySelectorAll(".settings-model-env-line")).toHaveLength(2);
-    expect(envInputs()[0]).toBe(firstKey);
-    expect(envInputs()[0]!.value).toBe("TOKEN");
-  });
 
   it("keeps a saved-but-unrefreshed provider visible and still tells the host about it", async () => {
     // The create lands; only the list refresh fails. Closing the dialog as if
@@ -498,16 +386,6 @@ describe("settings models panel", () => {
     expect(mockApi.checkAgentProvider.mock.calls.length).toBeGreaterThan(1);
   });
 
-  it("deletes an MCP server only after the confirm step", async () => {
-    await render();
-
-    click(byText('[data-mcp-id="mcp-1"] .danger-button', "删除服务器")!);
-    expect(mockApi.deleteAgentMcpServer).not.toHaveBeenCalled();
-
-    click(byText('[data-mcp-id="mcp-1"] .danger-button', "再次确认删除")!);
-    await flush();
-    expect(mockApi.deleteAgentMcpServer).toHaveBeenCalledWith("mcp-1");
-  });
 
   it("surfaces a failed load with a retry affordance", async () => {
     mockApi.agentProviders.mockRejectedValueOnce(new Error("服务不可用"));
@@ -517,7 +395,7 @@ describe("settings models panel", () => {
     click(byText(".settings-model-feedback .secondary-button", t("agent.providers.retry"))!);
     await flush();
     expect(mockApi.agentProviders).toHaveBeenCalledTimes(2);
-    expect(rows("provider")).toHaveLength(2);
+    expect(rows()).toHaveLength(2);
   });
 
   it("shows the in-memory notice instead of the live cards in demo mode", async () => {
@@ -525,25 +403,6 @@ describe("settings models panel", () => {
 
     expect(container.querySelector('[data-settings-nav="models"]')).not.toBeNull();
     expect(container.querySelector('[data-models-card="providers"]')).toBeNull();
-    expect(container.querySelector('[data-models-card="mcp"]')).toBeNull();
-    expect(mockApi.agentProviders).not.toHaveBeenCalled();
-  });
-
-  it("renders only providers when view='providers'", async () => {
-    await render({ view: "providers" });
-
-    expect(container.querySelector('[data-models-card="providers"]')).not.toBeNull();
-    expect(container.querySelector('[data-models-card="mcp"]')).toBeNull();
-    expect(mockApi.agentProviders).toHaveBeenCalled();
-    expect(mockApi.agentMcpServers).not.toHaveBeenCalled();
-  });
-
-  it("renders only mcp servers when view='mcp'", async () => {
-    await render({ view: "mcp" });
-
-    expect(container.querySelector('[data-models-card="mcp"]')).not.toBeNull();
-    expect(container.querySelector('[data-models-card="providers"]')).toBeNull();
-    expect(mockApi.agentMcpServers).toHaveBeenCalled();
     expect(mockApi.agentProviders).not.toHaveBeenCalled();
   });
 

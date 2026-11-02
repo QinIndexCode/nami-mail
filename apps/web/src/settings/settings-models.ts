@@ -1,4 +1,5 @@
 import { ApiError } from "../api";
+import { isAgentProviderKind } from "../agentTypes";
 import type {
   AgentMcpServerInput,
   AgentMcpServerSummary,
@@ -57,7 +58,21 @@ export const providerKindMetadata: Record<AgentProviderKind, ProviderKindMetadat
     endpointHintKey: "agent.providers.fields.endpointHintOpenAiResponses",
     modelPlaceholder: "gpt-4.1",
   },
+  "system-one": {
+    endpointSuggestion: "https://api.typesafe.ai/v1",
+    endpointHintKey: "agent.providers.fields.endpointHintSystemOne",
+    modelPlaceholder: "jev-latest",
+  },
 };
+
+/**
+ * Safe lookup for a kind string that may have been written by another build.
+ * A kind missing from `providerKindMetadata` resolves to `undefined` instead of
+ * `undefined`'s crash-prone indexed access; callers show their own fallback.
+ */
+export function providerKindMetadataFor(kind: string): ProviderKindMetadata | undefined {
+  return isAgentProviderKind(kind) ? providerKindMetadata[kind] : undefined;
+}
 
 /**
  * One outcome line for the panel. `retry` repeats the operation that produced
@@ -105,7 +120,10 @@ export function providerFormFor(provider: AgentProviderSummary | null, defaultPr
   }
   return {
     label: provider.label,
-    kind: provider.kind,
+    // Unsupported kinds (a row from a newer build) never reach the edit form —
+    // the row only offers delete — so this fallback is a type-safety net, not a
+    // silent rewrite path.
+    kind: isAgentProviderKind(provider.kind) ? provider.kind : "openai-compatible",
     endpoint: provider.endpoint,
     model: provider.model,
     apiKey: "",
@@ -372,4 +390,17 @@ export function mcpRequestFeedback(error: unknown, fallback: string, t: Translat
     return error.message || fallback;
   }
   return fallback;
+}
+export function mcpDotClass(server: AgentMcpServerSummary): string {
+  const state = mcpServerVisualState(server);
+  if (state === "checked") return "";
+  if (state === "disabled") return " muted";
+  return state === "failed" ? " error" : " warning";
+}
+
+export function mcpSummary(server: AgentMcpServerSummary, t: Translate): string {
+  const parts = [t(`agent.mcpServers.status.${mcpServerVisualState(server)}`)];
+  if (server.toolCount !== undefined) parts.push(t("agent.mcpServers.status.tools", { count: server.toolCount }));
+  parts.push([server.command, ...server.args].join(" "));
+  return parts.join(" · ");
 }

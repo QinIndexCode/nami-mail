@@ -16,7 +16,8 @@ function insertAccount(db: DatabaseHandle, id: string): void {
   `).run(id, `${id}@example.test`, "2026-07-27T10:00:00.000Z");
 }
 
-describe("EncryptedAutoReplyDecisionStore", () => {
+
+  describe("EncryptedAutoReplyDecisionStore", () => {
   function fixture() {
     const db = openDatabase(":memory:");
     insertAccount(db, "acct-1");
@@ -26,6 +27,34 @@ describe("EncryptedAutoReplyDecisionStore", () => {
     const store = new EncryptedAutoReplyDecisionStore(db, masterKey, () => "2026-08-08T12:00:00.000Z");
     return { db, store };
   }
+
+  it("round-trips the decision attribution inside the encrypted payload and omits it when absent", () => {
+    const { db, store } = fixture();
+    try {
+      const attributed = store.create({
+        messageId: "msg-attr",
+        accountId: "acct-1",
+        threadKey: "subject:Report",
+        reason: "low-value",
+        subject: "Report",
+        decision: { providerId: "provider-jev", strategy: "typed", score: 0.31, confidence: 0.87 },
+      });
+      expect(attributed.decision).toEqual({ providerId: "provider-jev", strategy: "typed", score: 0.31, confidence: 0.87 });
+      expect(store.get(attributed.id).decision).toEqual(attributed.decision);
+
+      const plain = store.create({
+        messageId: "msg-plain",
+        accountId: "acct-1",
+        threadKey: "subject:Hi",
+        reason: "low-value",
+        subject: "Hi",
+      });
+      expect(plain.decision).toBeUndefined();
+      expect(store.get(plain.id).decision).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
 
   it("creates, lists (newest first), and gets records", () => {
     const { db, store } = fixture();
