@@ -17,6 +17,10 @@
 - **Calendar attachment duplicate downloads and thread snapshot body preservation**: fixed an issue where opening an email with an ICS calendar invite triggered duplicate attachment downloads and banner re-renders when the message body finished loading and replaced the attachment object reference; the invite banner effect now keys on primitive identifiers (`partId` and `size`) and deduplicates in-flight requests through a module-level map (`inFlightIcsRequests`) that writes completed results into the LRU cache even across unmounts or concurrent mounts; additionally, `mergeThreadSnapshot` now preserves loaded `htmlBody` and `textBody` during same-conversation merges to prevent lightweight server list entries from overwriting the already loaded body.
 - **Settings and compose alignment and accessibility fixes**: the settings Models page no longer misaligns the icon and the text of its validation warning, and the compose sending-status row for overdue schedules keeps its icon and text on one baseline; the Agent Tools domain filters now expose grouping semantics instead of claiming to be a tab list, and the settings search entries for model providers and agent tools jump to their real headings instead of stopping at the wrong target. User impact: these small misalignments and misdirected jumps no longer look sloppy, and screen-reader and keyboard users land where the label says.
 
+### Fixed
+
+- **Do not open a draft with empty attachments when attachment lookup fails**: reopening a draft previously showed one error toast and then opened the composer with an empty attachment list when the local attachment index (including the fallback import) failed; saving from that composer cleared the original draft's attachment links and stored attachment rows. That branch now abandons the open after the toast, so the user can retry instead of losing attachments. What it means for users: a transient attachment read failure no longer becomes permanent loss on the next save.
+
 ## [0.6.0] - 2026-10-25
 
 ### Added
