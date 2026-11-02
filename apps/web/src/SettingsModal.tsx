@@ -1013,7 +1013,6 @@ export default function SettingsModal({
     ),
     models: (
       <SettingsModelsSection
-        view="providers"
         t={t}
         demoMode={demoMode}
         initialProviders={agentProviderSeed?.providers ?? []}

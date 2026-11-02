@@ -793,7 +793,7 @@ describe("Agent service second retrieval arm", () => {
       runtime: {
         streamChat: (request: { requestId: string; signal?: AbortSignal; chat: ProviderChatRequest }) => AsyncIterable<AuxiliaryEvent>;
       };
-      providerForConfiguration: (configuration: unknown) => unknown;
+      providerService: { adapterFor: (configuration: unknown) => unknown };
       expandRagQuery: (
         query: string,
         signal: AbortSignal | undefined,
@@ -811,7 +811,7 @@ describe("Agent service second retrieval arm", () => {
       yield { type: "text_delta", delta: '["expense", "reimbursement"]' };
       yield { type: "completed", reason: "stop" };
     });
-    const providerFactory = vi.spyOn(internals(), "providerForConfiguration");
+    const providerFactory = vi.spyOn(internals().providerService, "adapterFor");
 
     // A question whose words appear nowhere in the mailbox: the keyword arm
     // comes back empty, which is the one condition that consults the second arm.

@@ -33,7 +33,7 @@ type RuntimeChatRequest = { requestId: string; chat: ProviderChatRequest };
 
 type ServiceInternals = {
   runtime: { streamChat: (request: RuntimeChatRequest) => AsyncIterable<unknown> };
-  providerForConfiguration: (configuration: unknown) => unknown;
+  providerService: { adapterFor: (configuration: unknown) => unknown };
 };
 
 function internalsOf(service: AgentService): ServiceInternals {
@@ -136,7 +136,7 @@ describe("POST /api/agent/polish", () => {
       yield { type: "text_delta", delta: "  Please revert at your earliest convenience.  " };
       yield { type: "completed", reason: "stop" };
     });
-    const providerFactory = vi.spyOn(internals, "providerForConfiguration");
+    const providerFactory = vi.spyOn(internals.providerService, "adapterFor");
 
     const response = await app.inject({
       method: "POST",

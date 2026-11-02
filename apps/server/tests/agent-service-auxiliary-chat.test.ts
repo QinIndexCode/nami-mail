@@ -87,7 +87,7 @@ function internalRuntime(service: AgentService) {
   return service as unknown as {
     rag: { search: (...arguments_: unknown[]) => Promise<unknown[]> };
     runtime: { streamChat: (request: RuntimeChatRequest) => AsyncIterable<unknown> };
-    providerForConfiguration: (configuration: unknown) => unknown;
+    providerService: { adapterFor: (configuration: unknown) => unknown };
   };
 }
 
@@ -158,7 +158,7 @@ describe("Conversation titles ride the first turn's own response", () => {
     });
     // Belt and braces: constructing a provider is the step that precedes any
     // outbound request, so an untouched spy is the direct proof none happened.
-    const providerFactory = vi.spyOn(internals, "providerForConfiguration");
+    const providerFactory = vi.spyOn(internals.providerService, "adapterFor");
 
     const events = await streamTurn(service, conversation, provider.id, "Summarize this message");
 
@@ -347,7 +347,7 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
       memoryContext: "",
     });
 
-    expect(decision).toEqual({ replyValue: "high", sensitive: false, replyText: "Thanks, got it." });
+    expect(decision).toEqual({ replyValue: "high", sensitive: false, replyText: "Thanks, got it.", decision: { providerId: provider.id, strategy: "chat-prompt" } });
     expect(streamChat).toHaveBeenCalledTimes(1);
     expect(requests[0]?.chat).toMatchObject({
       requestId: expect.stringMatching(/^auto-reply-/),
@@ -423,7 +423,7 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
       draftProviderId: draftProvider.id,
     });
 
-    expect(result).toEqual({ replyValue: "low", sensitive: false });
+    expect(result).toEqual({ replyValue: "low", sensitive: false, decision: { providerId: provider.id, strategy: "chat-prompt" } });
     // Decision model called once, draft model was short-circuited and NEVER called!
     expect(streamChat).toHaveBeenCalledTimes(1);
     expect(requests[0]?.chat.providerId).toBe(provider.id);
@@ -480,6 +480,7 @@ describe("Agent service auxiliary provider calls ride the runtime seam", () => {
       replyValue: "high",
       sensitive: false,
       replyText: "Hello! We are working on this and will follow up soon.",
+      decision: { providerId: provider.id, strategy: "chat-prompt" },
     });
     // Both decision model and draft model called in sequence
     expect(streamChat).toHaveBeenCalledTimes(2);
@@ -515,7 +516,7 @@ describe("Agent service translation rides the runtime seam", () => {
       yield { type: "text_delta", delta: "，世界" };
       yield { type: "completed", reason: "stop" };
     });
-    const providerFactory = vi.spyOn(internals, "providerForConfiguration");
+    const providerFactory = vi.spyOn(internals.providerService, "adapterFor");
 
     const result = await service.translateWithProvider(provider.id, "Hello, world", "zh-CN", {
       onDelta: (delta) => deltas.push(delta),

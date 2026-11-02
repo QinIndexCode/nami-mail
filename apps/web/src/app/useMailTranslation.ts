@@ -109,10 +109,11 @@ export function useMailTranslation({
     !isMailLanguageMatching;
   // Whether at least one LLM provider is configured AND authorized for mail
   // content, enabling AI translation. Cloud providers require the explicit
-  // "allowCloudMailContent" consent; local providers (e.g. Ollama) always qualify.
+  // "allowCloudMailContent" consent; local providers (e.g. Ollama) always
+  // qualify. Translation is a text call site, so only chat-role rows count.
   const llmTranslationAvailable = useMemo(
     () => !isDemo && Boolean(agentProviderSnapshot?.providers.some(
-      (provider) => provider.configured && (!provider.cloud || provider.cloudContentConsent),
+      (provider) => provider.configured && provider.roles.includes("chat") && (!provider.cloud || provider.cloudContentConsent),
     )),
     [agentProviderSnapshot, isDemo],
   );
@@ -304,7 +305,7 @@ export function useMailTranslation({
     setTranslationSession({ messageId, targetLocale, state: { phase: "loading", ...(previous ? { previous } : {}) } });
     try {
       const providers = isDemo ? { items: [], defaultProviderId: null } : await api.agentProviders();
-      const configured = providers.items.filter((p) => p.configured);
+      const configured = providers.items.filter((p) => p.configured && p.roles.includes("chat"));
       const provider = configured.find((p) => p.id === providers.defaultProviderId) ?? configured[0];
       if (!provider) {
         if (requestId !== translationRequestIdRef.current) return;

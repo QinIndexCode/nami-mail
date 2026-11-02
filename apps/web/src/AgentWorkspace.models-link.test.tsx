@@ -28,6 +28,8 @@ const h = vi.hoisted(() => {
     id: "provider-local",
     label: "本机 Ollama",
     kind: "ollama",
+    roles: ["chat"],
+    supported: true,
     endpoint: "http://127.0.0.1:11434/v1",
     model: "llama3.2",
     timeoutMs: 45_000,

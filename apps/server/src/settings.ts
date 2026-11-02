@@ -39,6 +39,7 @@ const DEFAULT_AUTO_REPLY: AutoReplyConfig = {
   accountIds: [],
   mode: "llm",
   decisionProviderId: null,
+  decisionThreshold: 0.7,
   draftProviderId: null,
   template: { text: "", skipConfirmation: false },
   scope: { contactsOnly: false, threadOnce: true, rules: [] },
