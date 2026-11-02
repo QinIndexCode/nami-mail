@@ -600,28 +600,36 @@ describe("DatePicker (cross-month keyboard navigation)", () => {
   // enterable. Returning a partial key like `2027-02` matched no grid cell, so
   // the whole month sat at tabIndex -1 and arrows and Enter did nothing at all.
   it("keeps a month enterable when the carried day is out of range but the month is not", () => {
-    mount("", { minDate: "2027-03-01" });
-    openPanel();
-    // Step forward to February 2027, which is entirely before the bound yet still
-    // shows the first ten days of March as enabled spill-in cells.
-    for (let step = 0; step < 4; step += 1) {
-      act(() => {
-        const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
-        navs[1]?.click();
-      });
+    // Anchor "today" so the four forward steps below always land on February
+    // 2027; with the real clock the starting month moves and the test silently
+    // asserts a different month.
+    vi.useFakeTimers({ now: new Date(2026, 9, 7), toFake: ["Date"] });
+    try {
+      mount("", { minDate: "2027-03-01" });
+      openPanel();
+      // Step forward to February 2027, which is entirely before the bound yet still
+      // shows the first ten days of March as enabled spill-in cells.
+      for (let step = 0; step < 4; step += 1) {
+        act(() => {
+          const navs = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-nav-button"));
+          navs[1]?.click();
+        });
+      }
+      expect(monthLabel()).toContain("2027年2月");
+
+      // Every enabled day must be reachable: the grid needs an entry point.
+      const enabled = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-day"))
+        .filter((button) => !button.disabled);
+      expect(enabled.length).toBeGreaterThan(0);
+      expect(tabbable()).toHaveLength(1);
+      expect(tabbable()[0]?.disabled).toBe(false);
+
+      // And that entry point is where the arrows continue from.
+      press("ArrowRight");
+      expect(tabbable()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
     }
-    expect(monthLabel()).toContain("2027年2月");
-
-    // Every enabled day must be reachable: the grid needs an entry point.
-    const enabled = Array.from(document.querySelectorAll<HTMLButtonElement>(".date-picker-day"))
-      .filter((button) => !button.disabled);
-    expect(enabled.length).toBeGreaterThan(0);
-    expect(tabbable()).toHaveLength(1);
-    expect(tabbable()[0]?.disabled).toBe(false);
-
-    // And that entry point is where the arrows continue from.
-    press("ArrowRight");
-    expect(tabbable()).toHaveLength(1);
   });
 
   it("lands on the last selectable day when paging past maxDate", () => {
