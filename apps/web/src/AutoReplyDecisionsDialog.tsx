@@ -51,6 +51,12 @@ function DecisionCard({ item, account, busy, onDelete, style }: {
       </div>
       {item.subject && <h3 className="auto-reply-decision-subject">{item.subject || t("autoReply.pending.untitled")}</h3>}
       {(item.detail || item.fromAddress) && <p className="auto-reply-decision-detail">{item.detail || item.fromAddress}</p>}
+      {item.decision && (
+        <p className="auto-reply-decision-attribution">
+          {t(item.decision.strategy === "typed" ? "autoReply.decisions.strategy.typed" : "autoReply.decisions.strategy.chat-prompt")}
+          {typeof item.decision.score === "number" && ` · ${Math.round(item.decision.score * 100)}%`}
+        </p>
+      )}
       <div className="auto-reply-decision-footer">
         <span className="auto-reply-decision-account">{account ?? t("autoReply.pending.removedAccount")}</span>
         <button

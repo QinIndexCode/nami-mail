@@ -21,7 +21,7 @@ function isTransientWindowsHandleError(error: unknown): boolean {
 }
 
 async function removeFixtureDirectoryAfterWindowsHandleRelease(directory: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 15_000;
   let retryDelay = 25;
   while (true) {
     try {
@@ -95,6 +95,10 @@ async function stopLockHolder(child: ChildProcess, releasePath: string): Promise
 
 test("the ZIP installer helper binds verified archive bytes to one extracted installer stream and records recoverable failures", () => {
   const script = createZipUpdateInstallerScript();
+  // Windows PowerShell 5.1 parses BOM-less files as the system ANSI codepage;
+  // on non-English (e.g. zh-CN) machines this can mangle multi-byte sequences.
+  // The helper script must carry a UTF-8 BOM so it parses correctly.
+  assert.equal(script.charCodeAt(0), 0xfeff, "The helper script must carry a UTF-8 BOM.");
   assert.match(script, /Add-Type -AssemblyName System\.IO\.Compression/);
   assert.match(script, /\[IO\.File\]::Open\(\$ArchivePath, \[IO\.FileMode\]::Open, \[IO\.FileAccess\]::Read, \[IO\.FileShare\]::Read\)/);
   assert.match(script, /Get-StreamSha512 \$archiveStream/);

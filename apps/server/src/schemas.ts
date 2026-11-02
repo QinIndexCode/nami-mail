@@ -8,6 +8,7 @@
 import { z } from "zod";
 import {
   agentMemoryKindSchema,
+  agentProviderKindSchema,
   appSettingsPatchSchema,
   modelInputModalitiesSchema,
 } from "@nami/agent-contracts";
@@ -213,7 +214,9 @@ export const settingsPatchSchema = appSettingsPatchSchema
 
 export const agentProviderSchema = z.object({
   label: z.string().trim().min(1).max(128),
-  kind: z.enum(["openai-compatible", "ollama", "anthropic", "gemini", "openai-responses"]),
+  // Single-sourced with the contracts enum: adding a kind there must be the
+  // only change needed to accept it on the wire.
+  kind: agentProviderKindSchema,
   endpoint: z.string().trim().min(1).max(2_048),
   model: z.string().trim().min(1).max(256),
   embeddingModel: z.string().trim().max(256).optional(),

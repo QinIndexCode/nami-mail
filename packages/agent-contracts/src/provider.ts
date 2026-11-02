@@ -140,10 +140,80 @@ export const agentProviderKinds = [
   "anthropic",
   "gemini",
   "openai-responses",
+  "system-one",
 ] as const;
 
 export const agentProviderKindSchema = z.enum(agentProviderKinds);
 export type AgentProviderKind = z.infer<typeof agentProviderKindSchema>;
+
+/** Narrows a stored kind string to a kind this build knows how to write. */
+export function isAgentProviderKind(value: string): value is AgentProviderKind {
+  return (agentProviderKinds as readonly string[]).includes(value);
+}
+
+/**
+ * What a configured provider is allowed to serve. `chat` covers every
+ * text-generating call site (assistant turns, translation, polish, retrieval
+ * expansion, auto-reply drafting); `decision` covers typed decisions that
+ * return a label or probability instead of prose. A provider can hold both.
+ * Only `chat` providers may be the global default model.
+ */
+export const agentProviderRoles = ["chat", "decision"] as const;
+export const agentProviderRoleSchema = z.enum(agentProviderRoles);
+export type AgentProviderRole = z.infer<typeof agentProviderRoleSchema>;
+
+// ---------------------------------------------------------------------------
+// Typed decisions
+// ---------------------------------------------------------------------------
+
+/**
+ * Question vocabulary for decision models. Unlike chat prompts these return
+ * labels or calibrated probabilities instead of prose:
+ * - `noul` — a boolean judgement ("null-or-not" style: is X the case?),
+ *   answered with a calibrated probability of "yes";
+ * - `choice` — pick one label from `criteria` (comma-separated options);
+ * - `score` — a 0–1 utility score.
+ */
+export const providerDecisionQuestionTypes = ["noul", "choice", "score"] as const;
+export const providerDecisionQuestionTypeSchema = z.enum(providerDecisionQuestionTypes);
+export type ProviderDecisionQuestionType = z.infer<typeof providerDecisionQuestionTypeSchema>;
+
+export const providerDecisionQuestionSchema = z.object({
+  type: providerDecisionQuestionTypeSchema,
+  instructions: z.string().trim().min(1).max(2_000),
+  /** For `choice`: the allowed labels. For others: extra grading guidance. */
+  criteria: z.string().trim().max(2_000).optional(),
+}).strict();
+
+export const providerDecisionRequestSchema = z.object({
+  requestId: requestIdSchema,
+  providerId: providerIdSchema,
+  model: z.string().trim().min(1).max(256),
+  /** The state under evaluation, e.g. the sanitized mail content to judge. */
+  state: z.string().min(1).max(2_000_000),
+  /** Question id → question. Implementations echo the ids back in `answers`. */
+  questions: z.record(providerIdSchema, providerDecisionQuestionSchema),
+}).strict();
+
+export const providerDecisionAnswerSchema = z.object({
+  type: providerDecisionQuestionTypeSchema,
+  /** `noul` answer; `probabilities` carries the calibrated side. */
+  noul: z.boolean().optional(),
+  /** `choice` answer: one of the labels offered in `criteria`. */
+  choice: z.string().trim().max(128).optional(),
+  /** `score` answer, normalized to 0–1. */
+  score: z.number().min(0).max(1).optional(),
+  /** Label → calibrated probability (for `noul`/`choice`). */
+  probabilities: z.record(z.string().min(1).max(128), z.number().min(0).max(1)).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+}).strict();
+
+export const providerDecisionResponseSchema = z.object({
+  model: z.string().trim().min(1).max(256),
+  /** Question id → answer. Ids not asked may be absent; unknown ids are ignored. */
+  answers: z.record(providerIdSchema, providerDecisionAnswerSchema),
+  usage: providerTokenUsageSchema.optional(),
+}).strict();
 
 /**
  * Non-secret provider details returned by the local Agent provider service
@@ -153,7 +223,16 @@ export type AgentProviderKind = z.infer<typeof agentProviderKindSchema>;
 export const agentProviderSummarySchema = z.object({
   id: z.string(),
   label: z.string(),
-  kind: agentProviderKindSchema,
+  /**
+   * The stored protocol kind as a plain string on purpose: a row written by a
+   * newer build must stay listable (and deletable) on an older one instead of
+   * failing every provider request. Write paths still validate against
+   * `agentProviderKindSchema`; `supported` reports whether this build can talk
+   * to the kind at all.
+   */
+  kind: z.string().min(1),
+  roles: z.array(agentProviderRoleSchema),
+  supported: z.boolean(),
   endpoint: z.string(),
   model: z.string(),
   /** Tolerated for older records; retrieval no longer uses embeddings. */
@@ -194,6 +273,10 @@ export type ProviderTokenUsage = z.infer<typeof providerTokenUsageSchema>;
 export type ProviderChatRequest = z.infer<typeof providerChatRequestSchema>;
 export type ProviderChatResponse = z.infer<typeof providerChatResponseSchema>;
 export type ProviderStreamEvent = z.infer<typeof providerStreamEventSchema>;
+export type ProviderDecisionRequest = z.infer<typeof providerDecisionRequestSchema>;
+export type ProviderDecisionResponse = z.infer<typeof providerDecisionResponseSchema>;
+export type ProviderDecisionAnswer = z.infer<typeof providerDecisionAnswerSchema>;
+export type ProviderDecisionQuestion = z.infer<typeof providerDecisionQuestionSchema>;
 export type ProviderHealth = z.infer<typeof providerHealthSchema>;
 export type AgentProviderSummary = z.infer<typeof agentProviderSummarySchema>;
 export type EmbeddingRequest = z.infer<typeof embeddingRequestSchema>;
@@ -206,11 +289,18 @@ export type ProviderCallOptions = {
 
 export interface LlmProvider {
   readonly id: string;
-  readonly kind: ProviderKind;
+  readonly kind: ProviderKind | AgentProviderKind;
   getCapabilities(options?: ProviderCallOptions): Promise<ProviderCapabilities>;
   healthCheck(options?: ProviderCallOptions): Promise<ProviderHealth>;
   completeChat?(request: ProviderChatRequest, options?: ProviderCallOptions): Promise<ProviderChatResponse>;
   streamChat?(request: ProviderChatRequest, options?: ProviderCallOptions): AsyncIterable<ProviderStreamEvent>;
+  /**
+   * Typed decision call for decision-role providers. A provider implementing
+   * this is consulted by call sites that want a label or probability (auto-reply
+   * worth-replying judgement); providers without it fall back to the chat
+   * prompt strategy of the call site.
+   */
+  decide?(request: ProviderDecisionRequest, options?: ProviderCallOptions): Promise<ProviderDecisionResponse>;
 }
 
 export interface EmbeddingProvider {

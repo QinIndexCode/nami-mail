@@ -157,17 +157,22 @@ describe("styles.css size ratchet", () => {
   // markdown 79 / 注释 3）按该格式展开后就是这个量级，没有额外装饰规则。
   // 下一轮 CSS 瘦身时应优先收回：归档清单与工作表滚动区可复用同一套
   // 「带边框的面板 + 列表行」外壳。
-  // 2026-10-24 指令菜单过渡的一次上调（18_173 → 18_194）：斜杠指令与 /@ 引用
-  // 菜单补上出现/消失动画——两条基类 animation（复用既有 agent-message-in
-  // keyframes，零新增帧定义）与一条 .closing 退场规则（transition + opacity +
-  // transform + pointer-events + animation:none，共 10 行，全部在
-  // features/agent.css）。实测聚合 18_182 行，阈值取实测 +12 行缓冲。
   // 2026-10-25 磨砂一致性的一次上调（18_194 → 18_214）：背景图模式下确认卡与
   // 用户气泡此前是实底板卡、与周围的磨砂控件（composer/搜索/模式切换）材质
   // 不一致；base/layout.css 的 background-active 块补两条磨砂规则（各 4 属性 +
   // 注释 4 行）。实测聚合 18_202 行，阈值取实测 +12 行缓冲。
+  // 2026-10-25 WYSIWYG 收缩（18_214 → 18_194）：壁纸路径撤掉全部自适应遮罩
+  // （全局/区域两层纱、暗调图专属模糊与重纱），密度由强度滑杆直出（明暗同
+  // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
+  // 合 18_182 行，阈值取实测 +12 行缓冲。
+  // 2026-10-30 有记录的一次上调（18_575 → 18_589）：修复「设置-模型」校验警告与
+  // 发送状态"超过计划时间"行的图标-文本对齐——两处容器补 flex + gap（+4）；连同本
+  // 分支未提交的模型角色徽标 .settings-model-badge.role 与对话框判定来源行
+  // .auto-reply-decision-attribution（+7）、上一轮外部连接页遗留增量（+3），实测聚
+  // 合 18_577 行，阈值取实测 +12 缓冲。下轮 CSS 瘦身时应优先收回。
   const FROZEN_ROOT_MAX_LINES = 40;
-  const FROZEN_AGGREGATED_MAX_LINES = 18_214;
+  // 2026-10-28 邮件撰写器 Markdown 模式、格式化工具栏与实时/分屏预览（18_279 → 18_575）：新增 Markdown 工具栏、视图模式切换、最大化分屏渲染容器、富文本预览排版（标题/引用/代码/表格）与字数统计（实测 18_563 行 + 12 缓冲）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_589;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

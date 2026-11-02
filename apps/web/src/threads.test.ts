@@ -136,6 +136,71 @@ describe("mergeThreadSnapshot", () => {
     const result = mergeThreadSnapshot(previous, snapshot("x", ["x", "y"]));
     expect(result.members.map((member) => member.id).sort()).toEqual(["x", "y"]);
   });
+
+  it("preserves loaded htmlBody and textBody when next member has undefined bodies", () => {
+    const previous = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: "<p>Loaded HTML</p>", textBody: "Loaded text" }),
+        message({ id: "b", htmlBody: "<p>Member B</p>", textBody: "Text B" }),
+      ],
+    };
+    const next = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: undefined, textBody: "Preview a" }),
+        message({ id: "c", htmlBody: undefined, textBody: "Preview c" }),
+      ],
+    };
+    const result = mergeThreadSnapshot(previous, next);
+    const memberA = result.members.find((m) => m.id === "a");
+    expect(memberA?.htmlBody).toBe("<p>Loaded HTML</p>");
+    expect(memberA?.textBody).toBe("Loaded text");
+
+    const memberB = result.members.find((m) => m.id === "b");
+    expect(memberB?.htmlBody).toBe("<p>Member B</p>");
+
+    const memberC = result.members.find((m) => m.id === "c");
+    expect(memberC?.htmlBody).toBeUndefined();
+    expect(memberC?.textBody).toBe("Preview c");
+  });
+
+  it("preserves empty string htmlBody from previous member", () => {
+    const previous = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: "", textBody: "" }),
+      ],
+    };
+    const next = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: undefined, textBody: "preview" }),
+      ],
+    };
+    const result = mergeThreadSnapshot(previous, next);
+    const memberA = result.members.find((m) => m.id === "a");
+    expect(memberA?.htmlBody).toBe("");
+  });
+
+  it("lets next member body win if next member explicitly provides htmlBody", () => {
+    const previous = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: "<p>Old</p>", textBody: "Old" }),
+      ],
+    };
+    const next = {
+      anchorId: "a",
+      members: [
+        message({ id: "a", htmlBody: "<p>New</p>", textBody: "New" }),
+      ],
+    };
+    const result = mergeThreadSnapshot(previous, next);
+    const memberA = result.members.find((m) => m.id === "a");
+    expect(memberA?.htmlBody).toBe("<p>New</p>");
+    expect(memberA?.textBody).toBe("New");
+  });
 });
 
 describe("one message stored in two folders", () => {

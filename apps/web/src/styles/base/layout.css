@@ -70,20 +70,10 @@ animation:none
 --canvas:var(--bg-canvas-tint);
 --bg-panel-opacity:15%
 }
-/* Single uniform scrim over the background art. Panels themselves are
-   transparent (see below), so the backdrop never changes between the mail
-   and Agent workspaces — fading a panel only fades its content. The
-   middle display region carries a thin accent scrim on top so the
-   sidebars and tool rail read as transparent edges around a soft band. */
-.workspace-canvas.background-active::before
-{
-content:"";
-background:color-mix(in srgb, var(--panel-solid) var(--scrim-global), transparent);
-z-index:1;
-pointer-events:none;
-position:absolute;
-inset:0
-}
+/* No scrim layers over the wallpaper: the intensity slider is the single
+   honest control ("what you see is what you get"), identical in both themes.
+   The frame tint and vignette stay — they are window chrome, not readability
+   compensations. */
 .workspace-background::after
 {
 content:"";
@@ -100,17 +90,10 @@ position:relative
 {
 background:color-mix(in srgb, var(--frame) 48%, transparent)
 }
-/* Replaces (never adds to) the base glass: backdrop-filter is one property, so
-   the wallpaper mode has always dropped the 28px blur and kept only the
-   saturation shift. Same semantics on the ::before layer. */
 .workspace-canvas.background-active .app-frame:not(.desktop-app)::before
 {
 -webkit-backdrop-filter:saturate(108%);
 backdrop-filter:saturate(108%)
-}
-.workspace-canvas.background-active .mail-workspace
-{
-background:color-mix(in srgb, var(--panel-solid) var(--scrim-region), transparent)
 }
 /* Controls adapt to the art: frosted glass — a translucent tint over a
    strong blur — instead of solid theme surfaces, so buttons and inputs

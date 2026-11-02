@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import {
+  isAgentProviderKind,
   modelInputModalitiesSchema,
   providerHealthSchema,
   type AgentProviderKind,
+  type AgentProviderRole,
   type AgentProviderSummary,
   type LlmProvider,
   type ModelInputModalities,
@@ -15,6 +17,7 @@ import { AnthropicMessagesProvider } from "./anthropic-provider.js";
 import { GeminiProvider } from "./gemini-provider.js";
 import { OpenAiCompatibleProvider } from "./openai-compatible-provider.js";
 import { OpenAiResponsesProvider } from "./openai-responses-provider.js";
+import { SystemOneProvider } from "./system-one-provider.js";
 import { AgentServiceError, now, requiredText } from "./agent-shared.js";
 
 export const providerConfigurationVersion = 1;
@@ -26,6 +29,30 @@ export const defaultModalities: ModelInputModalities = {
   audio: false,
   pdf: false,
 };
+
+/**
+ * What each transport can serve. Kept next to the union it mirrors so the two
+ * cannot drift silently, and deliberately a plain record so a kind this build
+ * does not know (a row from a newer build) simply resolves to no roles instead
+ * of throwing on every provider request.
+ */
+const rolesByKind: Record<string, readonly AgentProviderRole[]> = {
+  "openai-compatible": ["chat"],
+  "openai-responses": ["chat"],
+  "anthropic": ["chat"],
+  "gemini": ["chat"],
+  "ollama": ["chat"],
+  "system-one": ["decision"],
+};
+
+export function providerRolesForKind(kind: string): AgentProviderRole[] {
+  return [...(rolesByKind[kind] ?? [])];
+}
+
+/** Whether this build has an adapter for the kind at all. */
+export function providerKindSupported(kind: string): boolean {
+  return isAgentProviderKind(kind);
+}
 
 // The provider summary shape is single-sourced in @nami/agent-contracts
 // (the web consumes the same type); these re-exports keep the historical
@@ -57,14 +84,18 @@ export type ProviderConfiguration = {
   version: typeof providerConfigurationVersion;
   id: string;
   label: string;
-  kind: AgentProviderKind;
+  /**
+   * Stored protocol kind. Held as a string, not the write-side union, so a row
+   * written by a newer build can still be decrypted, listed and deleted here.
+   */
+  kind: string;
   endpoint: string;
   model: string;
   embeddingModel?: string;
   apiKey?: string;
   timeoutMs: number;
   allowCloudMailContent: boolean;
-  streaming: true;
+  streaming: boolean;
   modalities?: ModelInputModalities;
   contextWindowTokens?: number;
   maxOutputTokens?: number;
@@ -123,12 +154,18 @@ function validateMaxOutput(value: number): number {
 export function providerSummary(configuration: ProviderConfiguration): AgentProviderSummary {
   const cloud = normalizeEndpoint(configuration.endpoint).cloud;
   const apiKeyConfigured = Boolean(configuration.apiKey);
-  const configured = Boolean(configuration.model && configuration.endpoint && (!cloud || apiKeyConfigured));
+  const supported = providerKindSupported(configuration.kind);
+  // A kind this build cannot speak to is never "configured": every call site
+  // gates on this flag, and a silent chat request to a decision endpoint is
+  // exactly the failure this prevents.
+  const configured = supported && Boolean(configuration.model && configuration.endpoint && (!cloud || apiKeyConfigured));
   const modalities = configuration.modalities ?? defaultModalities;
   return {
     id: configuration.id,
     label: configuration.label,
     kind: configuration.kind,
+    roles: providerRolesForKind(configuration.kind),
+    supported,
     endpoint: configuration.endpoint,
     model: configuration.model,
     ...(configuration.embeddingModel ? { embeddingModel: configuration.embeddingModel } : {}),
@@ -154,18 +191,19 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
   if (
     input.version !== providerConfigurationVersion
     || input.id !== id
-    || (input.kind !== "openai-compatible"
-      && input.kind !== "ollama"
-      && input.kind !== "anthropic"
-      && input.kind !== "gemini"
-      && input.kind !== "openai-responses")
+    // Only the shape is checked here. Which kinds exist is a write-side
+    // concern (route schema + union); reading must tolerate a kind added by a
+    // newer build so the row stays listable and deletable instead of taking
+    // every other provider down with it.
+    || typeof input.kind !== "string"
+    || !input.kind.trim()
     || typeof input.label !== "string"
     || typeof input.endpoint !== "string"
     || typeof input.model !== "string"
     || (input.embeddingModel !== undefined && typeof input.embeddingModel !== "string")
     || typeof input.timeoutMs !== "number"
     || typeof input.allowCloudMailContent !== "boolean"
-    || input.streaming !== true
+    || typeof input.streaming !== "boolean"
     || (input.apiKey !== undefined && typeof input.apiKey !== "string")
     || (input.contextWindowTokens !== undefined && (typeof input.contextWindowTokens !== "number" || !Number.isInteger(input.contextWindowTokens)))
     || (input.maxOutputTokens !== undefined && (typeof input.maxOutputTokens !== "number" || !Number.isInteger(input.maxOutputTokens)))
@@ -180,14 +218,14 @@ function parseProviderConfiguration(value: unknown, id: string): ProviderConfigu
     version: providerConfigurationVersion,
     id,
     label: requiredText(input.label, "模型名称", 128),
-    kind: input.kind,
+    kind: input.kind.trim(),
     endpoint,
-    model: requiredText(input.model, "模型名称", 256),
+    model: requiredText(input.model, "模型标识", 256),
     ...(input.embeddingModel?.trim() ? { embeddingModel: input.embeddingModel.trim() } : {}),
     ...(input.apiKey?.trim() ? { apiKey: input.apiKey.trim() } : {}),
     timeoutMs: validateTimeout(input.timeoutMs),
     allowCloudMailContent: input.allowCloudMailContent,
-    streaming: true,
+    streaming: input.streaming,
     modalities,
     ...(input.contextWindowTokens !== undefined ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) } : {}),
     ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: validateMaxOutput(input.maxOutputTokens) } : {}),
@@ -291,7 +329,20 @@ class AgentProviderStore {
       return providerSummary(parseProviderConfiguration(this.decrypt(row.provider_id, row.encrypted_configuration), row.provider_id));
     });
     const configuredIds = new Set(items.map((item) => item.id));
-    const defaultProviderId = this.defaultConfiguration().defaultProviderId;
+    const storedDefaultId = this.defaultConfiguration().defaultProviderId;
+    // Report a default only when it still exists *and* can serve chat; a stored
+    // pointer at a decision-only provider would otherwise be handed to every
+    // text call site as if it were usable.
+    const defaultChatCapable = storedDefaultId !== null
+      && items.some((item) => item.id === storedDefaultId && item.roles.includes("chat"));
+    if (storedDefaultId !== null && !defaultChatCapable) {
+      // Heal the stale pointer instead of only hiding it: the pointer is what
+      // `save()` consults for the auto-claim, so a hidden-but-alive pointer at
+      // a decision-only row would keep the default slot vacant forever. The
+      // write is idempotent and runs once — afterwards the pointer is null.
+      this.setDefault(null);
+    }
+    const defaultProviderId = defaultChatCapable ? storedDefaultId : null;
     return { items, defaultProviderId: defaultProviderId && configuredIds.has(defaultProviderId) ? defaultProviderId : null };
   }
 
@@ -316,7 +367,7 @@ class AgentProviderStore {
       ...(apiKey ? { apiKey } : input.clearApiKey ? {} : existing?.apiKey ? { apiKey: existing.apiKey } : {}),
       timeoutMs: validateTimeout(input.timeoutMs),
       allowCloudMailContent: endpoint.cloud && input.kind !== "ollama" && input.allowCloudMailContent,
-      streaming: true,
+      streaming: providerRolesForKind(input.kind).includes("chat"),
       modalities: input.modalities ?? existing?.modalities ?? { ...defaultModalities },
       ...(input.contextWindowTokens !== undefined
         ? { contextWindowTokens: validateContextWindow(input.contextWindowTokens) }
@@ -330,6 +381,13 @@ class AgentProviderStore {
           : {}),
     };
     const timestamp = now();
+    // The default model is what every chat-shaped call site falls back to
+    // (assistant, translation, polish, retrieval expansion, reply drafting), so
+    // a provider that cannot generate text must never hold that slot.
+    const chatCapable = providerRolesForKind(configuration.kind).includes("chat");
+    if (input.makeDefault && !chatCapable) {
+      throw new AgentServiceError("INVALID_ARGUMENT", "该模型类型不能设为默认模型。", 400, false);
+    }
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO agent_provider_configurations (provider_id, encrypted_configuration, crypto_version, created_at, updated_at)
@@ -340,7 +398,8 @@ class AgentProviderStore {
           updated_at = excluded.updated_at
       `).run(id, this.encrypt(id, configuration), timestamp, timestamp);
       const currentDefault = this.defaultConfiguration().defaultProviderId;
-      if (input.makeDefault || !currentDefault) this.setDefault(id);
+      if (input.makeDefault || (!currentDefault && chatCapable)) this.setDefault(id);
+      else if (currentDefault === id && !chatCapable) this.setDefault(null);
     })();
     return providerSummary(configuration);
   }
@@ -404,12 +463,25 @@ export class AgentProviderService {
   }
 
   async check(id: string, signal?: AbortSignal): Promise<AgentProviderSummary> {
-    const configuration = this.requireProvider(id);
+    const providerId = requiredText(id, "模型", 128);
+    const configuration = this.store.get(providerId);
+    if (!configuration) throw new AgentServiceError("NOT_FOUND", "模型配置不存在。", 404);
+    // Adapter support is reported before the configured gate: "this build
+    // cannot speak to that kind" is a different answer from "your settings are
+    // incomplete", and the generic message would send the user hunting through
+    // fields that are actually fine.
+    const adapter = this.adapterFor(configuration);
+    if (!adapter) {
+      throw new AgentServiceError("NOT_SUPPORTED", "当前版本不支持该模型接入类型。", 422, false);
+    }
+    if (!providerSummary(configuration).configured) {
+      throw new AgentServiceError("PROVIDER_AUTH_FAILED", "模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    }
     const fingerprint = providerConnectionFingerprint(configuration);
     // A connection probe only needs to confirm the service answers; cap the
     // wait like the MCP check does so a dead endpoint reports back quickly
     // instead of riding out the configured (up to 2 min) request timeout.
-    const health = await this.providerForConfiguration(configuration).healthCheck({ signal, timeoutMs: Math.min(configuration.timeoutMs, 15_000) });
+    const health = await adapter.healthCheck({ signal, timeoutMs: Math.min(configuration.timeoutMs, 15_000) });
     if (signal?.aborted) throw new AgentServiceError("CANCELLED", "模型连接检查已取消。", 499, true);
     return this.store.saveHealth(configuration.id, fingerprint, health);
   }
@@ -417,15 +489,14 @@ export class AgentProviderService {
   remove(id: string): boolean {
     return this.store.remove(id);
   }
-  private resolveProvider(id: string): LlmProvider | undefined {
-    const configuration = this.store.get(id);
-    if (!configuration) return undefined;
-    const summary = providerSummary(configuration);
-    if (!summary.configured) return undefined;
-    return this.providerForConfiguration(configuration);
-  }
 
-  private providerForConfiguration(configuration: ProviderConfiguration): LlmProvider {
+  /**
+   * The one place a configuration becomes a transport. Returns `undefined` for
+   * a kind this build has no adapter for — the previous fallback handed such
+   * rows to the OpenAI-compatible client, which turned an unsupported provider
+   * into a stream of failed chat requests against the wrong endpoint.
+   */
+  adapterFor(configuration: ProviderConfiguration): LlmProvider | undefined {
     const options = {
       id: configuration.id,
       endpoint: configuration.endpoint,
@@ -435,16 +506,10 @@ export class AgentProviderService {
     if (configuration.kind === "anthropic") return new AnthropicMessagesProvider(options);
     if (configuration.kind === "gemini") return new GeminiProvider(options);
     if (configuration.kind === "openai-responses") return new OpenAiResponsesProvider(options);
-    return new OpenAiCompatibleProvider({ ...options, kind: configuration.kind });
-  }
-
-  private requireProvider(id: string): ProviderConfiguration {
-    const providerId = requiredText(id, "模型", 128);
-    const configuration = this.store.get(providerId);
-    if (!configuration) throw new AgentServiceError("NOT_FOUND", "选择的模型配置不存在。", 404);
-    if (!providerSummary(configuration).configured) {
-      throw new AgentServiceError("PROVIDER_AUTH_FAILED", "模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    if (configuration.kind === "openai-compatible" || configuration.kind === "ollama") {
+      return new OpenAiCompatibleProvider({ ...options, kind: configuration.kind });
     }
-    return configuration;
+    if (configuration.kind === "system-one") return new SystemOneProvider(options);
+    return undefined;
   }
 }

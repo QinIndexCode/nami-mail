@@ -74,7 +74,7 @@ Every `rag.*` operation, attachment export, `agent.chat`, and `agent.run` are ou
 - The Broker uses a named pipe restricted to the current Windows user SID. CLI and MCP reach the running host only through that pipe.
 - Each client has an independent protected identity, host-identity binding, signature, and monotonic counter. Replays, identity mismatches, and revoked pairings are rejected.
 - The Broker constructs caller identity, scopes, and account scope from the pairing record. It does not trust CLI or MCP permissions, account scope, database paths, or tokens.
-- The local Fastify service serves only the desktop renderer. Its dynamic loopback port and `x-nami-api-token` are not third-party credentials. See the [Local Mail API contract](LOCAL-API.en.md).
+- The local Fastify service serves only the desktop renderer. Its dynamic loopback port and `x-nami-api-token` are not third-party credentials. See the [Mail body translation API](TRANSLATION-API.en.md).
 - During an update, the Broker stops accepting new work and waits for accepted work to finish. Handle `UPDATE_IN_PROGRESS` and make a new request after recovery; never replay a signed frame.
 - Any paired client may call `host.shutdown` at any permission level. It is a Broker-internal control command, not an External Mail v1 tool: it replies `{ "status": "stopping" }` and asks the host to stop, never passes through the external tool allow-list or the mail bridge, and grants no mail access by itself.
 

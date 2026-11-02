@@ -53,6 +53,7 @@ import {
 } from "./settings/settings-categories";
 import SettingsAgentSection from "./settings/SettingsAgentSection";
 import SettingsModelsSection from "./settings/SettingsModelsSection";
+import SettingsToolsSection from "./settings/SettingsToolsSection";
 import SettingsConnectionsSection from "./settings/SettingsConnectionsSection";
 import SettingsTranslationSection from "./settings/SettingsTranslationSection";
 import SettingsAppearanceSection from "./settings/SettingsAppearanceSection";
@@ -1012,7 +1013,6 @@ export default function SettingsModal({
     ),
     models: (
       <SettingsModelsSection
-        view="providers"
         t={t}
         demoMode={demoMode}
         initialProviders={agentProviderSeed?.providers ?? []}
@@ -1024,13 +1024,11 @@ export default function SettingsModal({
       />
     ),
     mcp: (
-      <SettingsModelsSection
-        view="mcp"
+      <SettingsToolsSection
         t={t}
         demoMode={demoMode}
-        initialProviders={agentProviderSeed?.providers ?? []}
-        initialDefaultProviderId={agentProviderSeed?.defaultProviderId ?? null}
-        onProvidersChanged={(providers) => onAgentProviderListChanged?.(providers)}
+        currentSettings={currentSettings}
+        onSelectCategory={selectCategory}
         onOverlayOpenChange={setModelsOverlayOpen}
         onBusyChange={setModelsBusy}
         overlayHostRef={settingsBackdrop}

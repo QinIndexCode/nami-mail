@@ -140,6 +140,11 @@ describe("settings-search", () => {
     const r1 = searchSettings("stdio", mockT, true);
     expect(r1![0].categoryId).toBe("mcp");
 
+    // Built-in tool catalog shares the page with the MCP extensions tab
+    const builtin = searchSettings("内置工具", mockT, true);
+    expect(builtin![0].categoryId).toBe("mcp");
+    expect(builtin![0].matchedItems.some((it) => it.id === "mcp-tools")).toBe(true);
+
     // External IDE connection: Cursor / Claude / namimail
     const r2 = searchSettings("Cursor", mockT, true);
     expect(r2![0].categoryId).toBe("connections");
@@ -147,6 +152,13 @@ describe("settings-search", () => {
     // CLI connection: namimail pair
     const r3 = searchSettings("namimail pair", mockT, true);
     expect(r3![0].categoryId).toBe("connections");
+  });
+
+  it("points the agent-tools result at the heading the section actually renders", () => {
+    // `models-settings` belongs to the language-model panel; the tools page was
+    // split out, so a stale anchor would silently scroll nowhere.
+    const entry = SETTINGS_SEARCH_INDEX.find((item) => item.id === "mcp-tools");
+    expect(entry?.targetId).toBe("tools-settings-title");
   });
 
   it("performs semantic matching for AI Assistant features", () => {

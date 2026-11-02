@@ -22,29 +22,16 @@ import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
 import { applyAutoReplyScope, renderAutoReplyTemplate, sanitizeLinksForScreening, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
-import { type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
+import { type AutoReplyDecisionAttribution, type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
+import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./auto-reply-decision.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;
 const MESSAGES_PER_PASS = 40;
 
-export type AutoReplyEvaluationInput = {
-  accountEmail: string;
-  fromName: string;
-  fromAddress: string;
-  subject: string;
-  textBody: string;
-  snippet: string;
-  sensitiveKeywords: readonly string[];
-  memoryContext: string;
-  decisionProviderId?: string | null;
-  draftProviderId?: string | null;
-};
-
-export type AutoReplyEvaluationResult = {
-  replyValue: "high" | "low";
-  sensitive: boolean;
-  replyText?: string;
-};
+// The evaluation wire shapes and the decision strategies live in
+// auto-reply-decision.ts; re-exported here because the engine's `evaluate`
+// seam and its tests speak this vocabulary.
+export type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./auto-reply-decision.js";
 
 export type AutoReplyEngineOptions = {
   db: DatabaseHandle;
@@ -408,6 +395,7 @@ export class AutoReplyEngine {
           memoryContext,
           decisionProviderId: config.decisionProviderId,
           draftProviderId: config.draftProviderId,
+          decisionThreshold: config.decisionThreshold,
         });
       } catch (error) {
         serverLog.warn({ messageId }, "Auto-reply evaluation failed", error);
@@ -428,6 +416,7 @@ export class AutoReplyEngine {
           fromAddress: payload.fromAddress,
           fromName: payload.fromName,
           subject: payload.subject,
+          ...(evaluation.decision ? { decision: evaluation.decision } : {}),
         });
         return;
       }
@@ -739,7 +728,7 @@ export class AutoReplyEngine {
     messageId: string,
     threadKey: string,
     reason: AutoReplyDecisionReason,
-    input: { fromAddress?: string; fromName?: string; subject?: string; detail?: string },
+    input: { fromAddress?: string; fromName?: string; subject?: string; detail?: string; decision?: AutoReplyDecisionAttribution },
   ): void {
     if (!this.options.decisions) return;
     try {
@@ -752,6 +741,7 @@ export class AutoReplyEngine {
         fromName: input.fromName,
         subject: input.subject,
         detail: input.detail,
+        ...(input.decision ? { decision: input.decision } : {}),
       });
     } catch (error) {
       serverLog.warn({ messageId }, "Auto-reply decision record failed", error);

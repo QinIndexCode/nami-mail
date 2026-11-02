@@ -35,8 +35,24 @@ export type AutoReplyDecisionRecord = {
   fromName: string;
   subject: string;
   detail: string;
+  /**
+   * Decision-stage attribution, present on records the evaluation stage wrote
+   * (low-value skips). Encrypted-payload only, so no schema or CHECK change;
+   * older rows and non-evaluation reasons omit it.
+   */
+  decision?: AutoReplyDecisionAttribution;
   occurredAt: string;
   createdAt: string;
+};
+
+/** Which model, with which strategy, produced the worth-replying judgement. */
+export type AutoReplyDecisionAttribution = {
+  providerId: string;
+  /** `typed` = the provider's native `decide()` call; `chat-prompt` = JSON over chat. */
+  strategy: "typed" | "chat-prompt";
+  /** Calibrated worth-replying probability, when the strategy produced one. */
+  score?: number;
+  confidence?: number;
 };
 
 export type AutoReplyDecisionCreateInput = {
@@ -48,6 +64,7 @@ export type AutoReplyDecisionCreateInput = {
   fromName?: string;
   subject?: string;
   detail?: string;
+  decision?: AutoReplyDecisionAttribution;
   occurredAt?: string;
 };
 
@@ -74,6 +91,20 @@ type DecisionRow = {
 };
 
 const DECISION_REASON_SET = new Set<string>(autoReplyDecisionReasons);
+
+/** Tolerant read of the attribution block: absent, malformed, or empty → undefined. */
+function asAttribution(value: unknown): AutoReplyDecisionAttribution | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.providerId !== "string" || !entry.providerId) return undefined;
+  if (entry.strategy !== "typed" && entry.strategy !== "chat-prompt") return undefined;
+  return {
+    providerId: entry.providerId,
+    strategy: entry.strategy,
+    ...(typeof entry.score === "number" && Number.isFinite(entry.score) ? { score: entry.score } : {}),
+    ...(typeof entry.confidence === "number" && Number.isFinite(entry.confidence) ? { confidence: entry.confidence } : {}),
+  };
+}
 
 export const autoReplyDecisionReasonText: Record<AutoReplyDecisionReason, string> = {
   "screening": "被离线规则拦截（垃圾/营销/自动消息等）",
@@ -128,6 +159,7 @@ export class EncryptedAutoReplyDecisionStore {
   private decode(row: DecisionRow): AutoReplyDecisionRecord {
     if (!DECISION_REASON_SET.has(row.reason)) throw new Error("Auto-reply decision reason is inconsistent.");
     const parsed = decryptDecision(this.masterKey, row.id, row.encrypted_payload) as Record<string, unknown>;
+    const attribution = asAttribution(parsed.decision);
     const record: AutoReplyDecisionRecord = {
       id: row.id,
       messageId: String(parsed.messageId ?? row.message_id),
@@ -138,6 +170,7 @@ export class EncryptedAutoReplyDecisionStore {
       fromName: parsed.fromName === undefined ? "" : String(parsed.fromName),
       subject: parsed.subject === undefined ? "" : String(parsed.subject),
       detail: parsed.detail === undefined ? "" : String(parsed.detail),
+      ...(attribution ? { decision: attribution } : {}),
       occurredAt: String(parsed.occurredAt ?? row.occurred_at),
       createdAt: String(parsed.createdAt ?? row.created_at),
     };
@@ -158,6 +191,7 @@ export class EncryptedAutoReplyDecisionStore {
       fromName: input.fromName ?? "",
       subject: input.subject ?? "",
       detail: input.detail ?? "",
+      ...(input.decision ? { decision: input.decision } : {}),
       occurredAt: input.occurredAt ?? now,
       createdAt: now,
     };

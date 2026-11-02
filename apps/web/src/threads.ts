@@ -106,10 +106,22 @@ export function mergeThreadSnapshot(previous: ThreadSnapshot | null, next: Threa
   const nextIds = new Set(next.members.map((message) => message.id));
   const sameConversation = previous.members.some((message) => nextIds.has(message.id));
   if (!sameConversation) return next;
+  const previousById = new Map(previous.members.map((message) => [message.id, message]));
   const known = new Set(next.members.map((message) => message.id));
   return {
     anchorId: next.anchorId,
-    members: [...next.members, ...previous.members.filter((message) => !known.has(message.id))],
+    members: [
+      ...next.members.map((nextMember) => {
+        const prev = previousById.get(nextMember.id);
+        if (!prev) return nextMember;
+        return {
+          ...nextMember,
+          htmlBody: nextMember.htmlBody !== undefined ? nextMember.htmlBody : prev.htmlBody,
+          textBody: nextMember.htmlBody !== undefined ? nextMember.textBody : (prev.textBody ?? nextMember.textBody),
+        };
+      }),
+      ...previous.members.filter((message) => !known.has(message.id)),
+    ],
   };
 }
 

@@ -673,6 +673,7 @@ export const api = {
     cc?: string[];
     subject: string;
     text: string;
+    html?: string;
     inReplyTo?: string;
     references?: string[];
     idempotencyKey?: string;

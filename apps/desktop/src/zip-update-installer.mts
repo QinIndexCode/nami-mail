@@ -49,14 +49,6 @@ function powershellPath(): string {
   );
 }
 
-function comspecPath(): string {
-  return process.env.COMSPEC?.trim() || path.join(
-    process.env.SystemRoot?.trim() || "C:\\Windows",
-    "System32",
-    "cmd.exe",
-  );
-}
-
 function normalizeSigner(value: AuthenticodeResult): TrustedWindowsSigner | undefined {
   const publisher = typeof value.SimpleName === "string" && value.SimpleName.trim()
     ? value.SimpleName.trim()
@@ -145,7 +137,10 @@ export function createZipUpdateInstallerScript(): string {
   // extraction and process creation. Windows path-based process creation still
   // cannot make an absolute guarantee against a same-user attacker that races
   // a rename after the final check.
-  return String.raw`param(
+  // Windows PowerShell 5.1 reads BOM-less files as the system ANSI codepage —
+  // on a non-English (e.g. zh-CN) machine that can lead to multibyte parsing
+  // corruptions. The UTF-8 BOM makes the encoding explicit and reliable.
+  return "\uFEFF" + String.raw`param(
   [int]$ParentProcessId,
   [string]$ArchivePath,
   [Int64]$ArchiveSize,
@@ -389,33 +384,23 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
       "-ResultPath",
       resultPath,
     ];
-    // Launch via Windows shell (cmd.exe /d /s /c start "") instead of direct Node
-    // `detached: true` on powershell.exe. In Node.js on Windows, detached spawns
-    // pass DETACHED_PROCESS (0x00000008) to CreateProcessW, which causes CUI
-    // subsystem applications like powershell.exe with ignored stdio to abort
-    // host initialization and exit silently with code 0 before running the script.
-    // The `start ""` shell command launches the PowerShell process with its own
-    // independent console session, detached from Node and surviving parent exit.
-    //
-    // Node only quotes spawn arguments that contain whitespace, so a token such
-    // as "C:\Users\A&B\...\install.ps1" used to reach cmd.exe unquoted and the
-    // bare "&" split the command there: the launcher exited 1 and the helper
-    // never started (auto-updates stayed unavailable for such users). The
-    // command line is therefore assembled explicitly with every token quoted —
-    // Windows paths cannot contain double quotes, so plain quoting disarms the
-    // cmd metacharacters — and handed over verbatim.
-    const commandLine = [
-      "start",
-      '""',
-      `"${powershellPath()}"`,
-      ...psArguments.map((argument) => `"${argument}"`),
-    ].join(" ");
-    const child = spawn(comspecPath(), ["/d", "/s", "/c", commandLine], {
+    // Spawn powershell.exe directly as a hidden child — no cmd.exe, no `start`.
+    // The earlier cmd/start indirection existed to dodge Node issue #51018
+    // (detached spawns pass DETACHED_PROCESS, which aborts CUI host init), but
+    // `start` allocates a fresh console for the child, and that console flashes
+    // on screen during every update. A plain child with windowsHide gets
+    // CREATE_NO_WINDOW: fully hidden, no flash. The child survives this
+    // process's exit (Windows never terminates children on parent exit), and
+    // without cmd in the chain there is no shell to misparse metacharacters —
+    // a path like C:\Users\A&B\... reaches PowerShell intact.
+    const child = spawn(powershellPath(), psArguments, {
       env: minimalSpawnEnvironment(),
       stdio: "ignore",
       windowsHide: true,
-      windowsVerbatimArguments: true,
     });
+    // The helper now outlives the launcher (cmd used to exit immediately after
+    // `start`; without it the direct child keeps running), so success means
+    // "the process was created", not "the process exited".
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         child.kill();
@@ -425,13 +410,9 @@ export async function launchZipUpdateInstaller(plan: ZipUpdateInstallerPlan): Pr
         clearTimeout(timer);
         reject(error);
       });
-      child.once("exit", (code) => {
+      child.once("spawn", () => {
         clearTimeout(timer);
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Update helper launcher exited with code ${code ?? "null"}.`));
-        }
+        resolve();
       });
     });
     child.unref();

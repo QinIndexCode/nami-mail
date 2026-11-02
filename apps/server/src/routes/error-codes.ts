@@ -10,7 +10,7 @@
  * client could not branch on `code` without a per-route, per-case table.
  *
  * The vocabulary is deliberately a *routing-layer* module rather than a
- * contracts package. `docs/LOCAL-API` states that the loopback Fastify service
+ * contracts package. `docs/TRANSLATION-API` states that the loopback Fastify service
  * is a protected desktop-renderer protocol, not a third-party API, and it
  * promises only that callers "must branch on HTTP status and a stable `code`" —
  * it never enumerates the values. Putting the list in `@nami/agent-contracts`

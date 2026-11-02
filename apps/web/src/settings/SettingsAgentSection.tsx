@@ -18,6 +18,15 @@ import { agentAccessLevelOptions } from "./settings-utils";
 import { NumberStepper, Switch } from "./SettingsUIComponents";
 import ThemedSelect from "../ThemedSelect";
 
+/** Percentage presets for the auto-reply decision threshold (stored 0–1). */
+const AUTO_REPLY_THRESHOLD_OPTIONS: ReadonlyArray<{ value: string; percent: number }> = [
+  { value: "0.5", percent: 50 },
+  { value: "0.6", percent: 60 },
+  { value: "0.7", percent: 70 },
+  { value: "0.8", percent: 80 },
+  { value: "0.9", percent: 90 },
+];
+
 export type SettingsAgentSectionProps = {
   t: Translate;
   accounts: Account[];
@@ -87,7 +96,10 @@ export default function SettingsAgentSection({
       : t("settings.agent.autoReplyFollowDefault");
     const options: Array<{ value: string; label: string }> = [{ value: "", label: defaultLabel }];
     for (const p of providers) {
-      if (p.configured) {
+      // Decision and drafting are both text-adjacent call sites today; a
+      // decision-only row has no business in either select until the two
+      // option lists split (planned alongside typed decisions).
+      if (p.configured && p.roles.includes("chat")) {
         options.push({
           value: p.id,
           label: `${p.label} (${p.model})${p.id === defaultProviderId ? ` · ${t("agent.providers.defaultBadge")}` : ""}`,
@@ -303,6 +315,37 @@ export default function SettingsAgentSection({
                       >
                         {modelSelectOptions.map((opt) => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </ThemedSelect>
+                    </label>
+                    <label className="setting-select-row" htmlFor="agent-auto-reply-threshold">
+                      <span>
+                        <strong>
+                          {t("settings.agent.autoReplyDecisionThreshold")}
+                          <span
+                            className="field-help-icon"
+                            data-tooltip={t("settings.agent.autoReplyDecisionThresholdDesc")}
+                            aria-label={t("settings.agent.autoReplyDecisionThresholdDesc")}
+                            tabIndex={0}
+                          >
+                            <CircleHelp size={12} aria-hidden="true" />
+                          </span>
+                        </strong>
+                      </span>
+                      <ThemedSelect
+                        id="agent-auto-reply-threshold"
+                        value={String(currentSettings.autoReply.decisionThreshold)}
+                        aria-label={t("settings.agent.autoReplyDecisionThreshold")}
+                        disabled={controlsBusy}
+                        onValueChange={(value) => void applyOptimisticSettings(
+                          { autoReply: { ...currentSettings.autoReply, decisionThreshold: Number(value) } },
+                          null,
+                        )}
+                      >
+                        {AUTO_REPLY_THRESHOLD_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {t("settings.agent.autoReplyThresholdOption", { percent: option.percent })}
+                          </option>
                         ))}
                       </ThemedSelect>
                     </label>

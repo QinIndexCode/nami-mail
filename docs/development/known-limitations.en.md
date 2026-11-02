@@ -4,7 +4,7 @@
 
 This page collects Nami Mail's **verified capability boundaries and deliberate trade-offs** in one place. Each entry states the evidence (a code location or a document), what it affects, and how it is handled today or why we accept it. It is not a roadmap — no dates are promised — and it is not a bug list; report reproducible defects through GitHub Issues. Release notes, audits and troubleshooting all reference this page instead of restating the gaps.
 
-Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the relevant entry when the code changes.
+Verified against commit `eb46881` (2026-10-29, the current HEAD after v0.6.0). The 2026-11-02 pass re-checked the release-version claims, the e2e suite and the audit items in section 12 that v0.6.0 fixed; the remaining entries keep their 2026-10-22 verification record. Re-check the relevant entry when the code changes.
 
 ## At a glance
 
@@ -82,7 +82,7 @@ Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the
 
 ## 7. The end-to-end test coverage boundary
 
-**Current state.** The default `npm run test:e2e` runs four specs (`smoke`, `interactions`, `update-footer`, `geometry`), and all of them boot the `/?demo=1` demo shell — they **do not cross the real API or database**. The real chain (renderer → Vite proxy → Fastify ↔ SQLite, including DTOs, Host validation and payload decryption) is covered separately by `e2e/real-chain.spec.ts`, run through `npm run test:e2e:real` or `npm run test:e2e:all`.
+**Current state.** The default `npm run test:e2e` runs five specs (`smoke`, `interactions`, `update-footer`, `geometry`, `attachment-preview`), and all of them boot the `/?demo=1` demo shell — they **do not cross the real API or database**. The real chain (renderer → Vite proxy → Fastify ↔ SQLite, including DTOs, Host validation and payload decryption) is covered separately by `e2e/real-chain.spec.ts`, run through `npm run test:e2e:real` or `npm run test:e2e:all`.
 
 **Impact.** The mail main flow (real sync, search, send) has no browser-level coverage in the default end-to-end suite; a demo-shell regression and a real-chain regression are different evidence and cannot substitute for each other.
 
@@ -122,13 +122,10 @@ Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the
 
 ## 12. Items left unfixed by the 2026-10-22 audit
 
-**Current state.** The read-only audit of 2026-10-22 re-checked the implementation after the 2026-10 refactor. The items below were confirmed and deliberately left unfixed this round; fixes that did land are recorded in the CHANGELOG `[Unreleased]` section and are not repeated here.
+**Current state.** The read-only audit of 2026-10-22 re-checked the implementation after the 2026-10 refactor. The items below were confirmed and deliberately left unfixed this round; **items fixed in v0.6.0 are not listed here** (their fixes are recorded in the CHANGELOG `[0.6.0]` section).
 
 | Severity | Location | Current state and impact | Why it is not fixed yet |
 |---|---|---|---|
-| P2 | `apps/web/src/App.tsx:1316-1324` | `threadExtras` / `threadStripMembersRef` keep full-row snapshots of thread members outside the list. Marking a member that exists only in extras (an older mail opened from the thread strip) as unread succeeds on the API but leaves the interface unchanged, because `store.applySeen` cannot find that row. | This is a state-ownership change; the thread-member read path first has to move back into the single store. |
-| P2 | `apps/web/src/app/useAppRealtimeSync.ts:70-74`, `App.tsx:830-871` | `onTaskSettled` calls `reconcileFromEvents()` → `silentRefresh()` directly, bypassing `useCoalescedRefresh`'s "mark dirty only while the window is hidden" promise. The desktop sets `backgroundThrottling: false`, so minimising still runs four parallel requests. | The visibility priority of a task settlement versus a hidden window has to be decided first. |
-| P2 | `apps/desktop/src/main.mts:2068-2075,2081,2096-2102` | The `second-instance` entries use `void (async () => …)()` (or `.then`) with no `catch`. When boot has not finished, `localServer` is still `undefined`, so no window is created and only `focusWindow()` runs: the user sees nothing happen, and the error lands only in `runtime-log.jsonl`. | Changing the Electron startup lifecycle needs real-machine verification of first launch and crash-restart orderings. |
 | P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | `lastSseEventAt` is written before the frame is parsed, so a malformed frame counts as "the stream is alive" and suppresses one poll round (the interval is selectable at 30/60/180/300s). | Only cross-version combinations can trigger it, and manual reconnect is a fallback. |
 | P3 | `apps/server/src/mail.ts:87-104`, `calendar.ts:255`, `message-links.ts:44`, `settings.ts:34` | Zero-call exports: `testMailboxConnection` (an older subset of `testAccountConnection`), `clearAllCalendarEvents`, `localizeLinks` and `AGENT_ACCESS_LEVELS` have no caller in the repository. | Removing them requires confirming no external script depends on them; it belongs to a cleanup batch. |
 | Structural | `apps/web/src/app/mailStore.ts` | `total` is not derived from `messages`; it is a server snapshot plus five local ±1 sites (`nextMessageTotalForSnapshot`, `applyMove`, `restoreMove`, `removeMessages`, `restoreMessages`). Section 2 above now describes it as it is. | The server `total` is a full match count while the frontend holds only loaded pages, so it cannot be derived locally; changing this needs an incrementally verifiable count from the server. |
@@ -138,7 +135,7 @@ Verified against the working tree of 2026-10-22 (commit `cd47467`). Re-check the
 
 ## 13. Capability boundaries of in-app attachment preview
 
-**Current state.** The attachment preview is an explicit pipeline (see [decision 0002](decisions/0002-2026-10-attachment-preview.en.md)). The following boundaries are **deliberate** and not bugs waiting to be fixed (this entry was verified at commit `d5a4e68`):
+**Current state.** Attachment preview has shipped since v0.6.0 and is an explicit pipeline (see [decision 0002](decisions/0002-2026-10-attachment-preview.en.md)). The following boundaries are **deliberate** and not bugs waiting to be fixed:
 
 - **No dedicated Worker or OffscreenCanvas**: decoding and rendering run on the renderer's main thread. pdf.js's own worker is reclaimed by `loadingTask.destroy()`, but there is no second thread of our own, so long decodes can still drop frames.
 - **Legacy Office and specialist raster formats are never decoded**: `.doc` / `.xls` / `.ppt` (OLE compound documents) are outside the preview catalogue and get the tier C download card; HEIC / TIFF / PSD — files declared `image/*` but outside the six raster signatures — are fetched as raster and, once the header sniff fails, end as a `corrupt` error card with a download entry (`apps/web/src/attachments/decode/image.ts:180-181`). No extra decoding is attempted.

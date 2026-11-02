@@ -414,6 +414,12 @@ export default function AutoReplySandboxDialog({
                     </div>
                     <div>{t("settings.agent.sandbox.replyValue")}<strong>{result.decision.replyValue === "high" ? t("settings.agent.sandbox.highValue") : t("settings.agent.sandbox.lowValue")}</strong></div>
                     <div>{t("settings.agent.sandbox.sensitiveKeywords")}{result.decision.sensitive ? t("settings.agent.sandbox.sensitive") : t("settings.agent.sandbox.safe")}</div>
+                    {result.decision.strategy && (
+                      <div style={{ color: "var(--text-faint)", fontSize: 11 }}>
+                        {t(result.decision.strategy === "typed" ? "autoReply.decisions.strategy.typed" : "autoReply.decisions.strategy.chat-prompt")}
+                        {typeof result.decision.score === "number" && ` · ${Math.round(result.decision.score * 100)}%`}
+                      </div>
+                    )}
                     {result.decision.reply && (
                       <SandboxDraftPreview text={result.decision.reply} t={t} />
                     )}
