@@ -455,7 +455,7 @@ cursor:pointer;
 color:var(--text-faint);
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-xs);
 padding:3px 8px;
 line-height:1;
 white-space:nowrap;

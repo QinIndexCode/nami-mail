@@ -68,6 +68,33 @@ function writeIcsContent(cacheKey: string, text: string): void {
 export function clearIcsParseCache(): void {
   icsContentCache.clear();
   icsContentCacheBytes = 0;
+  inFlightIcsRequests.clear();
+}
+
+const inFlightIcsRequests = new Map<string, Promise<string>>();
+
+function fetchIcsContent(messageId: string, partId: string): Promise<string> {
+  const cacheKey = `${messageId}:${partId}`;
+  const cached = readIcsContent(cacheKey);
+  if (cached !== undefined) return Promise.resolve(cached);
+
+  const existing = inFlightIcsRequests.get(cacheKey);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    const blob = await api.downloadAttachment(messageId, partId);
+    if (blob.size > maximumBannerIcsBytes) {
+      throw new Error("oversized");
+    }
+    const text = await blob.text();
+    writeIcsContent(cacheKey, text);
+    return text;
+  })().finally(() => {
+    inFlightIcsRequests.delete(cacheKey);
+  });
+
+  inFlightIcsRequests.set(cacheKey, pending);
+  return pending;
 }
 
 export type MailCalendarInviteBannerProps = {
@@ -94,22 +121,25 @@ export default function MailCalendarInviteBanner({
     return attachments?.find((att) => !att.related && isIcsAttachment(att));
   }, [attachments]);
 
+  const icsPartId = icsAttachment?.partId;
+  const icsSize = icsAttachment?.size;
+
   useEffect(() => {
-    if (!icsAttachment) {
+    if (!icsPartId || icsSize === undefined) {
       setContent("");
       setLoading(false);
       setFailure(null);
       return;
     }
-    const cacheKey = `${messageId}:${icsAttachment.partId}`;
     // Reject oversized payloads before the network round-trip when the
     // attachment metadata carries the size, mirroring the server's import cap.
-    if (icsAttachment.size > maximumBannerIcsBytes) {
+    if (icsSize > maximumBannerIcsBytes) {
       setContent("");
       setLoading(false);
       setFailure("oversized");
       return;
     }
+    const cacheKey = `${messageId}:${icsPartId}`;
     const cached = readIcsContent(cacheKey);
     if (cached !== undefined) {
       setContent(cached);
@@ -120,33 +150,24 @@ export default function MailCalendarInviteBanner({
     let cancelled = false;
     setLoading(true);
     setFailure(null);
-    api.downloadAttachment(messageId, icsAttachment.partId)
-      .then(async (blob) => {
-        if (blob.size > maximumBannerIcsBytes) {
-          if (!cancelled) {
-            setFailure("oversized");
-            setLoading(false);
-          }
-          return;
-        }
-        const text = await blob.text();
+    fetchIcsContent(messageId, icsPartId)
+      .then((text) => {
         if (!cancelled) {
-          writeIcsContent(cacheKey, text);
           setContent(text);
           setFailure(null);
           setLoading(false);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (!cancelled) {
-          setFailure("error");
+          setFailure(err instanceof Error && err.message === "oversized" ? "oversized" : "error");
           setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [messageId, icsAttachment]);
+  }, [messageId, icsPartId, icsSize]);
 
   const parsedEvents = useMemo<ParsedIcsEvent[]>(() => {
     if (!content.trim()) return [];

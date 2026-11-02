@@ -48,10 +48,6 @@ import { createTimeTools } from "./agent/time-tools.js";
 import { EncryptedAutoReplyDecisionStore } from "./agent/auto-reply-decisions.js";
 import type { MailApplicationService } from "./agent/mail-application-service.js";
 import { resolveOutboundAttachmentNames } from "./outbound-attachments.js";
-import { OpenAiCompatibleProvider } from "./agent/openai-compatible-provider.js";
-import { AnthropicMessagesProvider } from "./agent/anthropic-provider.js";
-import { GeminiProvider } from "./agent/gemini-provider.js";
-import { OpenAiResponsesProvider } from "./agent/openai-responses-provider.js";
 import { type AgentMcpServerInput, type AgentMcpServerSummary } from "./agent/mcp-server-store.js";
 import {
   AgentMcpServerManager,
@@ -67,7 +63,13 @@ import {
 } from "./agent-rag-worker.js";
 import { ImmutableGuiConfirmationStore, type TrustedDesktopConfirmationVerifier } from "./agent/confirmations.js";
 import { AgentConfirmationLifecycle, type AgentConfirmationResolution } from "./agent/confirmation-lifecycle.js";
-import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agent/auto-reply.js";
+import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./agent/auto-reply-decision.js";
+import {
+  evaluateAutoReplyWithDecisionAdapter,
+  parseAutoReplyDecision,
+  parseAutoReplyEvaluation,
+  withDecisionRetry,
+} from "./agent/auto-reply-decision.js";
 import { collectAuxiliaryChatText } from "./agent/auxiliary-chat.js";
 import { polishDraftWithProvider, type PolishDraftInput, type PolishDraftResult } from "./agent/writing-polish.js";
 import { sanitizeLinksForScreening } from "./agent/auto-reply-screening.js";
@@ -924,20 +926,7 @@ export class AgentService {
     if (!configuration) return undefined;
     const summary = providerSummary(configuration);
     if (!summary.configured) return undefined;
-    return this.providerForConfiguration(configuration);
-  }
-
-  private providerForConfiguration(configuration: ProviderConfiguration): LlmProvider {
-    const options = {
-      id: configuration.id,
-      endpoint: configuration.endpoint,
-      ...(configuration.apiKey ? { apiKey: configuration.apiKey } : {}),
-      timeoutMs: configuration.timeoutMs,
-    };
-    if (configuration.kind === "anthropic") return new AnthropicMessagesProvider(options);
-    if (configuration.kind === "gemini") return new GeminiProvider(options);
-    if (configuration.kind === "openai-responses") return new OpenAiResponsesProvider(options);
-    return new OpenAiCompatibleProvider({ ...options, kind: configuration.kind });
+    return this.providerService.adapterFor(configuration);
   }
 
   /**
@@ -1070,6 +1059,20 @@ export class AgentService {
       "请输出你的判断。",
     ].join("\n");
 
+    // Typed decision path: a provider whose adapter natively answers typed
+    // questions (a System One / Jev decision model) is consulted with two
+    // `noul` questions instead of a prose prompt — it cannot chat, so the
+    // JSON-prompt strategies below are unavailable to it.
+    const decisionAdapter = this.providerService.adapterFor(decisionConfig);
+    if (typeof decisionAdapter?.decide === "function") {
+      const decide = decisionAdapter.decide.bind(decisionAdapter);
+      const decisionResult = await evaluateAutoReplyWithDecisionAdapter({ decide }, decisionConfig, userPrompt, input.decisionThreshold);
+      if (decisionResult.replyValue !== "high") {
+        return { replyValue: "low", sensitive: decisionResult.sensitive, decision: decisionResult.decision };
+      }
+      return this.draftAutoReplyReply(draftProviderId, userPrompt, decisionResult);
+    }
+
     // Fast path: when decision and draft models are the same, execute the unified single-pass prompt
     if (decisionProviderId === draftProviderId) {
       const systemPrompt = [
@@ -1097,11 +1100,21 @@ export class AgentService {
         responseFormat: "text",
         temperature: 0.2,
       };
-      const outcome = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
-      if (outcome.status === "error") {
-        throw new AgentServiceError("PROVIDER_ERROR", `自动回复评估失败：${outcome.error.message}`, 502, true);
-      }
-      return parseAutoReplyEvaluation(outcome.text);
+      // Transient failures (timeout / 429) get two backed-off retries: the
+      // evaluation stage is the last chance for this message — the notify path
+      // only fires for newly arrived mail, so a surrendered evaluation is a
+      // permanently skipped reply.
+      const outcome = await withDecisionRetry(async () => {
+        const result = await collectAuxiliaryChatText({ runtime: this.runtime, requestId: chat.requestId, chat });
+        if (result.status === "error") {
+          throw new AgentServiceError("PROVIDER_ERROR", `自动回复评估失败：${result.error.message}`, 502, result.error.retryable === true);
+        }
+        return result;
+      });
+      return {
+        ...parseAutoReplyEvaluation(outcome.text),
+        decision: { providerId: decisionConfig.id, strategy: "chat-prompt" },
+      };
     }
 
     // Decoupled two-tier path: System 1 (Decision Model) followed by System 2 (Draft Model)
@@ -1129,20 +1142,40 @@ export class AgentService {
       temperature: 0.1,
     };
 
-    const decisionOutcome = await collectAuxiliaryChatText({
-      runtime: this.runtime,
-      requestId: decisionChat.requestId,
-      chat: decisionChat,
+    const decisionOutcome = await withDecisionRetry(async () => {
+      const result = await collectAuxiliaryChatText({
+        runtime: this.runtime,
+        requestId: decisionChat.requestId,
+        chat: decisionChat,
+      });
+      if (result.status === "error") {
+        throw new AgentServiceError("PROVIDER_ERROR", `决策模型评估失败：${result.error.message}`, 502, result.error.retryable === true);
+      }
+      return result;
     });
-    if (decisionOutcome.status === "error") {
-      throw new AgentServiceError("PROVIDER_ERROR", `决策模型评估失败：${decisionOutcome.error.message}`, 502, true);
-    }
     const decisionResult = parseAutoReplyDecision(decisionOutcome.text);
     if (decisionResult.replyValue !== "high") {
-      return { replyValue: "low", sensitive: decisionResult.sensitive };
+      return { replyValue: "low", sensitive: decisionResult.sensitive, decision: { providerId: decisionConfig.id, strategy: "chat-prompt" } };
     }
 
     // High reply value: proceed to drafting with draftProviderId
+    return this.draftAutoReplyReply(draftProviderId, userPrompt, {
+      ...decisionResult,
+      decision: { providerId: decisionConfig.id, strategy: "chat-prompt" },
+    });
+  }
+
+  /**
+   * The drafting half of the evaluation, shared by the typed-decision path and
+   * the decoupled chat path. Drafting is a text call site: a decision-only
+   * provider is rejected here with an explicit 422 instead of failing halfway
+   * through a stream it can never start.
+   */
+  private async draftAutoReplyReply(
+    draftProviderId: string | null,
+    userPrompt: string,
+    decision: { sensitive: boolean; decision?: AutoReplyEvaluationResult["decision"] },
+  ): Promise<AutoReplyEvaluationResult> {
     if (!draftProviderId) {
       throw new AgentServiceError("NOT_FOUND", "未配置回复生成模型，无法起草回复正文。", 404, false);
     }
@@ -1153,6 +1186,9 @@ export class AgentService {
     const draftSummary = providerSummary(draftConfig);
     if (!draftSummary.configured) {
       throw new AgentServiceError("PROVIDER_AUTH_FAILED", "回复生成模型配置尚未完成。请检查地址、模型名称和 API Key。", 422, false);
+    }
+    if (!draftSummary.roles.includes("chat")) {
+      throw new AgentServiceError("NOT_SUPPORTED", "回复生成模型不支持文本生成，无法起草自动回复。", 422, false);
     }
     if (draftSummary.cloud && !draftSummary.cloudContentConsent) {
       throw new AgentServiceError(
@@ -1198,9 +1234,40 @@ export class AgentService {
     const rawReply = draftOutcome.text.trim();
     return {
       replyValue: "high",
-      sensitive: decisionResult.sensitive,
+      sensitive: decision.sensitive,
+      ...(decision.decision ? { decision: decision.decision } : {}),
       ...(rawReply.length > 0 ? { replyText: rawReply } : {}),
     };
+  }
+
+  /**
+   * Write-boundary validation for the auto-reply model picks. Both ids used to
+   * be free strings that only failed when a message happened to arrive; the
+   * settings PATCH now rejects a pick that can never work — the decision model
+   * must hold the decision or chat role, the draft model must be able to chat.
+   */
+  validateAutoReplyProviders(input: { decisionProviderId?: string | null; draftProviderId?: string | null }): void {
+    const byId = new Map(this.providerList().items.map((provider) => [provider.id, provider]));
+    const decisionId = input.decisionProviderId;
+    if (decisionId) {
+      const decision = byId.get(decisionId);
+      if (!decision) {
+        throw new AgentServiceError("INVALID_ARGUMENT", `决策模型 (${decisionId}) 不存在。`, 400, false);
+      }
+      if (!decision.roles.includes("decision") && !decision.roles.includes("chat")) {
+        throw new AgentServiceError("INVALID_ARGUMENT", "所选决策模型不具备判定能力。", 400, false);
+      }
+    }
+    const draftId = input.draftProviderId;
+    if (draftId) {
+      const draft = byId.get(draftId);
+      if (!draft) {
+        throw new AgentServiceError("INVALID_ARGUMENT", `回复生成模型 (${draftId}) 不存在。`, 400, false);
+      }
+      if (!draft.roles.includes("chat")) {
+        throw new AgentServiceError("INVALID_ARGUMENT", "所选回复生成模型不支持文本生成。", 400, false);
+      }
+    }
   }
 
   private requireProvider(id: string): ProviderConfiguration {
@@ -1217,55 +1284,4 @@ export class AgentService {
     return (this.options.db.prepare("SELECT id FROM accounts ORDER BY created_at, id").all() as Array<{ id: string }>).map((row) => row.id);
   }
 
-}
-
-/**
- * Tolerantly parses the strict JSON object the auto-reply review prompt asks
- * for. Any deviation defaults to a low-value classification so the pipeline
- * never sends a reply it cannot demonstrate was intended.
- */
-function parseAutoReplyEvaluation(output: string): AutoReplyEvaluationResult {
-  const cleaned = output.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    parsed = undefined;
-  }
-  const value = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? parsed as Record<string, unknown>
-    : undefined;
-  const replyValue = value && value.replyValue === "high" ? "high" : "low";
-  const sensitive = value?.sensitive === true;
-  const rawReply = typeof value?.reply === "string" ? value.reply.trim() : "";
-  return {
-    replyValue,
-    sensitive,
-    ...(replyValue === "high" && rawReply.length > 0 ? { replyText: rawReply } : {}),
-  };
-}
-
-/**
- * Tolerantly parses the decision-only JSON object the decoupled auto-reply
- * review prompt asks for. Any deviation defaults to a low-value classification
- * so the pipeline never sends a reply it cannot demonstrate was intended.
- */
-function parseAutoReplyDecision(output: string): { replyValue: "high" | "low"; sensitive: boolean } {
-  const cleaned = output.trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    parsed = undefined;
-  }
-  const value = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? parsed as Record<string, unknown>
-    : undefined;
-  const replyValue = value && value.replyValue === "high" ? "high" : "low";
-  const sensitive = value?.sensitive === true;
-  return { replyValue, sensitive };
 }

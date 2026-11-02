@@ -16,10 +16,10 @@
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
     "@nami/agent-contracts": "file:../../packages/agent-contracts",
-    "@tanstack/react-virtual": "^3.14.13",
+    "@tanstack/react-virtual": "^3.14.24",
     "dompurify": "^3.4.17",
     "jszip": "^3.10.2",
-    "lucide-react": "^1.52.0",
+    "lucide-react": "^1.65.0",
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.0",
@@ -34,7 +34,7 @@
     "@vitejs/plugin-react": "^6.0.4",
     "jsdom": "^29.1.1",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5",
-    "vitest": "^4.0.18"
+    "vite": "^8.3.5",
+    "vitest": "^4.1.12"
   }
 }

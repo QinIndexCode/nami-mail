@@ -9,7 +9,7 @@ padding:24px
 border-radius:var(--radius-lg);
 flex-direction:column;
 width:min(1050px,100%);
-height:min(720px,75vh);
+height:min(760px,calc(100vh - 48px));
 padding:0;
 display:flex;
 overflow:hidden
@@ -823,6 +823,7 @@ margin-top:13px
 .settings-model-badge { border-radius:var(--radius-xs); align-items:center; padding:2px 7px; font-size:10px; font-weight:600; line-height:1.4; margin-left:6px; display:inline-flex; vertical-align:middle }
 .settings-model-badge.default { background:color-mix(in srgb,var(--focus-ring) 14%,transparent); color:var(--focus-ring) }
 .settings-model-badge.disabled { background:var(--panel-muted); color:var(--text-faint) }
+.settings-model-badge.role { background:color-mix(in srgb,var(--info) 14%,transparent); color:var(--info) }
 .translation-settings-form
 {
 border-top:1px solid var(--line);
@@ -1243,7 +1244,10 @@ gap:6px
 color:var(--warning);
 margin:2px 0 8px;
 font-size:10px;
-line-height:1.45
+line-height:1.45;
+align-items:center;
+gap:6px;
+display:flex
 }
 .external-guide
 {

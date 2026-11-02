@@ -235,4 +235,175 @@ describe("MailCalendarInviteBanner", () => {
     expect(container.querySelector(".mail-calendar-invite-error")).not.toBeNull();
     expect(container.textContent).toContain("10MB");
   });
+
+  it("does not re-download when attachments reference changes while download is in flight or completed", async () => {
+    let resolveDownload: (blob: Blob) => void = () => {};
+    const downloadPromise = new Promise<Blob>((resolve) => {
+      resolveDownload = resolve;
+    });
+    vi.mocked(api.downloadAttachment).mockImplementationOnce(() => downloadPromise);
+
+    const attachments1: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+
+    // Initial render kicks off download #1
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-race"
+            attachments={attachments1}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+
+    // Simulated message body load update: fresh array and object reference
+    const attachments2: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-race"
+            attachments={attachments2}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    // Should NOT have triggered a second download
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+
+    // Now resolve the in-flight download
+    await act(async () => {
+      resolveDownload(new Blob([mockSampleIcs], { type: "text/calendar" }));
+    });
+
+    expect(container.textContent).toContain("Product Strategy Sync");
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares in-flight download promise across concurrent banner instances", async () => {
+    let resolveDownload: (blob: Blob) => void = () => {};
+    const downloadPromise = new Promise<Blob>((resolve) => {
+      resolveDownload = resolve;
+    });
+    vi.mocked(api.downloadAttachment).mockImplementationOnce(() => downloadPromise);
+
+    const attachments: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+
+    const secondContainer = document.createElement("div");
+    document.body.appendChild(secondContainer);
+    const secondRoot = createRoot(secondContainer);
+
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-concurrent"
+            attachments={attachments}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+      secondRoot.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-concurrent"
+            attachments={attachments}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    // Only one network download initiated
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveDownload(new Blob([mockSampleIcs], { type: "text/calendar" }));
+    });
+
+    expect(container.textContent).toContain("Product Strategy Sync");
+    expect(secondContainer.textContent).toContain("Product Strategy Sync");
+
+    act(() => secondRoot.unmount());
+    secondContainer.remove();
+  });
+
+  it("caches in-flight download result even if component unmounts before resolution", async () => {
+    let resolveDownload: (blob: Blob) => void = () => {};
+    const downloadPromise = new Promise<Blob>((resolve) => {
+      resolveDownload = resolve;
+    });
+    vi.mocked(api.downloadAttachment).mockImplementationOnce(() => downloadPromise);
+
+    const attachments: MessageAttachment[] = [
+      { partId: "1", filename: "invite.ics", contentType: "text/calendar", size: 512, related: false, disposition: "attachment" },
+    ];
+
+    act(() => {
+      root.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-unmount-cache"
+            attachments={attachments}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+
+    // Unmount before download finishes
+    act(() => {
+      root.unmount();
+    });
+
+    // Download completes in background
+    await act(async () => {
+      resolveDownload(new Blob([mockSampleIcs], { type: "text/calendar" }));
+    });
+
+    // Re-mount a new instance: should hit cache without calling downloadAttachment again
+    const newContainer = document.createElement("div");
+    document.body.appendChild(newContainer);
+    const newRoot = createRoot(newContainer);
+
+    await act(async () => {
+      newRoot.render(
+        <I18nProvider>
+          <MailCalendarInviteBanner
+            messageId="msg-unmount-cache"
+            attachments={attachments}
+            onImportClick={onImportClick}
+            onViewCalendar={onViewCalendar}
+          />
+        </I18nProvider>,
+      );
+    });
+
+    expect(api.downloadAttachment).toHaveBeenCalledTimes(1);
+    expect(newContainer.textContent).toContain("Product Strategy Sync");
+
+    act(() => newRoot.unmount());
+    newContainer.remove();
+    root = createRoot(container);
+  });
 });

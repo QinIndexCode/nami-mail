@@ -1,4 +1,4 @@
-import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
+import { BookUser, Check, ChevronLeft, ChevronRight, LoaderCircle, Mail, Pencil, Plus, RefreshCw, Search, Trash2, UserRound, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api";
@@ -12,12 +12,14 @@ import type { Contact, ContactInput } from "./types";
 import { getAvatar, setAvatar } from "./avatarStore";
 import { AvatarEditor } from "./AvatarEditor";
 import { FormNotice, type Notice } from "./FormNotice";
+import CopyButton from "./CopyButton";
 
 export type ContactsSectionProps = {
   demoMode?: boolean;
   /** Test seam: preloaded contacts skip the API load. */
   initialContacts?: Contact[];
   onOverlayOpenChange?: (open: boolean) => void;
+  onComposeTo?: (contact: Contact) => void;
 };
 
 type ContactDraft = {
@@ -62,7 +64,7 @@ function emptyDraft(): ContactDraft {
   return { email: "", name: "", notes: "", autoCollected: false, avatarDataUrl: null };
 }
 
-export default function ContactsSection({ demoMode = false, initialContacts, onOverlayOpenChange }: ContactsSectionProps) {
+export default function ContactsSection({ demoMode = false, initialContacts, onOverlayOpenChange, onComposeTo }: ContactsSectionProps) {
   const { t } = useI18n();
   const [contacts, setContacts] = useState<Contact[]>(initialContacts ?? []);
   const [query, setQuery] = useState("");
@@ -452,6 +454,17 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                     const selected = selectedIds.has(contact.id);
                     const globalIndex = pageStart + index;
                     const groupStart = showSourceGroups && (globalIndex === 0 || Boolean(orderedAll[globalIndex - 1]?.autoCollected) !== contact.autoCollected);
+                    const copyEmailButton = (
+                      <CopyButton
+                        className="icon-button contact-copy-email"
+                        text={contact.email}
+                        size={12}
+                        ariaLabel={t("settings.contacts.copyEmailAriaLabel", { email: contact.email })}
+                        announcement={t("settings.contacts.emailCopied", { email: contact.email })}
+                        onCopied={() => setNotice(null)}
+                        onFailed={() => setNotice({ kind: "error", message: t("settings.contacts.emailCopyFailed") })}
+                      />
+                    );
                     return (
                       <Fragment key={contact.id}>
                         {groupStart && (
@@ -469,14 +482,27 @@ export default function ContactsSection({ demoMode = false, initialContacts, onO
                         <div className="contact-head">
                             <span className="contact-avatar" aria-hidden="true"><UserRound size={16} /></span>
                             <div className="contact-copy">
-                              <strong>{contact.name || contact.email}</strong>
-                              {contact.name && <small>{contact.email}</small>}
+                              <div className="contact-title-row">
+                                <strong>{contact.name || contact.email}</strong>
+                                {!contact.name && copyEmailButton}
+                                {contact.autoCollected
+                                  ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
+                                  : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
+                              </div>
+                              {contact.name && (
+                                <div className="contact-email-line">
+                                  <small>{contact.email}</small>
+                                  {copyEmailButton}
+                                </div>
+                              )}
                               {contact.notes && <small className="contact-notes">{contact.notes}</small>}
-                              {contact.autoCollected
-                                ? <small className="contact-auto-badge">{t("settings.contacts.autoCollected")}</small>
-                                : <small className="contact-manual-badge">{t("settings.contacts.manualAdded")}</small>}
                             </div>
                             <div className="contact-actions">
+                              {onComposeTo && (
+                                <button className="icon-button" type="button" aria-label={t("settings.contacts.sendMail")} data-tooltip={t("settings.contacts.sendMail")} disabled={Boolean(busyContactId)} onClick={() => onComposeTo(contact)}>
+                                  <Mail size={15} />
+                                </button>
+                              )}
                               <button className="icon-button" type="button" aria-label={t("settings.contacts.edit")} data-tooltip={t("settings.contacts.edit")} disabled={Boolean(busyContactId)} onClick={() => startEdit(contact)}>
                                 <Pencil size={15} />
                               </button>

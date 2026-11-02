@@ -47,5 +47,6 @@ When the assistant cites mail, the reply shows a **Source mail** panel that can 
 ## Related Documentation
 
 - [Model provider configuration](providers.en.md): interface types, API keys, and cloud mail-content consent.
+- [Built-in tools catalog](tools.en.md): permission and confirmation policy for every built-in tool; in the app, Settings → Agent Tools lists and searches them by domain and shows which writes the current level locks or asks to confirm.
 - [Connecting external MCP servers](mcp-servers.en.md): extending the assistant with external tools.
 - [Conversations and context](conversations.en.md), [Permissions](permissions.en.md), and [Security](security.en.md): context construction and execution boundaries.

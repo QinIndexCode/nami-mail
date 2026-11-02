@@ -5,16 +5,18 @@ import type { Translate } from "../i18n";
 import ThemedSelect from "../ThemedSelect";
 import { Switch } from "./SettingsUIComponents";
 import { ModelField, SettingsModelFormDialog } from "./SettingsModelDialog";
-import { providerFormIsLocal, providerKindMetadata } from "./settings-models";
+import { providerFormIsLocal, providerKindMetadata, providerKindMetadataFor } from "./settings-models";
 import type { ModelProvidersController } from "./useSettingsModels";
 
-/** Kind order mirrors the old dialog's protocol select. */
-const PROVIDER_KIND_OPTIONS: ReadonlyArray<{ kind: AgentProviderKind; labelKey: string }> = [
+/** Kind order mirrors the old dialog's protocol select. Exported so the
+ *  drift-guard test can assert it never lags the contracts enum. */
+export const PROVIDER_KIND_OPTIONS: ReadonlyArray<{ kind: AgentProviderKind; labelKey: string }> = [
   { kind: "openai-compatible", labelKey: "agent.providers.kind.openaiCompatible" },
   { kind: "ollama", labelKey: "agent.providers.kind.ollama" },
   { kind: "anthropic", labelKey: "agent.providers.kind.anthropic" },
   { kind: "gemini", labelKey: "agent.providers.kind.gemini" },
   { kind: "openai-responses", labelKey: "agent.providers.kind.openaiResponses" },
+  { kind: "system-one", labelKey: "agent.providers.kind.systemOne" },
 ];
 
 const MODALITY_ITEMS: ReadonlyArray<{
@@ -44,7 +46,10 @@ export default function SettingsModelProviderDialog({
   onBusyChange,
 }: SettingsModelProviderDialogProps) {
   const { form } = providers;
-  const kindMeta = providerKindMetadata[form.kind];
+  // The dialog only mounts for kinds this build writes, so the fallback is a
+  // type net, not a reachable path — but the safe accessor is the only lookup
+  // form allowed anywhere, so a future call site cannot index a bare record.
+  const kindMeta = providerKindMetadataFor(form.kind) ?? providerKindMetadata["openai-compatible"];
   const isLocal = providerFormIsLocal(form);
   const isCurrentDefault = providers.selectedProvider?.id === providers.defaultProviderId;
   const editing = providers.selectedProvider !== null;

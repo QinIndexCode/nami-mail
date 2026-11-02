@@ -1,8 +1,8 @@
-# Local Mail API Contract
+# Mail Body Translation API
 
-[简体中文](LOCAL-API.zh-CN.md) | [English](LOCAL-API.en.md)
+[简体中文](TRANSLATION-API.zh-CN.md) | [English](TRANSLATION-API.en.md)
 
-This page records the protected protocol between the Nami Mail desktop UI and its local Fastify service. It is not a public API for third-party applications, browser extensions, or network clients, and it does not replace the independent paired External Mail v1 CLI, MCP, or Agent Broker interface.
+This page records the protected protocol between the Nami Mail desktop reader and its local Fastify service for mail body translation. It is not a public API for third-party applications, browser extensions, or network clients, and it does not replace the independent paired External Mail v1 CLI, MCP, or Agent Broker interface.
 
 ## Access Boundary
 
@@ -47,9 +47,9 @@ With an external service configured, the response reports the enabled state and,
 }
 ```
 
-### `GET /api/translation/configuration` and `PUT /api/translation/configuration`
+### `GET /api/translation/configuration`, `PUT /api/translation/configuration`, and `DELETE /api/translation/configuration`
 
-Fetches or updates translation configuration (including `primary`, `backup`, `endpoint`, and whether an API key is set). Runtimes without managed configuration return `409` (`translation_configuration_managed`); invalid payloads on `PUT` return `400` (`translation_configuration_invalid`).
+Fetches, updates, or clears translation configuration (including `primary`, `backup`, `endpoint`, and whether an API key is set). Runtimes without managed configuration return `409` (`translation_configuration_managed`); invalid payloads on `PUT` return `400` (`translation_configuration_invalid`). `DELETE` clears the saved external service configuration; the status endpoint then reports the built-in translator as `mode: "builtin"`.
 
 ### `POST /api/messages/:id/translate`
 
@@ -75,7 +75,7 @@ For bodies within the 5,000-character single-chunk limit the response is a singl
 
 An external LibreTranslate-compatible runtime can additionally return `detectedLanguage` in nested object form. For bodies between 5,000 and 50,000 characters the text is split into multiple chunks and the response becomes a `text/event-stream` SSE event stream: results are pushed as chunk events, and callers must consume the event stream rather than parsing JSON.
 
-### `POST /api/translate-segments`
+### `POST /api/messages/translate-segments`
 
 Performs batch translation of fragmented UI text pieces (e.g. meeting invite excerpts), accepting `{ "segments": string[], "targetLocale": string }`.
 
@@ -86,5 +86,5 @@ Dedicated streaming translation endpoint for LLMs, streaming Markdown/text via S
 ## Compatibility and Evolution
 
 - Consumers must branch on HTTP status and stable `code`; never parse Chinese or English error text.
-- When `mode` and `local` are absent, consumers must handle the runtime as an existing external-translation configuration; `mode: "builtin"` means no external service is configured and the built-in translator is always available.
-- This page describes only the protected local protocol used by the GUI. External Mail v1 has its own Broker, pairing, account-snapshot, and permission contract. Changes to an external CLI, MCP, IPC, or network interface must retain an independent threat model, permission design, and end-to-end validation.
+- When `mode` is absent, consumers must handle the runtime as an existing external-translation configuration; `mode: "builtin"` means no external service is configured and the built-in translator is always available.
+- This page describes only the protected local protocol used by the GUI translation capability. External Mail v1 has its own Broker, pairing, account-snapshot, and permission contract. Changes to an external CLI, MCP, IPC, or network interface must retain an independent threat model, permission design, and end-to-end validation.

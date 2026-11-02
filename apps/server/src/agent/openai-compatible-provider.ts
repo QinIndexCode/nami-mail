@@ -1,6 +1,5 @@
 import {
   createAgentError,
-  type AgentError,
   type AgentToolDescriptor,
   type EmbeddingProvider,
   type EmbeddingRequest,
@@ -20,6 +19,7 @@ import {
   createProviderToolNames,
   endpointUrl,
   hasUnsafeToolArguments,
+  isAgentErrorShape,
   linesFrom,
   maximumSseLineBytes,
   maximumToolArgumentsBytes,
@@ -55,13 +55,6 @@ type PendingToolCall = {
   name?: string;
   arguments: string;
 };
-
-/** Detects an already-mapped agent error object (not an Error subclass). */
-function isAgentErrorShape(value: unknown): value is AgentError {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
-  return typeof entry.code === "string" && typeof entry.message === "string" && typeof entry.retryable === "boolean";
-}
 
 function toolDefinitions(tools: readonly AgentToolDescriptor[], names: ProviderToolNames): unknown[] {
   return tools.map((tool) => ({

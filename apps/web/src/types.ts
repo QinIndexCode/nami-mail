@@ -242,6 +242,13 @@ export type AutoReplyDecisionRecord = {
   fromName: string;
   subject: string;
   detail: string;
+  /** Decision-stage attribution; present on low-value records (P2 audit). */
+  decision?: {
+    providerId: string;
+    strategy: "typed" | "chat-prompt";
+    score?: number;
+    confidence?: number;
+  };
   occurredAt: string;
 };
 

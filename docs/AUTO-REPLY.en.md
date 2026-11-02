@@ -12,6 +12,8 @@ Auto-reply is an opt-in, per-account feature of Nami Mail. After a sync pass, ne
 ## Reply Modes and Dual Models
 
 - **Agent drafting (llm mode)**: a model decides whether the incoming message deserves a reply and drafts it. The **screening model** and the **drafting model** can be configured independently (empty means the default provider) — for example, a fast lightweight model for screening and a stronger model for drafting.
+- **Pure decision-model screening (System One / Jev)**: the screening model may also be a pure decision model (the System One kind in the model provider settings). It never generates text; instead it answers typed questions ("worth replying", "is sensitive") and returns calibrated probabilities. The decision stage picks its strategy from the provider's own capability — native typed questions when available, otherwise the chat-model JSON prompt. The drafting model must still be a chat-role model.
+- **Decision threshold**: the minimum "worth replying" probability (0–1, default 0.7, chosen as 50%–90% percentage presets in the UI). Replies are drafted only at or above the threshold; anything below is ignored. Higher is more conservative. Transient decision failures (timeout, rate limiting) are retried up to twice with backoff so one network blip never permanently skips a message.
 - **Fixed template (template mode)**: no model call; the template text is sent as-is. Templates support placeholders — `{{senderName}}`, `{{senderAddress}}`, `{{senderDomain}}`, `{{subject}}` — up to 2,000 characters, and may individually opt out of the send confirmation.
 
 ## Eligibility Scope (offline, no model involved)

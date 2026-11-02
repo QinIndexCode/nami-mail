@@ -13,7 +13,7 @@ Nami Mail currently ships a Windows x64 desktop app. This page organizes the pub
 - [Message translation](TRANSLATION.en.md): optional free translation and AI translation configuration, explicit-send boundary, and privacy considerations.
 - [Calendar and mail invitations](CALENDAR.en.md): invite banners, ICS import/export with UID dedupe, and event reminders.
 - [Auto-reply](AUTO-REPLY.en.md): dual-model screening and drafting, scope rules, the confirmation flow, and the dry-run sandbox.
-- [Local Mail API contract](LOCAL-API.en.md): the protected protocol between the desktop UI and the local service, translation status, and model-readiness endpoints; not a public network API.
+- [Mail body translation API](TRANSLATION-API.en.md): the protected translation protocol between the desktop reader and the local service (status, configuration, and streaming translation); not a public network API.
 - [External Mail interface](EXTERNAL-MAIL-INTERFACE.en.md): pairing, revocation, nine read-only plus seven write tools, security boundary, and recovery.
 - [NamiMail Agent usage](agent/usage.en.md): conversations, mail scope, source citations, and confirmations.
 - [NamiMail Agent model providers](agent/providers.en.md): OpenAI-compatible/Ollama/Claude/Gemini models, API keys, and cloud mail-content consent.

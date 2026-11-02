@@ -343,9 +343,14 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
 
   const scope = useMemo(() => agentScopeFor(scopeTarget, accounts), [accounts, scopeTarget]);
   const providers = useMemo(() => bootstrap?.providers ?? [], [bootstrap]);
-  const configuredProviders = useMemo(() => providers.filter((provider) => provider.configured), [providers]);
+  // The composer is a text call site: a decision-only row must never appear in
+  // its picker even if it were somehow configured.
+  const configuredProviders = useMemo(
+    () => providers.filter((provider) => provider.configured && provider.roles.includes("chat")),
+    [providers],
+  );
   const selectedProvider = configuredProviders.find((provider) => provider.id === providerId)
-    ?? providers.find((provider) => provider.id === bootstrap?.defaultProviderId)
+    ?? providers.find((provider) => provider.id === bootstrap?.defaultProviderId && provider.roles.includes("chat"))
     ?? configuredProviders[0];
   // Sending still requires a ready provider; the composer may show an
   // unconfigured default model but must not claim it can send with it.
@@ -490,8 +495,9 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       configured: snapshot.items.some((provider) => provider.configured),
     } : current);
     // An explicit choice survives a settings-side edit as long as that provider
-    // is still configured; only a deleted or half-configured one falls back.
-    setProviderId((current) => (snapshot.items.some((provider) => provider.id === current && provider.configured)
+    // is still configured and can chat; only a deleted, half-configured or
+    // decision-only one falls back.
+    setProviderId((current) => (snapshot.items.some((provider) => provider.id === current && provider.configured && provider.roles.includes("chat"))
       ? current
       : configuredProviderId(snapshot.items, snapshot.defaultProviderId)));
   }, []);
@@ -508,6 +514,8 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
         id: "demo-ollama",
         label: "Ollama",
         kind: "ollama",
+        roles: ["chat"],
+        supported: true,
         endpoint: OLLAMA_DEFAULT_ENDPOINT,
         model: "llama3.2",
         timeoutMs: 120000,
@@ -545,7 +553,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       // behind a busy server for a whole request timeout.
       setLoading(false);
       setProviderId((current) => {
-        const currentProvider = value.providers.find((provider) => provider.id === current && provider.configured);
+        const currentProvider = value.providers.find((provider) => provider.id === current && provider.configured && provider.roles.includes("chat"));
         return currentProvider?.id ?? configuredProviderId(value.providers, value.defaultProviderId);
       });
       // The empty state stays hidden while this second request is in flight.

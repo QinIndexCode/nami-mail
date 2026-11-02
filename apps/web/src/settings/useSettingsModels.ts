@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { isAgentProviderKind } from "../agentTypes";
 import type {
   AgentMcpServerSummary,
   AgentProviderKind,
@@ -18,7 +19,7 @@ import {
   providerFormFor,
   providerHealthFeedback,
   providerInputFor,
-  providerKindMetadata,
+  providerKindMetadataFor,
   providerListAfterSave,
   providerRequestFeedback,
   providerValidationMessage,
@@ -240,7 +241,7 @@ export function useModelProviders({
     setForm((current) => ({
       ...current,
       kind,
-      endpoint: !current.endpoint.trim() ? providerKindMetadata[kind].endpointSuggestion : current.endpoint,
+      endpoint: !current.endpoint.trim() ? (providerKindMetadataFor(kind)?.endpointSuggestion ?? "") : current.endpoint,
       allowCloudMailContent: kind === "ollama" ? false : current.allowCloudMailContent,
     }));
     setFeedback(null);
@@ -328,13 +329,19 @@ export function useModelProviders({
    *  field is echoed back unchanged and the stored key is never touched. */
   const setDefault = useCallback(async (provider: AgentProviderSummary) => {
     if (saving) return;
+    // Only chat-capable providers of a kind this build understands expose this
+    // action; re-sending an unknown kind would be rejected by the write schema.
+    // The narrowed kind is captured in a local because the guard does not carry
+    // into the closure below (a property access can change, a const cannot).
+    const kind = provider.kind;
+    if (!provider.supported || !isAgentProviderKind(kind) || !provider.roles.includes("chat")) return;
     const run = async () => {
       setSaving(true);
       setFeedback(null);
       try {
         await api.updateAgentProvider(provider.id, {
           label: provider.label,
-          kind: provider.kind,
+          kind,
           endpoint: provider.endpoint,
           model: provider.model,
           timeoutMs: provider.timeoutMs,
