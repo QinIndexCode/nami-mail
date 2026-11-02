@@ -944,7 +944,10 @@ color:var(--accent)
 }
 .sending-status-row-overdue
 {
-color:var(--warning)
+color:var(--warning);
+align-items:center;
+gap:4px;
+display:inline-flex
 }
 .sending-status-row-message
 {

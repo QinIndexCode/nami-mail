@@ -165,9 +165,14 @@ describe("styles.css size ratchet", () => {
   // （全局/区域两层纱、暗调图专属模糊与重纱），密度由强度滑杆直出（明暗同
   // 公式）；layout.css 删 5 条规则，variables.css 删 2 组 scrim 令牌。实测聚
   // 合 18_182 行，阈值取实测 +12 行缓冲。
+  // 2026-10-30 有记录的一次上调（18_575 → 18_589）：修复「设置-模型」校验警告与
+  // 发送状态"超过计划时间"行的图标-文本对齐——两处容器补 flex + gap（+4）；连同本
+  // 分支未提交的模型角色徽标 .settings-model-badge.role 与对话框判定来源行
+  // .auto-reply-decision-attribution（+7）、上一轮外部连接页遗留增量（+3），实测聚
+  // 合 18_577 行，阈值取实测 +12 缓冲。下轮 CSS 瘦身时应优先收回。
   const FROZEN_ROOT_MAX_LINES = 40;
   // 2026-10-28 邮件撰写器 Markdown 模式、格式化工具栏与实时/分屏预览（18_279 → 18_575）：新增 Markdown 工具栏、视图模式切换、最大化分屏渲染容器、富文本预览排版（标题/引用/代码/表格）与字数统计（实测 18_563 行 + 12 缓冲）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_575;
+  const FROZEN_AGGREGATED_MAX_LINES = 18_589;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

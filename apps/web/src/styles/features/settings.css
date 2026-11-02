@@ -1244,7 +1244,10 @@ gap:6px
 color:var(--warning);
 margin:2px 0 8px;
 font-size:10px;
-line-height:1.45
+line-height:1.45;
+align-items:center;
+gap:6px;
+display:flex
 }
 .external-guide
 {
