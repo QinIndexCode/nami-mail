@@ -2741,8 +2741,8 @@
     "settings.tools.search.clear": "清除搜索",
     "settings.tools.access.title": "智能体执行权限：",
     "settings.tools.access.readOnly": "只读模式 (Read-Only) · 写入工具已锁定",
-    "settings.tools.access.confirm": "需确认模式 (Confirmation Required) · 写入前将弹窗请求授权",
-    "settings.tools.access.full": "自主模式 (Autonomous) · 自动调用读写工具",
+    "settings.tools.access.sendConfirmed": "需确认模式 (Confirmation Required) · 写入前将弹窗请求授权",
+    "settings.tools.access.fullAccess": "自主模式 (Autonomous) · 自动调用读写工具",
     "settings.tools.access.configureBtn": "调整权限",
     "settings.tools.emptyFilter": "未找到匹配的工具",
     "settings.tools.tag.read": "只读工具",
@@ -2783,8 +2783,6 @@
     "settings.tools.builtin.autoReplyDeclinedSearch.desc": "检索自动回复拒绝审计日志与忽略决策记录",
     "settings.tools.builtin.timeNow.desc": "获取客户端当前的精确本地日期时间与时区偏移",
     "settings.tools.builtin.webSearch.desc": "使用联网搜索引擎检索实时外部公开资讯",
-    "settings.tools.builtin.settingsUpdate.desc": "受控修改客户端系统设置与智能体偏好",
-    "settings.tools.access.sendConfirmed": "需确认模式 (Confirmation Required) · 写入前将弹窗请求授权",
-    "settings.tools.access.fullAccess": "自主模式 (Autonomous) · 自动调用读写工具"
+    "settings.tools.builtin.settingsUpdate.desc": "受控修改客户端系统设置与智能体偏好"
   }
 }

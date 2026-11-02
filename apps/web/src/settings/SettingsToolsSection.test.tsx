@@ -11,14 +11,34 @@ import SettingsToolsSection from "./SettingsToolsSection";
 
 vi.mock("../api", () => ({
   api: {
-    agentMcpServers: vi.fn().mockResolvedValue({ servers: [] }),
-    checkAgentMcpServer: vi.fn().mockResolvedValue({ ok: true }),
-    saveAgentMcpServer: vi.fn().mockResolvedValue({ ok: true }),
-    deleteAgentMcpServer: vi.fn().mockResolvedValue({ ok: true }),
+    agentMcpServers: vi.fn().mockResolvedValue({ items: [] }),
+    createAgentMcpServer: vi.fn(),
+    updateAgentMcpServer: vi.fn(),
+    checkAgentMcpServer: vi.fn().mockResolvedValue({}),
+    deleteAgentMcpServer: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
+import { api } from "../api";
+import type { AgentMcpServerSummary } from "../agentTypes";
+
+const mockApi = vi.mocked(api);
 const t = (key: string, params?: Record<string, unknown>) => translate("zh-CN", key, params as never);
+
+const mcpServer: AgentMcpServerSummary = {
+  id: "mcp-1",
+  label: "filesystem",
+  command: "npx",
+  args: ["-y", "@modelcontextprotocol/server-filesystem"],
+  envKeys: ["TOKEN"],
+  cwd: "/tmp",
+  timeoutMs: 30_000,
+  enabled: true,
+  toolCount: 3,
+  toolNames: ["read", "write", "list"],
+  createdAt: "2026-08-10T00:00:00.000Z",
+  updatedAt: "2026-08-10T00:00:00.000Z",
+};
 
 let container: HTMLDivElement;
 let root: Root | null = null;
@@ -26,6 +46,7 @@ let root: Root | null = null;
 beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
+  mockApi.agentMcpServers.mockResolvedValue({ items: [] });
 });
 
 afterEach(() => {
@@ -55,6 +76,51 @@ function renderSection(props: Partial<React.ComponentProps<typeof SettingsToolsS
       />,
     );
   });
+}
+
+async function flush(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  });
+}
+
+/** Mounts with the MCP list already loaded; demo mode would skip the fetch. */
+async function renderLoadedMcp(
+  props: Partial<React.ComponentProps<typeof SettingsToolsSection>> = {},
+): Promise<void> {
+  renderSection({ demoMode: false, ...props });
+  await flush();
+}
+
+const query = <T extends Element>(selector: string): T => {
+  const node = container.querySelector<T>(selector);
+  if (!node) throw new Error(`${selector} not found`);
+  return node;
+};
+
+const byText = (selector: string, text: string) =>
+  Array.from(container.querySelectorAll<HTMLElement>(selector)).find((node) => node.textContent?.includes(text));
+
+function click(node: HTMLElement): void {
+  act(() => node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+}
+
+function type(input: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement : HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(prototype.prototype, "value")?.set;
+  if (!setter) throw new Error("no value setter");
+  act(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function submit(formSelector: string): Promise<void> {
+  await act(async () => {
+    query<HTMLFormElement>(formSelector).dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  await flush();
 }
 
 describe("SettingsToolsSection", () => {
@@ -195,5 +261,124 @@ describe("SettingsToolsSection", () => {
 
     expect(container.querySelector('[data-models-card="mcp"]')).not.toBeNull();
     expect(container.textContent).toContain(t("agent.mcpServers.new"));
+  });
+
+  it("creates and checks an MCP server through its own card", async () => {
+    mockApi.agentMcpServers.mockResolvedValue({ items: [mcpServer] });
+    mockApi.createAgentMcpServer.mockImplementation(
+      async (input) => ({ ...mcpServer, ...input, id: "mcp-new" } as AgentMcpServerSummary),
+    );
+    await renderLoadedMcp();
+
+    click(query<HTMLButtonElement>("#tab-tools-mcp"));
+    await flush();
+    click(query<HTMLButtonElement>('[data-models-card="mcp"] .settings-inline-actions button'));
+    expect(container.querySelector('[data-models-form="mcp"]')).not.toBeNull();
+
+    type(query<HTMLInputElement>("#mcp-server-label"), "filesystem");
+    type(query<HTMLInputElement>("#mcp-server-command"), "npx");
+    type(query<HTMLTextAreaElement>("#mcp-server-args"), "-y\n\n@modelcontextprotocol/server-filesystem");
+    type(query<HTMLInputElement>("#mcp-server-cwd"), "/tmp");
+    const envInputs = container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input");
+    type(envInputs[0]!, "TOKEN");
+    type(envInputs[1]!, " secret-value ");
+    await submit('[data-models-form="mcp"]');
+
+    expect(mockApi.createAgentMcpServer).toHaveBeenCalledWith({
+      label: "filesystem",
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem"],
+      env: { TOKEN: "secret-value" },
+      cwd: "/tmp",
+      timeoutMs: 30_000,
+      enabled: true,
+    });
+    expect(mockApi.checkAgentMcpServer).toHaveBeenCalledWith("mcp-new");
+  });
+
+  it("removes a saved environment key by dropping its row", async () => {
+    mockApi.agentMcpServers.mockResolvedValue({ items: [mcpServer] });
+    mockApi.updateAgentMcpServer.mockImplementation(
+      async (id, input) => ({ ...mcpServer, ...input, id } as AgentMcpServerSummary),
+    );
+    await renderLoadedMcp();
+
+    click(query<HTMLButtonElement>("#tab-tools-mcp"));
+    await flush();
+    click(byText('[data-mcp-id="mcp-1"] .secondary-button', t("settings.models.edit"))!);
+    await flush();
+    // The saved key plus one spare row.
+    expect(container.querySelectorAll(".settings-model-env-line")).toHaveLength(2);
+
+    click(query<HTMLButtonElement>(".settings-model-env-line .icon-button"));
+    await submit('[data-models-form="mcp"]');
+
+    expect(mockApi.updateAgentMcpServer).toHaveBeenCalledWith("mcp-1", expect.objectContaining({
+      label: "filesystem",
+      env: {},
+      envRemove: ["TOKEN"],
+    }));
+  });
+
+  it("keeps the same env <input> node while a key and a value are typed", async () => {
+    // Regression lock: the row key used to be built from the row's own content,
+    // so every keystroke changed the React key, the <input> was unmounted and
+    // remounted, and focus/caret was lost after the first character.
+    await renderLoadedMcp();
+
+    click(query<HTMLButtonElement>("#tab-tools-mcp"));
+    await flush();
+    click(query<HTMLButtonElement>('[data-models-card="mcp"] .settings-inline-actions button'));
+    await flush();
+    const envInputs = () => container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input");
+    const keyInput = envInputs()[0]!;
+    const valueInput = envInputs()[1]!;
+
+    type(keyInput, "T");
+    expect(envInputs()[0]).toBe(keyInput);
+    type(envInputs()[0]!, "TO");
+    expect(envInputs()[0]).toBe(keyInput);
+
+    type(valueInput, "s");
+    expect(envInputs()[1]).toBe(valueInput);
+    type(envInputs()[1]!, "se");
+    expect(envInputs()[1]).toBe(valueInput);
+
+    // Two keystrokes in, both values landed on the original nodes.
+    expect(envInputs()[0]!.value).toBe("TO");
+    expect(envInputs()[1]!.value).toBe("se");
+  });
+
+  it("adds an env row without disturbing the rows already typed into", async () => {
+    await renderLoadedMcp();
+
+    click(query<HTMLButtonElement>("#tab-tools-mcp"));
+    await flush();
+    click(query<HTMLButtonElement>('[data-models-card="mcp"] .settings-inline-actions button'));
+    await flush();
+    const envInputs = () => container.querySelectorAll<HTMLInputElement>(".settings-model-env-line input");
+    type(envInputs()[0]!, "TOKEN");
+    const firstKey = envInputs()[0]!;
+
+    click(byText(".settings-model-add-env", t("agent.mcpServers.fields.addEnv"))!);
+    await flush();
+
+    expect(container.querySelectorAll(".settings-model-env-line")).toHaveLength(2);
+    expect(envInputs()[0]).toBe(firstKey);
+    expect(envInputs()[0]!.value).toBe("TOKEN");
+  });
+
+  it("deletes an MCP server only after the confirm step", async () => {
+    mockApi.agentMcpServers.mockResolvedValue({ items: [mcpServer] });
+    await renderLoadedMcp();
+
+    click(query<HTMLButtonElement>("#tab-tools-mcp"));
+    await flush();
+    click(byText('[data-mcp-id="mcp-1"] .danger-button', t("agent.mcpServers.delete"))!);
+    expect(mockApi.deleteAgentMcpServer).not.toHaveBeenCalled();
+
+    click(byText('[data-mcp-id="mcp-1"] .danger-button', t("agent.mcpServers.deleteConfirm"))!);
+    await flush();
+    expect(mockApi.deleteAgentMcpServer).toHaveBeenCalledWith("mcp-1");
   });
 });

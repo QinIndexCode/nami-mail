@@ -2741,8 +2741,8 @@
     "settings.tools.search.clear": "Clear search",
     "settings.tools.access.title": "Agent Policy: ",
     "settings.tools.access.readOnly": "Read-Only · Write tools are locked",
-    "settings.tools.access.confirm": "Confirmation Required · Requests confirmation before writes",
-    "settings.tools.access.full": "Autonomous · Automatically executes read and write tools",
+    "settings.tools.access.sendConfirmed": "Confirmation Required · Requests confirmation before writes",
+    "settings.tools.access.fullAccess": "Autonomous · Automatically executes read and write tools",
     "settings.tools.access.configureBtn": "Configure",
     "settings.tools.emptyFilter": "No matching tools found",
     "settings.tools.tag.read": "Read Tool",
@@ -2783,8 +2783,6 @@
     "settings.tools.builtin.autoReplyDeclinedSearch.desc": "Search auto-reply declined audit logs and skip decisions",
     "settings.tools.builtin.timeNow.desc": "Get current exact local date, time, and timezone offset",
     "settings.tools.builtin.webSearch.desc": "Search the web for real-time external public information",
-    "settings.tools.builtin.settingsUpdate.desc": "Update client settings and agent preferences in a controlled manner",
-    "settings.tools.access.sendConfirmed": "Confirmation Required · Requests confirmation before writes",
-    "settings.tools.access.fullAccess": "Autonomous · Automatically executes read and write tools"
+    "settings.tools.builtin.settingsUpdate.desc": "Update client settings and agent preferences in a controlled manner"
   }
 }

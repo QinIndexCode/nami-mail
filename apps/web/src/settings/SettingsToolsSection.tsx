@@ -201,7 +201,7 @@ export default function SettingsToolsSection({
 
           {/* Domain Filter Pills & Search */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 2, marginBottom: 2 }}>
-            <div className="connections-shell-tabs" role="tablist" aria-label={t("settings.tools.filterLabel")}>
+            <div className="connections-shell-tabs" role="group" aria-label={t("settings.tools.filterLabel")}>
               <button
                 type="button"
                 className={`secondary-button connections-shell-tab${selectedDomain === "all" ? " active" : ""}`}

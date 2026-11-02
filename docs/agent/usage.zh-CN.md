@@ -47,5 +47,6 @@ NamiMail Agent 是内置的邮件 AI 工作区：本地检索、来源引用，�
 ## 相关文档
 
 - [模型提供商配置](providers.zh-CN.md)：接口类型、密钥与云端邮件内容授权。
+- [内置工具目录](tools.zh-CN.md)：全部内置工具的权限与确认策略；应用内可在「设置 → 智能体工具」按领域查看并搜索，页面同时显示当前执行权限会锁定或要求确认哪些写入操作。
 - [接入外部 MCP 服务器](mcp-servers.zh-CN.md)：为助理扩展外部工具能力。
 - [对话与上下文](conversations.zh-CN.md)、[权限](permissions.zh-CN.md) 与 [安全](security.zh-CN.md)：上下文构建与执行边界。
