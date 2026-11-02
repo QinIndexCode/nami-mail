@@ -32,6 +32,16 @@ describe("management dialogs", () => {
     expect(markup).toContain(zh("settings.contacts.title"));
   });
 
+  it("renders the contacts dialog with onComposeTo prop", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider>
+        <ContactsDialog demoMode onClose={() => undefined} onComposeTo={() => undefined} />
+      </I18nProvider>,
+    );
+    expect(markup).toContain('id="contacts-dialog-title"');
+    expect(markup).toContain(zh("settings.contacts.title"));
+  });
+
   it("renders the templates dialog with its own heading", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider>

@@ -1,8 +1,8 @@
-# 本机 Mail API 契约
+# 邮件正文翻译 API
 
-[简体中文](LOCAL-API.zh-CN.md) | [English](LOCAL-API.en.md)
+[简体中文](TRANSLATION-API.zh-CN.md) | [English](TRANSLATION-API.en.md)
 
-本页记录 Nami Mail 桌面界面与本机 Fastify 服务之间的受保护协议。它不是面向第三方应用、浏览器扩展或网络客户端的公开 API，也不能替代独立的已配对外部 Mail v1 CLI、MCP 或 Agent Broker 接口。
+本页记录 Nami Mail 桌面阅读界面与本机 Fastify 服务之间与邮件正文翻译相关的受保护协议。它不是面向第三方应用、浏览器扩展或网络客户端的公开 API，也不能替代独立的已配对外部 Mail v1 CLI、MCP 或 Agent Broker 接口。
 
 ## 访问边界
 
@@ -47,9 +47,9 @@
 }
 ```
 
-### `GET /api/translation/configuration` 与 `PUT /api/translation/configuration`
+### `GET /api/translation/configuration`、`PUT /api/translation/configuration` 与 `DELETE /api/translation/configuration`
 
-获取或更新翻译设置（包含 `primary`、`backup`、`endpoint` 及是否已配置 API key 等摘要）。未开启受管配置的运行时返回 `409` (`translation_configuration_managed`)；格式校验不通过时 `PUT` 返回 `400` (`translation_configuration_invalid`)。
+获取、更新或清除翻译设置（包含 `primary`、`backup`、`endpoint` 及是否已配置 API key 等摘要）。未开启受管配置的运行时返回 `409` (`translation_configuration_managed`)；格式校验不通过时 `PUT` 返回 `400` (`translation_configuration_invalid`)。`DELETE` 清除已保存的外部服务配置，状态接口随后按内置免费翻译返回 `mode: "builtin"`。
 
 ### `POST /api/messages/:id/translate`
 
@@ -75,7 +75,7 @@
 
 外部 LibreTranslate 兼容运行时可以额外返回嵌套对象格式的 `detectedLanguage`。正文在 5,000 到 50,000 字符之间时会被智能拆分为多个分块，响应改为 `text/event-stream` 的 SSE 事件流：结果按块以事件形式推送，调用方必须按事件流消费，不能按 JSON 解析。
 
-### `POST /api/translate-segments`
+### `POST /api/messages/translate-segments`
 
 用于界面碎片化文本片段（例如邀请摘要等）的批量翻译，请求体包含 `segments: string[]` 与 `targetLocale: string`。
 
@@ -87,4 +87,4 @@
 
 - 调用方必须按 HTTP 状态和稳定 `code` 分支，不能解析中文或英文错误文本。
 - 未出现 `mode: "builtin"` 时，调用方必须按既有外部翻译配置运行时处理；`mode: "builtin"` 表示未配置外部服务，内置翻译始终可用。
-- 此文档只描述 GUI 所需的受保护本机协议。外部 Mail v1 使用独立的 Broker、配对、账户快照和权限契约；对外部 CLI、MCP、IPC 或网络接口的变更必须保持独立威胁模型、权限设计和端到端验证。
+- 此文档只描述 GUI 翻译能力所需的受保护本机协议。外部 Mail v1 使用独立的 Broker、配对、账户快照和权限契约；对外部 CLI、MCP、IPC 或网络接口的变更必须保持独立威胁模型、权限设计和端到端验证。

@@ -74,7 +74,7 @@ Nami Mail 外部 Mail v1 是 Windows 桌面版提供的本机、已配对接口�
 - Broker 使用仅当前 Windows 用户 SID 可访问的命名管道。CLI 和 MCP 只通过该管道访问正在运行的宿主。
 - 每个客户端使用独立的受保护身份、宿主身份绑定、签名和单调计数器。重放、身份不匹配和已撤销配对会被拒绝。
 - Broker 根据配对记录构造调用方、scope 和账户范围，不信任 CLI 或 MCP 提供的权限、账户范围、数据库路径或令牌。
-- 本机 Fastify 服务仅服务桌面渲染器；动态回环端口和 `x-nami-api-token` 不是第三方集成凭据。详见[本机 Mail API 契约](LOCAL-API.zh-CN.md)。
+- 本机 Fastify 服务仅服务桌面渲染器；动态回环端口和 `x-nami-api-token` 不是第三方集成凭据。详见[邮件正文翻译 API](TRANSLATION-API.zh-CN.md)。
 - 更新开始时，Broker 先停止接收新请求并等待已接受的操作完成。客户端应处理 `UPDATE_IN_PROGRESS`，在更新恢复后重新提交新的请求，而不是重放旧签名帧。
 - 任何已配对客户端都可以在任何权限档位调用 `host.shutdown`。它是 Broker 内部控制命令，不是外部 v1 工具：回复 `{ "status": "stopping" }` 并请求宿主停止，绝不经过外部工具允许列表或邮件桥接，本身也不授予任何邮件访问权限。
 

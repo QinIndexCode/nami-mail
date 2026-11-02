@@ -21,7 +21,16 @@ Without any configured model, the assistant shows "Set up a usable model first" 
 | Anthropic Claude (native protocol) | Anthropic Messages API, e.g. `https://api.anthropic.com` |
 | Google Gemini (native protocol) | e.g. `https://generativelanguage.googleapis.com/v1beta` |
 | OpenAI Responses (native protocol) | e.g. `https://api.openai.com/v1` |
+| TypeSafe System One (decision model) | Pure decision model (e.g. Jev), never generates text; fill in the API base URL (official `https://api.typesafe.ai/v1` or a self-hosted gateway), model alias such as `jev-latest` |
 | Custom | Reserved kind in underlying contract; not yet open for configuration in runtime validation |
+
+## Model Roles (chat / decision)
+
+Every model connection carries explicit **roles** describing the work it may serve:
+
+- **chat**: every text-generating call site — assistant turns, AI translation, AI polish, retrieval expansion, and auto-reply drafting. The five chat-shaped interface types above all hold this role.
+- **decision**: typed decisions that return a label or calibrated probability instead of prose, such as the `noul` questions of System One (Jev). A decision-only model **cannot** be the default model and never appears in the assistant, translation or polish model pickers; it only serves explicitly wired decision call sites such as auto-reply review.
+- A kind written by a newer app version stays listed and deletable (with an "unsupported in this version" badge) but cannot be edited or connection-checked — reads are lenient, writes strict, so one foreign row can never take the whole model table down.
 
 ## Fields
 
@@ -51,8 +60,8 @@ API key behavior:
 
 ## Default Model and Status
 
-- **Set as default model**: new conversations prefer this model.
-- Status badges: `Configuration complete`, `Connection verified`, `Connection needs review`, `Connection unavailable`; local and cloud models are labeled separately.
+- **Set as default model**: new conversations prefer this model; only chat-role models can be the default, decision-role rows do not offer the action.
+- Status badges: `Configuration complete`, `Connection verified`, `Connection needs review`, `Connection unavailable`; local and cloud models are labeled separately, and decision-role models carry a "decision model" badge.
 - A failed connection check keeps the configuration so you can fix and retry; common errors include auth rejection, timeout, unreachable server, rate limiting, and configuration changed during the check.
 
 ## Multimodal Input Capabilities

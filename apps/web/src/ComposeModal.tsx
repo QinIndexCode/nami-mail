@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { CalendarClock, FilePenLine, LayoutTemplate, LoaderCircle, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { BookUser, CalendarClock, FilePenLine, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -9,27 +9,31 @@ import { pollSubmittingSubmission, submissionInFlight } from "./sendingStatus";
 import DatePicker from "./DatePicker";
 import ThemedSelect from "./ThemedSelect";
 import { useDialogFocus } from "./hooks/useDialogFocus";
-import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useI18n } from "./i18n";
 import { ComposePolishControls, useComposePolish } from "./composePolish";
-import type { Account, Contact, MailTemplate, OutboundAttachment } from "./types";
+import { useRecipientSuggestions } from "./useRecipientSuggestions";
+import type { Account, MailTemplate, OutboundAttachment } from "./types";
 import { AttachmentFileIcon, formatFileSize, datetimeLocalFromDate, isoFromDatetimeLocal, IconButton, type ComposeDraft, type PendingAttachmentUpload, type ToastKind } from "./mailUi";
+import { durableGet, durableSet } from "./durablePreferences";
+import ComposeMarkdownToolbar, { type ComposeViewMode } from "./ComposeMarkdownToolbar";
+import ComposeMarkdownPreview from "./ComposeMarkdownPreview";
+import ComposeWordCounter from "./ComposeWordCounter";
+import { markdownToEmailHtml } from "./composeMarkdown";
+import { useComposeMarkdown } from "./useComposeMarkdown";
+import ComposeTemplatePicker from "./ComposeTemplatePicker";
+export const COMPOSE_MAXIMIZED_STORAGE_KEY = "nami-mail.compose-maximized";
 
 const isDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 
 function createLocalId(prefix: string): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${prefix}_${crypto.randomUUID()}`;
-  }
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? `${prefix}_${crypto.randomUUID()}`
+    : `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
 }
+const createSubmissionIdempotencyKey = (): string => createLocalId("sub");
 
-function createSubmissionIdempotencyKey(): string {
-  return createLocalId("sub");
-}
-
-export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null> }) {
+export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, onDraftDiscarded, onSubmissionChanged, fallbackFocusRef, initialViewMode, initialIsMaximized }: { accounts: Account[]; draft: ComposeDraft; onClose: () => void; onSent: (message: string, kind?: ToastKind, undoDraft?: ComposeDraft, accountId?: string) => void; onDraftSaved: (accountId: string) => void; onDraftDiscarded: (messageId: string) => void; onSubmissionChanged: () => void; fallbackFocusRef?: RefObject<HTMLElement | null>; initialViewMode?: ComposeViewMode; initialIsMaximized?: boolean }) {
   const { t } = useI18n();
   const signatureForAccount = (accountId: string): string =>
     accounts.find((account) => account.id === accountId)?.signature ?? "";
@@ -43,22 +47,27 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [attachments, setAttachments] = useState<OutboundAttachment[]>(draft.attachments ?? []);
   const [pendingUploads, setPendingUploads] = useState<PendingAttachmentUpload[]>([]);
   const [recentAttachmentTokens, setRecentAttachmentTokens] = useState<Set<string>>(() => new Set());
+  const [isMaximized, setIsMaximized] = useState(() => initialIsMaximized ?? (durableGet(COMPOSE_MAXIMIZED_STORAGE_KEY) === "true"));
   const [busy, setBusy] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"discard" | "delete" | null>(null);
   const [error, setError] = useState("");
   const [deliveryNotice, setDeliveryNotice] = useState("");
   const [sendAtLocal, setSendAtLocal] = useState("");
-  const polish = useComposePolish({ text, applyText: setText, notify: onSent, t });
-  const [toSuggestions, setToSuggestions] = useState<Contact[]>([]);
-  const [toSuggestionsOpen, setToSuggestionsOpen] = useState(false);
-  const { mounted: toSuggestionsMounted, closing: toSuggestionsClosing, beginClose: beginToSuggestionsClose } = usePopupExitTransition(toSuggestionsOpen, () => setToSuggestionsOpen(false));
-  const [toSuggestionIndex, setToSuggestionIndex] = useState(0);
-  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
-  const { mounted: templatePickerMounted, closing: templatePickerClosing, beginClose: beginTemplatePickerClose } = usePopupExitTransition(templatePickerOpen, () => setTemplatePickerOpen(false));
-  const [composeTemplates, setComposeTemplates] = useState<MailTemplate[] | null>(null);
-  const [templateLoadBusy, setTemplateLoadBusy] = useState(false);
-  const [templateLoadFailed, setTemplateLoadFailed] = useState(false);
+  const toRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-contact-suggestions", onApplyRecipient: setTo });
+  const ccRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-cc-contact-suggestions", onApplyRecipient: setCc });
+  const {
+    markdownEnabled,
+    viewMode,
+    setViewMode,
+    textareaRef,
+    handleToggleMarkdown,
+    handleFormat,
+    handleBodyKeyDown,
+  } = useComposeMarkdown({ setText, initialViewMode });
+  const polish = useComposePolish({ text, applyText: setText, notify: onSent, t, markdownEnabled });
+
+
   const [ccOpen, setCcOpen] = useState(() => Boolean(draft.cc?.trim()));
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -68,7 +77,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const discardConfirmDialogRef = useRef<HTMLElement>(null);
   const submissionAttemptRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const uploadInFlightRef = useRef(false);
-  const toSearchRef = useRef(0);
+
   const initialDraftRef = useRef({
     accountId: initialAccountId,
     to: draft.to ?? "",
@@ -80,78 +89,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
 
   const recipients = () => to.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
   const copiedRecipients = () => cc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
-  // Debounced address-book lookup for recipient autocomplete. The lookup is a
-  // local encrypted store, so suggestions never leave the machine.
-  const searchContacts = (value: string) => {
-    const requestId = ++toSearchRef.current;
-    // The field can already hold complete addresses separated by commas,
-    // semicolons, or whitespace; only the trailing token is the live query.
-    const needle = value.split(/[,;\s]+/).pop() ?? "";
-    if (isDemo || !needle) {
-      setToSuggestions([]);
-      setToSuggestionsOpen(false);
-      return;
-    }
-    window.setTimeout(() => {
-      if (toSearchRef.current !== requestId) return;
-      void api.contacts(needle, 8).then((result) => {
-        if (toSearchRef.current !== requestId) return;
-        setToSuggestions(result.items);
-        setToSuggestionsOpen(result.items.length > 0);
-      }).catch(() => {
-        if (toSearchRef.current !== requestId) return;
-        setToSuggestions([]);
-        setToSuggestionsOpen(false);
-      });
-    }, 180);
-  };
-  const applyRecipientSuggestion = (contact: Contact) => {
-    // recipients() accepts commas, semicolons, and whitespace as separators,
-    // so replace only the trailing token and keep its preceding separator.
-    const match = to.match(/([\s,;]+)([^\s,;]*)$/);
-    setTo(match ? `${to.slice(0, to.length - match[0].length)}${match[1]}${contact.email}` : contact.email);
-    setToSuggestions([]);
-    setToSuggestionsOpen(false);
-    toSearchRef.current += 1;
-  };
-  // The highlighted suggestion drives aria-activedescendant; it clamps as the
-  // matched list can shrink while the menu stays open.
-  const suggestedIndex = toSuggestions.length > 0 ? Math.min(toSuggestionIndex, toSuggestions.length - 1) : 0;
-  // Template quick-reply: templates are a local encrypted store, so the
-  // picker loads only on first open and never sends template text anywhere.
-  const templateLoadInFlightRef = useRef(false);
-  const loadComposeTemplates = async () => {
-    // Toggling the picker and the retry button can both fire while the first
-    // request is still running; the store is local and the result idempotent, so
-    // the only thing worth preventing is the duplicate request.
-    if (isDemo || composeTemplates || templateLoadInFlightRef.current) return;
-    templateLoadInFlightRef.current = true;
-    setTemplateLoadBusy(true);
-    setTemplateLoadFailed(false);
-    try {
-      const result = await api.templates();
-      setComposeTemplates(result.items);
-    } catch {
-      setTemplateLoadFailed(true);
-    } finally {
-      templateLoadInFlightRef.current = false;
-      setTemplateLoadBusy(false);
-    }
-  };
-  const toggleTemplatePicker = () => {
-    if (busy || discarding) return;
-    if (templatePickerOpen) {
-      beginTemplatePickerClose();
-      return;
-    }
-    setTemplatePickerOpen(true);
-    void loadComposeTemplates();
-  };
   const applyTemplate = (template: MailTemplate) => {
     const applied = applyTemplateToDraft({ subject, body: text }, template);
     setSubject(applied.subject);
     setText(applied.body);
-    beginTemplatePickerClose();
     onSent(t("compose.templates.inserted"));
   };
   const initialDraft = initialDraftRef.current;
@@ -246,23 +187,23 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
   };
 
+
+
   useEffect(() => {
-    if (!toSuggestionsOpen) setToSuggestionIndex(0);
-  }, [toSuggestionsOpen]);
+    durableSet(COMPOSE_MAXIMIZED_STORAGE_KEY, isMaximized ? "true" : "false");
+  }, [isMaximized]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (confirmAction) {
-        requestConfirmClose();
-        return;
-      }
+      if (confirmAction) { requestConfirmClose(); return; }
+      if (isMaximized) { setIsMaximized(false); return; }
       requestClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [confirmAction, requestClose, requestConfirmClose]);
+  }, [confirmAction, isMaximized, requestClose, requestConfirmClose]);
 
   const chooseFiles = () => fileInputRef.current?.click();
 
@@ -455,12 +396,14 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     setDeliveryNotice("");
     try {
       if (!isDemo) {
+        const sendHtml = markdownEnabled && text.trim() ? markdownToEmailHtml(text) : undefined;
         const sendRequest = {
           accountId,
           to: recipientValues,
           cc: ccValues.length ? ccValues : undefined,
           subject,
           text,
+          html: sendHtml,
           inReplyTo: draft.inReplyTo,
           references: draft.references,
           discardDraftId: draft.sourceDraftId,
@@ -580,14 +523,14 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   };
 
   return (
-    <div className={`modal-backdrop compose-backdrop${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
+    <div className={`modal-backdrop compose-backdrop${isMaximized ? " is-maximized" : ""}${closing ? " closing" : ""}`} role="presentation" onMouseDown={(event) => {
       if (event.target !== event.currentTarget) return;
       if (confirmAction) requestConfirmClose();
       else requestClose();
     }}>
       <section
         ref={composeDialogRef}
-        className={`compose-card${closing ? " closing" : ""}${isDraggingFiles ? " is-dragging-files" : ""}`}
+        className={`compose-card${isMaximized ? " is-maximized" : ""}${closing ? " closing" : ""}${isDraggingFiles ? " is-dragging-files" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="compose-title"
@@ -606,7 +549,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
         )}
         <header className="compose-header">
           <div><h2 id="compose-title">{draft.sourceDraftId ? t("compose.editDraft") : t("compose.new")}</h2></div>
-          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
+          <div className="compose-header-actions">{draft.sourceDraftId && <IconButton label={t("compose.deleteDraft")} onClick={() => { resetConfirmClosing(); setConfirmAction("delete"); }} disabled={busy || uploading || discarding}><Trash2 size={18} /></IconButton>}<IconButton label={isMaximized ? t("compose.restore") : t("compose.maximize")} onClick={() => setIsMaximized((prev) => !prev)} disabled={busy || uploading || discarding}>{isMaximized ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</IconButton><IconButton label={t("common.close")} onClick={requestClose} disabled={busy || uploading || discarding}><X size={18} /></IconButton></div>
         </header>
         <form noValidate onSubmit={submit}>
           <label className="compose-row" htmlFor="compose-account"><span>{t("compose.sender")}</span><ThemedSelect id="compose-account" value={accountId} onValueChange={(value) => {
@@ -624,22 +567,8 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           <div className="compose-row compose-to-row">
             <label htmlFor="compose-to"><span>{t("compose.to")}</span>
               <div className="compose-to-input-wrap">
-                <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); searchContacts(event.target.value); }} onKeyDown={(event) => {
-                  if (event.key === "Escape") { beginToSuggestionsClose(); return; }
-                  if ((event.key === "ArrowDown" || event.key === "ArrowUp")) {
-                    if (!toSuggestionsOpen || toSuggestions.length === 0) return;
-                    event.preventDefault();
-                    const delta = event.key === "ArrowDown" ? 1 : -1;
-                    setToSuggestionIndex((index) => (index + delta + toSuggestions.length) % toSuggestions.length);
-                    return;
-                  }
-                  // While the suggestions are open, Enter applies the highlighted
-                  // contact instead of submitting the compose form.
-                  if (event.key === "Enter" && toSuggestionsOpen && toSuggestions.length > 0) {
-                    const active = toSuggestions[suggestedIndex];
-                    if (active) { event.preventDefault(); applyRecipientSuggestion(active); }
-                  }
-                }} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toSuggestionsOpen} aria-controls={toSuggestionsOpen ? "compose-contact-suggestions" : undefined} aria-activedescendant={toSuggestionsOpen && toSuggestions.length > 0 ? `compose-contact-suggestion-${suggestedIndex}` : undefined} />
+                <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); toRecipients.search(event.target.value); }} onKeyDown={(event) => toRecipients.onKeyDown(event, to)} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toRecipients.open} aria-controls={toRecipients.open ? "compose-contact-suggestions" : undefined} aria-activedescendant={toRecipients.activeDescendantId} />
+                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => toRecipients.toggle(to)} disabled={busy || discarding}><BookUser size={14} /></button>
                 {!ccOpen && !cc.trim() && (
                   <button type="button" className="compose-cc-toggle" onClick={() => setCcOpen(true)} disabled={busy || discarding}>
                     {t("compose.cc")}
@@ -647,10 +576,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
                 )}
               </div>
             </label>
-            {toSuggestionsMounted && (
-              <div className={`compose-contact-suggestions${toSuggestionsClosing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
-                {toSuggestions.map((contact, index) => (
-                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => applyRecipientSuggestion(contact)}>
+            {toRecipients.mounted && (
+              <div className={`compose-contact-suggestions${toRecipients.closing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+                {toRecipients.suggestions.map((contact, index) => (
+                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === toRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => toRecipients.applyContact(contact, to)}>
                     <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
                   </button>
                 ))}
@@ -658,11 +587,61 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             )}
           </div>
           <div className={`compose-row compose-cc-row${ccOpen || cc.trim() ? " is-open" : " is-collapsed"}`}>
-            <label htmlFor="compose-cc"><span>{t("compose.cc")}</span><input id="compose-cc" type="text" value={cc} onChange={(event) => setCc(event.target.value)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} /></label>
+            <label htmlFor="compose-cc"><span>{t("compose.cc")}</span>
+              <div className="compose-to-input-wrap">
+                <input id="compose-cc" type="text" value={cc} onChange={(event) => { setCc(event.target.value); ccRecipients.search(event.target.value); }} onKeyDown={(event) => ccRecipients.onKeyDown(event, cc)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} aria-autocomplete="list" aria-expanded={ccRecipients.open} aria-controls={ccRecipients.open ? "compose-cc-contact-suggestions" : undefined} aria-activedescendant={ccRecipients.activeDescendantId} />
+                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => ccRecipients.toggle(cc)} disabled={busy || discarding}><BookUser size={14} /></button>
+              </div>
+            </label>
+            {ccRecipients.mounted && (
+              <div className={`compose-contact-suggestions${ccRecipients.closing ? " closing" : ""}`} id="compose-cc-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
+                {ccRecipients.suggestions.map((contact, index) => (
+                  <button key={contact.id} type="button" role="option" id={`compose-cc-contact-suggestion-${index}`} aria-selected={index === ccRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => ccRecipients.applyContact(contact, cc)}>
+                    <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
-          <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
-          <textarea id="compose-body" className={`compose-body${polish.polishing ? " is-polishing" : ""}`} value={text} onChange={(event) => setText(event.target.value)} placeholder={t("compose.bodyPlaceholder")} disabled={busy || discarding || polish.polishing} aria-busy={polish.polishing || undefined} />
+          <div className="compose-editor-container">
+            <ComposeMarkdownToolbar
+              onFormat={handleFormat}
+              markdownEnabled={markdownEnabled}
+              onToggleMarkdown={handleToggleMarkdown}
+              viewMode={viewMode}
+              onChangeViewMode={setViewMode}
+              isMaximized={isMaximized}
+              disabled={busy || discarding || polish.polishing}
+            />
+            <div className={`compose-editor-main${viewMode === "split" && isMaximized ? " is-split" : ""}`}>
+              {viewMode !== "preview" && (
+                <>
+                  <label className="visually-hidden" htmlFor="compose-body">{t("compose.body")}</label>
+                  <textarea
+                    ref={textareaRef}
+                    id="compose-body"
+                    className={`compose-body${polish.polishing ? " is-polishing" : ""}${viewMode === "split" ? " in-split" : ""}`}
+                    value={text}
+                    onChange={(event) => setText(event.target.value)}
+                    onKeyDown={handleBodyKeyDown}
+                    placeholder={t("compose.bodyPlaceholder")}
+                    disabled={busy || discarding || polish.polishing}
+                    aria-busy={polish.polishing || undefined}
+                  />
+                </>
+              )}
+              {(viewMode === "preview" || (viewMode === "split" && isMaximized)) && (
+                <ComposeMarkdownPreview
+                  content={text}
+                  className={viewMode === "split" ? "in-split" : ""}
+                />
+              )}
+            </div>
+            <div className="compose-editor-meta">
+              <ComposeWordCounter text={text} />
+            </div>
+          </div>
           <section className="compose-attachments" aria-label={t("compose.attachment.aria", { count: attachmentSummary.attachedCount, status: attachmentStatus })}>
             <div className="compose-attachments-heading"><span><Paperclip size={16} />{t("compose.attachments")}</span><small aria-live="polite">{attachmentSummary.attachedCount} / 10{t("common.dotSeparator")}{formatFileSize(attachmentSummary.attachedBytes)}{attachmentStatus ? `${t("common.dotSeparator")}${attachmentStatus}` : ""}</small><button className="compose-attachment-add" type="button" onClick={chooseFiles} disabled={busy || uploading || discarding || !accountId}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Paperclip size={15} />}{uploading ? t("compose.attachment.uploading") : t("compose.attachment.add")}</button></div>
             <input ref={fileInputRef} className="visually-hidden" type="file" tabIndex={-1} multiple onChange={(event) => void addFiles(event)} />
@@ -684,38 +663,11 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             <div className="compose-footer-tools">
               <ComposePolishControls polish={polish} t={t} />
               <button className="secondary-button" type="button" disabled={busy || uploading || discarding || hasPendingUploads || !accountId} onClick={() => void saveDraft()}>{busy ? <LoaderCircle className="spin" size={17} /> : <FilePenLine size={17} />}{t("compose.saveDraft")}</button>
-              <div className="compose-template-wrap">
-                <button className="secondary-button compose-template-toggle" type="button" disabled={busy || discarding} onClick={toggleTemplatePicker} aria-expanded={templatePickerOpen} aria-controls={templatePickerOpen ? "compose-template-picker" : undefined} aria-haspopup="listbox"><LayoutTemplate size={15} />{t("compose.templates")}</button>
-                {templatePickerMounted && (
-                  <div className={`compose-template-picker${templatePickerClosing ? " closing" : ""}`} id="compose-template-picker" role="listbox" aria-label={t("compose.templates")}>
-                    {isDemo ? (
-                      <p className="compose-template-empty" role="status">{t("compose.templates.demoUnavailable")}</p>
-                    ) : templateLoadBusy ? (
-                      <p className="compose-template-empty" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{t("common.loading")}</p>
-                    ) : templateLoadFailed ? (
-                      <div className="compose-template-empty" role="alert">
-                        <span>{t("compose.templates.loadFailed")}</span>
-                        <button className="secondary-button" type="button" onClick={() => void loadComposeTemplates()}>
-                          <RefreshCw size={14} aria-hidden="true" />{t("common.retry")}
-                        </button>
-                      </div>
-                    ) : composeTemplates && composeTemplates.length === 0 ? (
-                      <p className="compose-template-empty" role="status">{t("compose.templates.empty")}</p>
-                    ) : (
-                      <ul className="compose-template-list">
-                        {composeTemplates?.map((template, index) => (
-                          <li key={template.id}>
-                            <button type="button" role="option" id={`compose-template-option-${index}`} onClick={() => applyTemplate(template)}>
-                              <span>{template.name}</span>
-                              {template.subject && <small>{template.subject}</small>}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
+              <ComposeTemplatePicker
+                disabled={busy || discarding}
+                isDemo={isDemo}
+                onApplyTemplate={applyTemplate}
+              />
             </div>
             <div className="compose-footer-send-group">
               {sendAtLocal ? (

@@ -11,6 +11,8 @@ const h = vi.hoisted(() => {
     id: "provider-local",
     label: "本机 Ollama",
     kind: "ollama",
+    roles: ["chat"],
+    supported: true,
     endpoint: "http://127.0.0.1:11434/v1",
     model: "llama3.2",
     timeoutMs: 45_000,
@@ -25,6 +27,8 @@ const h = vi.hoisted(() => {
     id: "provider-cloud",
     label: "团队模型",
     kind: "openai-compatible",
+    roles: ["chat"],
+    supported: true,
     endpoint: "https://models.example.test/v1",
     model: "nami-chat",
     timeoutMs: 30_000,
@@ -167,6 +171,67 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
         autoReply: expect.objectContaining({
           draftProviderId: "provider-local",
         }),
+      }),
+      null,
+    );
+  });
+
+  it("offers the decision threshold as percentage presets and patches the stored 0–1 value", async () => {
+    const applyOptimistic = vi.fn(async () => undefined);
+    const settings = {
+      ...defaultAppSettings,
+      autoReply: {
+        ...defaultAppSettings.autoReply,
+        enabled: true,
+        mode: "llm" as const,
+      },
+    };
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <I18nProvider>
+          <SettingsAgentSection
+            t={t}
+            accounts={[]}
+            currentSettings={settings}
+            controlsBusy={false}
+            demoMode={false}
+            openModelSettings={vi.fn()}
+            requestAccessLevelChange={vi.fn()}
+            applyOptimisticSettings={applyOptimistic}
+            setAutoReplyDialogOpen={vi.fn()}
+            setAutoReplyDecisionsOpen={vi.fn()}
+            setMemoryDialogOpen={vi.fn()}
+            setAutoReplySandboxOpen={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const thresholdTrigger = container.querySelector("#agent-auto-reply-threshold") as HTMLButtonElement | null;
+    expect(thresholdTrigger).not.toBeNull();
+    // The contract default (0.7) renders as the 70% preset.
+    expect(thresholdTrigger?.querySelector(".themed-select-value")?.textContent).toContain("≥ 70%");
+
+    await act(async () => {
+      thresholdTrigger?.click();
+    });
+    const menu = container.querySelector('[role="listbox"]');
+    expect(menu).not.toBeNull();
+    const options = Array.from(menu!.querySelectorAll('[role="option"]'));
+    expect(options).toHaveLength(5);
+    expect(options[0]?.textContent).toContain("≥ 50%");
+
+    await act(async () => {
+      (options[0] as HTMLElement).click();
+    });
+    expect(applyOptimistic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autoReply: expect.objectContaining({ decisionThreshold: 0.5 }),
       }),
       null,
     );

@@ -471,6 +471,7 @@ export default function AccountsDialog({
                                 <CopyButton
                                   className="icon-button accounts-copy-address"
                                   text={account.email}
+                                  size={12}
                                   ariaLabel={t("settings.account.copyAddressAriaLabel", { email: account.email })}
                                   announcement={t("settings.account.addressCopied", { email: account.email })}
                                   onCopied={() => setNotice(null)}

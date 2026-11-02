@@ -25,6 +25,8 @@ const h = vi.hoisted(() => {
     id: "provider-1",
     label: "Local",
     kind: "openai-compatible",
+    roles: ["chat"],
+    supported: true,
     endpoint: "http://localhost:11434",
     model: "m",
     timeoutMs: 90_000,
