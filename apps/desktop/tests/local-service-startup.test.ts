@@ -3,12 +3,40 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import {
+  startDesktopService,
   startLocalServiceAndRestoreDesktop,
   type ServiceStartupPlan,
 } from "../src/local-service-startup.mts";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("desktop starts the service with an OS-assigned loopback port", async () => {
+  const calls: unknown[] = [];
+  const params = { databasePath: "test.db", masterKey: new Uint8Array(32), env: {} };
+  await startDesktopService({ start: async (received) => { calls.push(received); } }, params);
+  assert.deepEqual(calls, [{ ...params, host: "127.0.0.1", port: "0" }]);
+});
+
+test("the utility process starts through the desktop service handshake", async () => {
+  const source = ts.createSourceFile("main.mts", await readFile(path.join(desktopRoot, "src", "main.mts"), "utf8"), ts.ScriptTarget.Latest, true);
+  const startup = source.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === "startLocalServiceInUtilityProcess");
+  assert.ok(startup?.body, "expected the desktop utility process startup function");
+  let handshakeCalls = 0;
+  let directBridgeStarts = 0;
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      if (ts.isIdentifier(node.expression) && node.expression.text === "startDesktopService" && node.arguments[0]?.getText(source) === "bridge") handshakeCalls += 1;
+      if (ts.isPropertyAccessExpression(node.expression) && node.expression.expression.getText(source) === "bridge" && node.expression.name.text === "start") directBridgeStarts += 1;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(startup.body);
+  assert.equal(handshakeCalls, 1);
+  assert.equal(directBridgeStarts, 0);
+});
 
 type FakeService = { id: string };
 

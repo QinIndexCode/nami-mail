@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { redactSmokeDiagnosticText } from "./smoke-diagnostics.mjs";
+import { assertDesktopRendererAddress } from "./smoke-desktop-port.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageManifest = JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
@@ -314,12 +315,7 @@ try {
     [["background", "coast"], ["demo", "1"], ["desktop", "1"], ["desktopSmoke", "1"], ["platform", process.platform]],
     "The desktop renderer URL must not expose a local API capability.",
   );
-  const runtimePort = Number.parseInt(rendererUrl.port, 10);
-  assert.equal(rendererUrl.hostname, "127.0.0.1", "The desktop service must remain loopback-only.");
-  assert.ok(Number.isInteger(runtimePort) && runtimePort > 0, "The desktop service must use an allocated loopback port.");
-  if (process.platform === "win32") {
-    assert.ok(runtimePort >= 49152 && runtimePort <= 65535, "The Windows desktop service must use an ephemeral, non-development port.");
-  }
+  const runtimePort = assertDesktopRendererAddress(rendererUrl);
   assert.equal(renderer.title, "Nami Mail");
   const primaryServiceUrl = rendererUrl.origin;
   secondDesktopProcess = spawn(electronExecutable, [...desktopArguments, "--nami-single-instance-smoke"], {

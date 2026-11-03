@@ -1,4 +1,14 @@
 import { serializeRuntimeError } from "./desktop-diagnostics.mjs";
+import type { ServerStartParams } from "./server-bridge.mjs";
+
+export const desktopLoopbackPort = "0";
+
+export async function startDesktopService(
+  bridge: { start(params: ServerStartParams): Promise<unknown> },
+  params: Omit<ServerStartParams, "host" | "port">,
+): Promise<void> {
+  await bridge.start({ ...params, host: "127.0.0.1", port: desktopLoopbackPort });
+}
 
 /**
  * The one local-service startup sequence.

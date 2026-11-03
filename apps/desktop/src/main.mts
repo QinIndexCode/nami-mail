@@ -79,10 +79,9 @@ import {
 import {
   createServerBridgeClient,
   type ServerBridgeHandle,
-  type ServerStartParams,
 } from "./server-bridge.mjs";
 import { forkServerProcess, type ServerProcessHandle } from "./server-process.mjs";
-import { startLocalServiceAndRestoreDesktop, type ServiceStartupPlan } from "./local-service-startup.mjs";
+import { desktopLoopbackPort, startDesktopService, startLocalServiceAndRestoreDesktop, type ServiceStartupPlan } from "./local-service-startup.mjs";
 import { createServiceRestartCoordinator, isServiceLifecycleShuttingDown, serviceGiveUpDialogOptions } from "./service-restart-policy.mjs";
 import { registerRendererLocalStoreIpc } from "./renderer-local-store-ipc.mjs";
 
@@ -428,7 +427,6 @@ initializeDesktopSmoke({
   rememberCloseBehavior,
   redact: (message) => (localApiAccessToken ? message.replaceAll(localApiAccessToken, "[redacted]") : message),
 });
-const desktopLoopbackPort = "0";
 const desktopShutdownTimeoutMs = 2_000;
 const desktopUpdateCloseTimeoutMs = 30_000;
 // Startup/shutdown timing and crash logging live in desktop-diagnostics.mts.
@@ -491,8 +489,8 @@ function configureLocalService(): void {
   // regenerated on every launch.
   localApiAccessToken = randomBytes(32).toString("base64url");
   process.env.HOST = "127.0.0.1";
-  // Let Windows allocate an ephemeral loopback port. The installed app never
-  // reserves a conventional development port such as 3000 or 5173.
+  // Let the OS allocate a loopback port instead of requesting a fixed
+  // development port such as 3000 or 5173.
   process.env.PORT = desktopLoopbackPort;
   process.env.DATABASE_PATH = path.join(dataDirectory, "nami-mail.db");
   // The Electron runtime always passes its DPAPI-unwrapped key in memory.
@@ -1476,16 +1474,13 @@ async function startLocalServiceInUtilityProcess(options: {
       requestExternalConfirmation: (input) => createExternalConfirmationBridge().request(input as ExternalConfirmationInput),
     });
 
-    const startParams: ServerStartParams = {
-      host: "127.0.0.1",
-      port: desktopLoopbackPort,
+    await startDesktopService(bridge, {
       databasePath: path.join(options.dataDirectory, "nami-mail.db"),
       masterKey: new Uint8Array(options.masterKey),
       localApiAccessToken,
       userDataPath: app.getPath("userData"),
       env: {},
-    };
-    await bridge.start(startParams);
+    });
     return bridge.handle;
   } catch (error) {
     // A service that failed to start must not linger as an orphan process;
