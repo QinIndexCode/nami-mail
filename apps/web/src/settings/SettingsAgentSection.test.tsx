@@ -176,6 +176,96 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
     );
   });
 
+  it("lists a decision-only provider for screening but never for drafting", async () => {
+    const decisionOnly: AgentProviderSummary = {
+      id: "provider-jev",
+      label: "System One",
+      kind: "system-one",
+      roles: ["decision"],
+      supported: true,
+      endpoint: "https://api.typesafe.ai/v1",
+      model: "jev-latest",
+      timeoutMs: 45_000,
+      apiKeyConfigured: true,
+      configured: true,
+      cloud: true,
+      cloudContentConsent: false,
+      streaming: false,
+      vision: false,
+    };
+    mockApi.agentProviders.mockResolvedValue({
+      items: [h.local, h.cloud, decisionOnly],
+      defaultProviderId: h.local.id,
+    });
+    const applyOptimistic = vi.fn(async () => undefined);
+    const settings = {
+      ...defaultAppSettings,
+      autoReply: {
+        ...defaultAppSettings.autoReply,
+        enabled: true,
+        mode: "llm" as const,
+        decisionProviderId: null,
+        draftProviderId: null,
+      },
+    };
+
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <I18nProvider>
+          <SettingsAgentSection
+            t={t}
+            accounts={[]}
+            currentSettings={settings}
+            controlsBusy={false}
+            demoMode={false}
+            openModelSettings={vi.fn()}
+            requestAccessLevelChange={vi.fn()}
+            applyOptimisticSettings={applyOptimistic}
+            setAutoReplyDialogOpen={vi.fn()}
+            setAutoReplyDecisionsOpen={vi.fn()}
+            setMemoryDialogOpen={vi.fn()}
+            setAutoReplySandboxOpen={vi.fn()}
+          />
+        </I18nProvider>,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const decisionTrigger = container.querySelector("#agent-auto-reply-decision-provider") as HTMLButtonElement;
+    const draftTrigger = container.querySelector("#agent-auto-reply-draft-provider") as HTMLButtonElement;
+
+    await act(async () => {
+      decisionTrigger.click();
+    });
+    const decisionOptions = Array.from(
+      decisionTrigger.closest(".select-control")!.querySelectorAll('[role="option"]'),
+    );
+    const decisionLabels = decisionOptions.map((option) => option.textContent);
+    expect(decisionLabels.some((label) => label?.includes("System One (jev-latest)"))).toBe(true);
+
+    await act(async () => {
+      (decisionOptions.find((option) => option.textContent?.includes("System One (jev-latest)")) as HTMLElement).click();
+    });
+    expect(applyOptimistic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autoReply: expect.objectContaining({ decisionProviderId: "provider-jev" }),
+      }),
+      null,
+    );
+
+    await act(async () => {
+      decisionTrigger.click();
+      draftTrigger.click();
+    });
+    const draftLabels = Array.from(
+      draftTrigger.closest(".select-control")!.querySelectorAll('[role="option"]'),
+    ).map((option) => option.textContent);
+    expect(draftLabels.some((label) => label?.includes("System One"))).toBe(false);
+  });
+
   it("offers the decision threshold as percentage presets and patches the stored 0–1 value", async () => {
     const applyOptimistic = vi.fn(async () => undefined);
     const settings = {

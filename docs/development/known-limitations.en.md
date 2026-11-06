@@ -4,7 +4,7 @@
 
 This page collects Nami Mail's **verified capability boundaries and deliberate trade-offs** in one place. Each entry states the evidence (a code location or a document), what it affects, and how it is handled today or why we accept it. It is not a roadmap — no dates are promised — and it is not a bug list; report reproducible defects through GitHub Issues. Release notes, audits and troubleshooting all reference this page instead of restating the gaps.
 
-Verified against commit `eb46881` (2026-10-29, the current HEAD after v0.6.0). The 2026-11-02 pass re-checked the release-version claims, the e2e suite and the audit items in section 12 that v0.6.0 fixed; the remaining entries keep their 2026-10-22 verification record. Re-check the relevant entry when the code changes.
+Verified against commit `508727e` (2026-11-03, current HEAD). The 2026-11-06 pass narrowed the SSE entry in section 12 to what the current code still does; the remaining entries keep their 2026-10-22 verification record. Re-check the relevant entry when the code changes.
 
 ## At a glance
 
@@ -126,7 +126,7 @@ Verified against commit `eb46881` (2026-10-29, the current HEAD after v0.6.0). T
 
 | Severity | Location | Current state and impact | Why it is not fixed yet |
 |---|---|---|---|
-| P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | `lastSseEventAt` is written before the frame is parsed, so a malformed frame counts as "the stream is alive" and suppresses one poll round (the interval is selectable at 30/60/180/300s). | Only cross-version combinations can trigger it, and manual reconnect is a fallback. |
+| P2 | `apps/web/src/realtimeSync.ts:150-151` | `mailReceived` writes `lastSseEventAt` before parsing the frame, so an unparseable `mail.received` frame still counts as "the stream is alive" and may skip one fallback poll tick; the handler itself calls `onRefresh()` unconditionally, so that refresh is not lost when parsing fails. The other events (`sync.progress`, `task-progress`, `task-settled`, `mail-changed`) validate before refreshing. | Only a server/frontend version mismatch produces a malformed frame, and manual reconnect is a fallback. |
 | P3 | `apps/server/src/mail.ts:87-104`, `calendar.ts:255`, `message-links.ts:44`, `settings.ts:34` | Zero-call exports: `testMailboxConnection` (an older subset of `testAccountConnection`), `clearAllCalendarEvents`, `localizeLinks` and `AGENT_ACCESS_LEVELS` have no caller in the repository. | Removing them requires confirming no external script depends on them; it belongs to a cleanup batch. |
 | Structural | `apps/web/src/app/mailStore.ts` | `total` is not derived from `messages`; it is a server snapshot plus five local ±1 sites (`nextMessageTotalForSnapshot`, `applyMove`, `restoreMove`, `removeMessages`, `restoreMessages`). Section 2 above now describes it as it is. | The server `total` is a full match count while the frontend holds only loaded pages, so it cannot be derived locally; changing this needs an incrementally verifiable count from the server. |
 | Boundary | `apps/server/src/message-storage.ts` (`verifyEncryptedPayloads`) | The post-migration verification sweep is still fail-closed: the error names the affected row ids (up to 50), but there is no "skip and keep starting" switch. FTS and the attachment backfill skip bad rows and record `skipped` / `unclassified`, and there is no repair entry point either. | This is a deliberately retained fail-closed policy; relaxing it is a product decision. |

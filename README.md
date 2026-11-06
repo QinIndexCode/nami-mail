@@ -48,7 +48,7 @@ This page is the short tour. For installation, in-app updates, OAuth client setu
 ## Highlights
 
 - **Unified multi-account inbox** — Gmail, iCloud, Outlook/Hotmail, QQ, NetEase 163, Yahoo, Fastmail, and every standard IMAP/SMTP account in one window, with OAuth 2.0 or app passwords and an instant first paint.
-- **Embedded local-first AI agent** — 30+ domain tools (mail search, drafts, calendar, contacts, memory, web search), multimodal input (image, audio, video, PDF), answers with verifiable citations, and a one-time immutable confirmation card guarding every write.
+- **Embedded local-first AI agent** — 30+ domain tools (mail search, drafts, calendar, contacts, memory, web search), multimodal input (image, PDF), answers with verifiable citations, and a one-time immutable confirmation card guarding every write.
 - **Built-in calendar and meeting invites** — month-view events with full CRUD, one-click join banners for Tencent Meeting, Zoom, Feishu, Teams, and Google Meet, ICS import/export deduplicated in place by UID, and 15-minute reminders.
 - **Privacy by construction** — the master key is protected by Windows DPAPI and sensitive data is encrypted at rest with AES-256-GCM. No central cloud, no telemetry tier: credentials and mail never leave the device.
 - **CLI and MCP ecosystem** — a Windows SID-DACL–secured broker exposes a standard MCP stdio server and command-line tooling, so external scripts and IDEs can integrate without weakening the local boundary.

@@ -18,6 +18,7 @@ import {
 export type SystemOneProviderOptions = {
   id: string;
   endpoint: string;
+  model: string;
   apiKey?: string;
   timeoutMs?: number;
   fetchImpl?: typeof globalThis.fetch;
@@ -36,6 +37,7 @@ export class SystemOneProvider implements LlmProvider {
   readonly id: string;
   readonly kind = "system-one" as const;
   private readonly endpoint: URL;
+  private readonly model: string;
   private readonly apiKey?: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -44,6 +46,7 @@ export class SystemOneProvider implements LlmProvider {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(options.id)) throw new Error("The provider id is invalid.");
     this.id = options.id;
     this.endpoint = new URL(options.endpoint);
+    this.model = options.model;
     this.apiKey = options.apiKey;
     this.timeoutMs = options.timeoutMs ?? 45_000;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -103,14 +106,15 @@ export class SystemOneProvider implements LlmProvider {
   /**
    * A decision probe is a real (deliberately tiny) `noul` question: there is no
    * cheaper listing endpoint to piggyback on, and the probe doubles as proof
-   * that the key, the model alias and the question vocabulary all work.
+   * that the key, the configured model alias and the question vocabulary all
+   * work — it intentionally posts `this.model` rather than a built-in default.
    */
   async healthCheck(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<ProviderHealth> {
     try {
       await this.decide({
         requestId: randomUUID(),
         providerId: this.id,
-        model: "jev-latest",
+        model: this.model,
         state: "ping",
         questions: {
           reachable: { type: "noul", instructions: "Reply with the constant yes-probability 1 for this reachability probe." },

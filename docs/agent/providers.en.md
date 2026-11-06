@@ -22,7 +22,6 @@ Without any configured model, the assistant shows "Set up a usable model first" 
 | Google Gemini (native protocol) | e.g. `https://generativelanguage.googleapis.com/v1beta` |
 | OpenAI Responses (native protocol) | e.g. `https://api.openai.com/v1` |
 | TypeSafe System One (decision model) | Pure decision model (e.g. Jev), never generates text; fill in the API base URL (official `https://api.typesafe.ai/v1` or a self-hosted gateway), model alias such as `jev-latest` |
-| Custom | Reserved kind in underlying contract; not yet open for configuration in runtime validation |
 
 ## Model Roles (chat / decision)
 

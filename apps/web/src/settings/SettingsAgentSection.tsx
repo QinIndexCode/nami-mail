@@ -90,31 +90,38 @@ export default function SettingsAgentSection({
     [providers, defaultProviderId],
   );
 
-  const modelSelectOptions = useMemo(() => {
+  const { decisionOptions, draftOptions } = useMemo(() => {
     const defaultLabel = defaultProvider
       ? `${t("settings.agent.autoReplyFollowDefault")} (${defaultProvider.label})`
       : t("settings.agent.autoReplyFollowDefault");
-    const options: Array<{ value: string; label: string }> = [{ value: "", label: defaultLabel }];
-    for (const p of providers) {
-      // Decision and drafting are both text-adjacent call sites today; a
-      // decision-only row has no business in either select until the two
-      // option lists split (planned alongside typed decisions).
-      if (p.configured && p.roles.includes("chat")) {
-        options.push({
-          value: p.id,
-          label: `${p.label} (${p.model})${p.id === defaultProviderId ? ` · ${t("agent.providers.defaultBadge")}` : ""}`,
-        });
+    const buildOptions = (
+      accepts: (provider: AgentProviderSummary) => boolean,
+      currentId: string | null,
+    ) => {
+      const options: Array<{ value: string; label: string }> = [{ value: "", label: defaultLabel }];
+      for (const p of providers) {
+        if (p.configured && accepts(p)) {
+          options.push({
+            value: p.id,
+            label: `${p.label} (${p.model})${p.id === defaultProviderId ? ` · ${t("agent.providers.defaultBadge")}` : ""}`,
+          });
+        }
       }
-    }
-    const currentDecision = currentSettings.autoReply.decisionProviderId;
-    if (currentDecision && !options.some((opt) => opt.value === currentDecision)) {
-      options.push({ value: currentDecision, label: currentDecision });
-    }
-    const currentDraft = currentSettings.autoReply.draftProviderId;
-    if (currentDraft && !options.some((opt) => opt.value === currentDraft)) {
-      options.push({ value: currentDraft, label: currentDraft });
-    }
-    return options;
+      if (currentId && !options.some((opt) => opt.value === currentId)) {
+        options.push({ value: currentId, label: currentId });
+      }
+      return options;
+    };
+    return {
+      decisionOptions: buildOptions(
+        (p) => p.roles.includes("chat") || p.roles.includes("decision"),
+        currentSettings.autoReply.decisionProviderId,
+      ),
+      draftOptions: buildOptions(
+        (p) => p.roles.includes("chat"),
+        currentSettings.autoReply.draftProviderId,
+      ),
+    };
   }, [providers, defaultProvider, defaultProviderId, currentSettings.autoReply.decisionProviderId, currentSettings.autoReply.draftProviderId, t]);
 
   return (
@@ -284,7 +291,7 @@ export default function SettingsAgentSection({
                           null,
                         )}
                       >
-                        {modelSelectOptions.map((opt) => (
+                        {decisionOptions.map((opt) => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </ThemedSelect>
@@ -313,7 +320,7 @@ export default function SettingsAgentSection({
                           null,
                         )}
                       >
-                        {modelSelectOptions.map((opt) => (
+                        {draftOptions.map((opt) => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </ThemedSelect>
