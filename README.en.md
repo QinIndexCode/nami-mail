@@ -311,7 +311,7 @@ Thanks to everyone who has contributed to this project (bots excluded):
         <img src="https://avatars.githubusercontent.com/u/177287013?v=4" width="64" height="64" style="border-radius:50%" alt="QinIndexCode" /><br />
         <sub><b>QinIndexCode</b></sub>
       </a><br />
-      <sub>436 commits</sub>
+      <sub>472 commits</sub>
     </td>
     <td align="center">
       <a href="https://github.com/JIE-jiee">
@@ -319,6 +319,13 @@ Thanks to everyone who has contributed to this project (bots excluded):
         <sub><b>JIE-jiee</b></sub>
       </a><br />
       <sub>2 commits</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/imakeit94-dev">
+        <img src="https://avatars.githubusercontent.com/u/262829755?v=4" width="64" height="64" style="border-radius:50%" alt="imakeit94-dev" /><br />
+        <sub><b>imakeit94-dev</b></sub>
+      </a><br />
+      <sub>1 commit</sub>
     </td>
   </tr>
 </table>
