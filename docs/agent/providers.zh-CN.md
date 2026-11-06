@@ -22,7 +22,6 @@
 | Google Gemini（原生协议） | 例如 `https://generativelanguage.googleapis.com/v1beta` |
 | OpenAI Responses（原生协议） | 例如 `https://api.openai.com/v1` |
 | TypeSafe System One（判定模型） | 纯决策模型（如 Jev），不生成文本；填写 API 基础地址（官方 `https://api.typesafe.ai/v1` 或自建网关），模型别名如 `jev-latest` |
-| 自定义（Custom） | 底层类型保留字面，当前服务端校验尚未开放配置 |
 
 ## 模型角色（对话 / 判定）
 

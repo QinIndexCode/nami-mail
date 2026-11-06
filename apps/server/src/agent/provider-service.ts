@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackHostname } from "../endpoint-guard.js";
 import {
+  agentProviderKindRoles,
   isAgentProviderKind,
   modelInputModalitiesSchema,
   providerHealthSchema,
@@ -31,22 +32,13 @@ export const defaultModalities: ModelInputModalities = {
 };
 
 /**
- * What each transport can serve. Kept next to the union it mirrors so the two
- * cannot drift silently, and deliberately a plain record so a kind this build
- * does not know (a row from a newer build) simply resolves to no roles instead
+ * What each transport can serve. The map itself lives in the contract package
+ * so the web form and this enforcement point share one source; a kind this
+ * build does not know (a row from a newer build) resolves to no roles instead
  * of throwing on every provider request.
  */
-const rolesByKind: Record<string, readonly AgentProviderRole[]> = {
-  "openai-compatible": ["chat"],
-  "openai-responses": ["chat"],
-  "anthropic": ["chat"],
-  "gemini": ["chat"],
-  "ollama": ["chat"],
-  "system-one": ["decision"],
-};
-
 export function providerRolesForKind(kind: string): AgentProviderRole[] {
-  return [...(rolesByKind[kind] ?? [])];
+  return isAgentProviderKind(kind) ? [...agentProviderKindRoles[kind]] : [];
 }
 
 /** Whether this build has an adapter for the kind at all. */
@@ -509,7 +501,9 @@ export class AgentProviderService {
     if (configuration.kind === "openai-compatible" || configuration.kind === "ollama") {
       return new OpenAiCompatibleProvider({ ...options, kind: configuration.kind });
     }
-    if (configuration.kind === "system-one") return new SystemOneProvider(options);
+    if (configuration.kind === "system-one") {
+      return new SystemOneProvider({ ...options, model: configuration.model });
+    }
     return undefined;
   }
 }

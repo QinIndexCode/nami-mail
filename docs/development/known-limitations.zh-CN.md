@@ -4,7 +4,7 @@
 
 本页集中记录 Nami Mail **已核实的能力边界与刻意的取舍**：每条给出代码或文档依据、影响范围，以及当前应对或接受它的理由。它不是路线图（不承诺时间表），也不是缺陷列表（可复现的 bug 请提交 GitHub Issues）。发布说明、审计与排障统一引用本页，不再各自重述。
 
-核实基线：提交 `eb46881`（2026-10-29，v0.6.0 之后的当前 HEAD）。本轮（2026-11-02）复核了发布版本口径、e2e 套件与第 12 条中已随 v0.6.0 修复的审计项；其余条目沿用 2026-10-22 的核实记录。代码变动后应同步复核对应条目。
+核实基线：提交 `508727e`（2026-11-03，当前 HEAD）。2026-11-06 的复核把第 12 条的 SSE 条目收窄到当前实现仍成立的部分；其余条目沿用 2026-10-22 的核实记录。代码变动后应同步复核对应条目。
 
 ## 一览
 
@@ -126,7 +126,7 @@
 
 | 严重度 | 位置 | 现状与影响 | 为何暂不修 |
 |---|---|---|---|
-| P2 | `apps/web/src/realtimeSync.ts:150-151,200-201,222-223` | 先写 `lastSseEventAt` 再解析帧；坏帧被当作“流是活的”，会抑制一轮轮询（间隔 30/60/180/300s 可选）。 | 仅跨版本组合才可能触发，且有手动重连兜底。 |
+| P2 | `apps/web/src/realtimeSync.ts:150-151` | `mailReceived` 在解析帧之前写入 `lastSseEventAt`，因此无法解析的 `mail.received` 帧仍被计为“流是活的”，可能跳过一次兜底轮询 tick；但该 handler 本身无条件调用 `onRefresh()`，这次刷新不会因解析失败而丢失。其余事件（`sync.progress`、`task-progress`、`task-settled`、`mail-changed`）都先校验再刷新。 | 仅服务端与前端版本不匹配时才会产生坏帧，且有手动重连兜底。 |
 | P3 | `apps/server/src/mail.ts:87-104`、`calendar.ts:255`、`message-links.ts:44`、`settings.ts:34` | 零调用导出：`testMailboxConnection`（`testAccountConnection` 的旧子集）、`clearAllCalendarEvents`、`localizeLinks`、`AGENT_ACCESS_LEVELS` 全仓无调用方。 | 删除要确认没有外部脚本依赖，属清理批次。 |
 | 结构性 | `apps/web/src/app/mailStore.ts` | `total` 不是从 `messages` 派生，而是服务端快照 + 5 处本地 ±1（`nextMessageTotalForSnapshot`、`applyMove`、`restoreMove`、`removeMessages`、`restoreMessages`）；本页第 2 节的描述已按现状写。 | 服务端 `total` 是全量匹配数，前端只有已加载页，无法真派生；要改需要服务端提供可增量校验的计数。 |
 | 边界 | `apps/server/src/message-storage.ts`（`verifyEncryptedPayloads`） | 迁移后的校验扫描仍 fail-closed，错误里点名受影响的行 id（最多 50 个），但没有“跳过并继续启动”的开关；FTS 与附件回填遇到坏行会跳过并记录 `skipped` / `unclassified`，同样没有修复入口。 | 刻意保留的失败关闭策略，放宽需要产品决定。 |

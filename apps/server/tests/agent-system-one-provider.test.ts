@@ -43,6 +43,7 @@ describe("SystemOneProvider (Jev decision adapter)", () => {
     const provider = new SystemOneProvider({
       id: "provider-jev",
       endpoint: "https://api.typesafe.ai/v1/",
+      model: "jev-latest",
       apiKey: PROBE_KEY,
       fetchImpl: fetchImpl as unknown as typeof globalThis.fetch,
     });
@@ -58,6 +59,7 @@ describe("SystemOneProvider (Jev decision adapter)", () => {
     const provider = new SystemOneProvider({
       id: "provider-jev",
       endpoint: "https://api.typesafe.ai/v1/",
+      model: "jev-latest",
       apiKey: PROBE_KEY,
       fetchImpl: stubFetch(jsonResponse(401, { error: "bad key" })),
     });
@@ -66,6 +68,7 @@ describe("SystemOneProvider (Jev decision adapter)", () => {
     const limited = new SystemOneProvider({
       id: "provider-jev",
       endpoint: "https://api.typesafe.ai/v1/",
+      model: "jev-latest",
       fetchImpl: stubFetch(jsonResponse(429, { error: "slow down" })),
     });
     await expect(limited.decide(decisionRequest)).rejects.toMatchObject({ code: "PROVIDER_RATE_LIMITED", retryable: true });
@@ -73,13 +76,14 @@ describe("SystemOneProvider (Jev decision adapter)", () => {
     const down = new SystemOneProvider({
       id: "provider-jev",
       endpoint: "https://api.typesafe.ai/v1/",
+      model: "jev-latest",
       fetchImpl: stubFetch(jsonResponse(500, { error: "boom" })),
     });
     await expect(down.decide(decisionRequest)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", retryable: true });
   });
 
   it("reports every chat capability as false so no text call site can pick it", async () => {
-    const provider = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1" });
+    const provider = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1", model: "jev-latest" });
     const capabilities = await provider.getCapabilities();
     expect(capabilities.chatCompletion).toBe(false);
     expect(capabilities.streaming).toBe(false);
@@ -88,13 +92,15 @@ describe("SystemOneProvider (Jev decision adapter)", () => {
 
   it("health probe is a tiny real noul decision and reports unavailable on failure", async () => {
     const okFetch = vi.fn(async (_input?: unknown, _init?: RequestInit) => jsonResponse(200, { model: "jev-1.13.0", answers: { reachable: { type: "noul", noul: true } } }));
-    const healthy = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1/", apiKey: PROBE_KEY, fetchImpl: okFetch as unknown as typeof globalThis.fetch });
+    const healthy = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1/", model: "jev-custom-alias", apiKey: PROBE_KEY, fetchImpl: okFetch as unknown as typeof globalThis.fetch });
     const health = await healthy.healthCheck();
     expect(health.state).toBe("ready");
     const body = JSON.parse(String(okFetch.mock.calls[0]?.[1]?.body));
+    // The probe must exercise the saved alias, not a built-in default.
+    expect(body.model).toBe("jev-custom-alias");
     expect(body.questions.reachable.type).toBe("noul");
 
-    const dead = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1/", fetchImpl: stubFetch(jsonResponse(500, { error: "boom" })) });
+    const dead = new SystemOneProvider({ id: "provider-jev", endpoint: "https://api.typesafe.ai/v1/", model: "jev-latest", fetchImpl: stubFetch(jsonResponse(500, { error: "boom" })) });
     const deadHealth = await dead.healthCheck();
     expect(deadHealth.state).toBe("unavailable");
     expect(deadHealth.error?.code).toBe("PROVIDER_UNAVAILABLE");

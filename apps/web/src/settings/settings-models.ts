@@ -1,3 +1,4 @@
+import { agentProviderKindRoles } from "@nami/agent-contracts";
 import { ApiError } from "../api";
 import { isAgentProviderKind } from "../agentTypes";
 import type {
@@ -166,6 +167,10 @@ export function providerFormIsLocal(form: ProviderForm): boolean {
   return form.kind === "ollama" || isLoopbackEndpoint(form.endpoint);
 }
 
+export function providerKindIsChatCapable(kind: AgentProviderKind): boolean {
+  return agentProviderKindRoles[kind].includes("chat");
+}
+
 export function providerValidationMessage(form: ProviderForm, t: Translate): string | null {
   if (!form.label.trim()) return t("agent.providers.validation.label");
   if (!form.endpoint.trim()) return t("agent.providers.validation.endpoint");
@@ -201,7 +206,7 @@ export function providerInputFor(form: ProviderForm): AgentProviderInput {
     modalities: { ...form.modalities },
     ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
     ...(form.clearApiKey ? { clearApiKey: true } : {}),
-    ...(form.makeDefault ? { makeDefault: true } : {}),
+    ...(form.makeDefault && providerKindIsChatCapable(form.kind) ? { makeDefault: true } : {}),
     ...(form.contextWindowTokens.trim() && Number(form.contextWindowTokens) > 0
       ? { contextWindowTokens: Number(form.contextWindowTokens) }
       : {}),

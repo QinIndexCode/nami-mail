@@ -5,7 +5,7 @@ import type { Translate } from "../i18n";
 import ThemedSelect from "../ThemedSelect";
 import { Switch } from "./SettingsUIComponents";
 import { ModelField, SettingsModelFormDialog } from "./SettingsModelDialog";
-import { providerFormIsLocal, providerKindMetadata, providerKindMetadataFor } from "./settings-models";
+import { providerFormIsLocal, providerKindIsChatCapable, providerKindMetadata, providerKindMetadataFor } from "./settings-models";
 import type { ModelProvidersController } from "./useSettingsModels";
 
 /** Kind order mirrors the old dialog's protocol select. Exported so the
@@ -51,6 +51,7 @@ export default function SettingsModelProviderDialog({
   // form allowed anywhere, so a future call site cannot index a bare record.
   const kindMeta = providerKindMetadataFor(form.kind) ?? providerKindMetadata["openai-compatible"];
   const isLocal = providerFormIsLocal(form);
+  const isChatCapable = providerKindIsChatCapable(form.kind);
   const isCurrentDefault = providers.selectedProvider?.id === providers.defaultProviderId;
   const editing = providers.selectedProvider !== null;
   const busy = providers.saving || providers.checkingId !== null;
@@ -388,13 +389,15 @@ export default function SettingsModelProviderDialog({
               onChange={() => providers.updateForm("allowCloudMailContent", !form.allowCloudMailContent)}
             />
 
-            <Switch
-              checked={form.makeDefault}
-              disabled={busy || isCurrentDefault}
-              label={t("agent.providers.default.title")}
-              tooltip={isCurrentDefault ? t("agent.providers.default.current") : t("agent.providers.default.description")}
-              onChange={() => providers.updateForm("makeDefault", !form.makeDefault)}
-            />
+            {isChatCapable && (
+              <Switch
+                checked={form.makeDefault}
+                disabled={busy || isCurrentDefault}
+                label={t("agent.providers.default.title")}
+                tooltip={isCurrentDefault ? t("agent.providers.default.current") : t("agent.providers.default.description")}
+                onChange={() => providers.updateForm("makeDefault", !form.makeDefault)}
+              />
+            )}
           </div>
 
           {providers.touched && providers.validationMessage && (

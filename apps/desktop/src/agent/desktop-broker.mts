@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   createAgentError,
   createAgentFailureEnvelope,
+  externalReadMailContracts,
+  externalWriteMailContracts,
   isAgentErrorCode,
   type AgentError,
   type AgentResponseEnvelope,
@@ -344,17 +346,10 @@ function cliToolInput(command: string, argumentsValue: BrokerJsonValue): { toolN
   return mcpToolInput(command, argumentsValue);
 }
 
-const externalReadToolNames = ["accounts.list", "folders.list", "messages.list", "messages.search", "mail.summarize", "messages.get", "messages.batch_get", "threads.get", "attachments.list"] as const;
-const externalWriteToolNames = [
-  "mail.draft.create",
-  "mail.draft.update",
-  "mail.draft.delete",
-  "messages.move",
-  "messages.set-flag",
-  "messages.send",
-  "mail.reply",
-] as const;
-export const externalToolNames = [...externalReadToolNames, ...externalWriteToolNames] as const;
+export const externalToolNames: readonly string[] = [
+  ...externalReadMailContracts.map((contract) => contract.toolName),
+  ...externalWriteMailContracts.map((contract) => contract.toolName),
+];
 
 function mcpToolInput(command: string, argumentsValue: BrokerJsonValue): { toolName: string; input: BrokerJsonValue } | undefined {
   const toolNames: ReadonlySet<string> = new Set(externalToolNames);

@@ -162,6 +162,20 @@ export const agentProviderRoles = ["chat", "decision"] as const;
 export const agentProviderRoleSchema = z.enum(agentProviderRoles);
 export type AgentProviderRole = z.infer<typeof agentProviderRoleSchema>;
 
+/**
+ * The roles each transport can serve. Both the server (which enforces them)
+ * and the web settings form (which must not offer a decision-only row as the
+ * global default) read this one map, so the two cannot drift.
+ */
+export const agentProviderKindRoles: Record<AgentProviderKind, readonly AgentProviderRole[]> = {
+  "openai-compatible": ["chat"],
+  "openai-responses": ["chat"],
+  "anthropic": ["chat"],
+  "gemini": ["chat"],
+  "ollama": ["chat"],
+  "system-one": ["decision"],
+};
+
 // ---------------------------------------------------------------------------
 // Typed decisions
 // ---------------------------------------------------------------------------

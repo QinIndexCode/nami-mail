@@ -35,7 +35,7 @@ export function createTimeTools(): AgentTool<any, any>[] {
         requiredScopes: ["time:read"],
         accountAccess: "none",
         confirmationPolicy: "never",
-        availableToExternal: true,
+        availableToExternal: false,
         timeoutMs: 5_000,
       },
       inputSchema: timeInputSchema,

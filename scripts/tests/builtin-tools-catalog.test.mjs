@@ -85,6 +85,41 @@ test("every catalog entry is well formed and carries a known domain", () => {
   }
 });
 
+test("the external tool flag matches the contract in both directions", () => {
+  const flagged = new Set();
+  for (const file of readdirSync(agentDir).filter((name) => name.endsWith("-tools.ts"))) {
+    const text = readFileSync(join(agentDir, file), "utf8");
+    for (const match of text.matchAll(
+      /name:\s*"([^"]+)"(?:(?!name:\s*")[\s\S])*?availableToExternal:\s*true/g,
+    )) {
+      flagged.add(match[1]);
+    }
+  }
+
+  const contractDir = join(repoRoot, "packages", "agent-contracts", "src");
+  const contracted = new Set();
+  for (const file of ["external-mail.ts", "external-write-mail.ts"]) {
+    const text = readFileSync(join(contractDir, file), "utf8");
+    for (const match of text.matchAll(/toolName:\s*"([^"]+)"/g)) contracted.add(match[1]);
+  }
+
+  assert.deepEqual(
+    [...flagged].sort(),
+    [...contracted].sort(),
+    "availableToExternal:true tools and @nami/agent-contracts' external tools disagree; update both",
+  );
+
+  const broker = readFileSync(
+    join(repoRoot, "apps", "desktop", "src", "agent", "desktop-broker.mts"),
+    "utf8",
+  );
+  assert.match(
+    broker,
+    /externalReadMailContracts\.map/,
+    "the broker must derive its allow-list from the contract, not a local copy",
+  );
+});
+
 test("both locales describe every catalog entry and no orphan descriptions", () => {
   const catalogKeys = new Set(catalogEntries().map((entry) => entry.descKey));
 

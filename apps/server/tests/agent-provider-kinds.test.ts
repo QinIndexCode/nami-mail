@@ -153,4 +153,33 @@ describe("agent provider kinds: read-lenient, write-strict", () => {
       db.close();
     }
   });
+
+  it("rejects makeDefault for a decision-only row but saves it without the flag", async () => {
+    const { db, service } = createTestService();
+    try {
+      const input = {
+        label: "System One",
+        kind: "system-one" as const,
+        endpoint: "https://api.typesafe.ai/v1",
+        model: "jev-latest",
+        timeoutMs: 30_000,
+        allowCloudMailContent: false,
+      };
+
+      // The web form no longer offers the switch for this kind, but a stale
+      // client (or a hand-written request) must still get the same 400 rather
+      // than silently owning the default slot.
+      expect(() => service.createProvider({ ...input, makeDefault: true })).toThrowError(
+        expect.objectContaining({ code: "INVALID_ARGUMENT", statusCode: 400 }),
+      );
+      expect(service.providerList().items).toHaveLength(0);
+
+      const saved = service.createProvider({ ...input, makeDefault: false });
+      expect(saved.roles).toEqual(["decision"]);
+      expect(service.providerList().defaultProviderId).toBeNull();
+    } finally {
+      await service.close();
+      db.close();
+    }
+  });
 });
