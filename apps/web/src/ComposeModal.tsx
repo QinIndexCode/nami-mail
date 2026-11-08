@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type RefObject } from "react";
-import { BookUser, CalendarClock, FilePenLine, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { CalendarClock, FilePenLine, LoaderCircle, Maximize2, Minimize2, Paperclip, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { presentAttachment } from "./attachmentPresentation";
 import { summarizeComposeAttachments } from "./attachmentWorkflow";
@@ -12,7 +12,8 @@ import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useI18n } from "./i18n";
 import { ComposePolishControls, useComposePolish } from "./composePolish";
-import { useRecipientSuggestions } from "./useRecipientSuggestions";
+import ComposeRecipients from "./ComposeRecipients";
+import { rejectedRecipientsMessage } from "./submissionRecipients";
 import type { Account, MailTemplate, OutboundAttachment } from "./types";
 import { AttachmentFileIcon, formatFileSize, datetimeLocalFromDate, isoFromDatetimeLocal, IconButton, type ComposeDraft, type PendingAttachmentUpload, type ToastKind } from "./mailUi";
 import { durableGet, durableSet } from "./durablePreferences";
@@ -42,6 +43,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [accountId, setAccountId] = useState(initialAccountId);
   const [to, setTo] = useState(draft.to ?? "");
   const [cc, setCc] = useState(draft.cc ?? "");
+  const [bcc, setBcc] = useState(draft.bcc ?? "");
   const [subject, setSubject] = useState(draft.subject ?? "");
   const [text, setText] = useState(initialBodyText);
   const [attachments, setAttachments] = useState<OutboundAttachment[]>(draft.attachments ?? []);
@@ -54,8 +56,6 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const [error, setError] = useState("");
   const [deliveryNotice, setDeliveryNotice] = useState("");
   const [sendAtLocal, setSendAtLocal] = useState("");
-  const toRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-contact-suggestions", onApplyRecipient: setTo });
-  const ccRecipients = useRecipientSuggestions({ isDemo, controlsId: "compose-cc-contact-suggestions", onApplyRecipient: setCc });
   const {
     markdownEnabled,
     viewMode,
@@ -68,7 +68,6 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const polish = useComposePolish({ text, applyText: setText, notify: onSent, t, markdownEnabled });
 
 
-  const [ccOpen, setCcOpen] = useState(() => Boolean(draft.cc?.trim()));
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragCounterRef = useRef(0);
@@ -82,6 +81,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     accountId: initialAccountId,
     to: draft.to ?? "",
     cc: draft.cc ?? "",
+    bcc: draft.bcc ?? "",
     subject: draft.subject ?? "",
     text: initialBodyText,
     attachmentTokens: (draft.attachments ?? []).map((attachment) => attachment.token).join("\u001f"),
@@ -131,6 +131,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
   const hasUnsavedChanges = accountId !== initialDraft.accountId
     || to !== initialDraft.to
     || cc !== initialDraft.cc
+    || bcc !== initialDraft.bcc
     || subject !== initialDraft.subject
     || text !== initialDraft.text
     || attachments.map((attachment) => attachment.token).join("\u001f") !== initialDraft.attachmentTokens
@@ -375,15 +376,16 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
     }
     const recipientValues = recipients();
     const ccValues = copiedRecipients();
+    const bccValues = bcc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean);
     if (!accountId) {
       setError(t("compose.error.selectSender"));
       return;
     }
-    if (!recipientValues.length) {
+    if (!recipientValues.length && !ccValues.length && !bccValues.length) {
       setError(t("compose.error.recipientRequired"));
       return;
     }
-    if ([...recipientValues, ...ccValues].some((recipient) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient))) {
+    if ([...recipientValues, ...ccValues, ...bccValues].some((recipient) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient))) {
       setError(t("compose.error.recipientInvalid"));
       return;
     }
@@ -401,6 +403,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           accountId,
           to: recipientValues,
           cc: ccValues.length ? ccValues : undefined,
+          bcc: bccValues.length ? bccValues : undefined,
           subject,
           text,
           html: sendHtml,
@@ -452,7 +455,10 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             return;
           }
         }
-        if (submission.deliveryStatus === "unknown_delivery") {
+        const rejectedNotice = rejectedRecipientsMessage(submission, t);
+        if (rejectedNotice) {
+          onSent(rejectedNotice, "warning", undefined, draft.accountId);
+        } else if (submission.deliveryStatus === "unknown_delivery") {
           onSent(
             t("compose.delivery.unknown"),
             "warning",
@@ -468,7 +474,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
         }
       } else {
         await new Promise((resolve) => setTimeout(resolve, 650));
-        onSent(scheduled ? t("compose.delivery.demoScheduled") : t("compose.delivery.demoSent"), undefined, { accountId: draft.accountId, to, cc, subject, text });
+        onSent(scheduled ? t("compose.delivery.demoScheduled") : t("compose.delivery.demoSent"), undefined, { accountId: draft.accountId, to, cc, bcc, subject, text });
       }
       onClose();
     } catch (reason) {
@@ -492,6 +498,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
           accountId,
           to: recipients(),
           cc: copiedRecipients(),
+          bcc: bcc.split(/[,;\s]+/).map((item) => item.trim()).filter(Boolean),
           subject,
           text,
           inReplyTo: draft.inReplyTo,
@@ -564,45 +571,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
               setText(signatureForAccount(value));
             }
           }} disabled={busy || uploading || discarding}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.email}</option>)}</ThemedSelect></label>
-          <div className="compose-row compose-to-row">
-            <label htmlFor="compose-to"><span>{t("compose.to")}</span>
-              <div className="compose-to-input-wrap">
-                <input id="compose-to" type="text" data-dialog-initial-focus value={to} onChange={(event) => { setTo(event.target.value); toRecipients.search(event.target.value); }} onKeyDown={(event) => toRecipients.onKeyDown(event, to)} placeholder="email@example.com" disabled={busy || discarding} aria-autocomplete="list" aria-expanded={toRecipients.open} aria-controls={toRecipients.open ? "compose-contact-suggestions" : undefined} aria-activedescendant={toRecipients.activeDescendantId} />
-                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => toRecipients.toggle(to)} disabled={busy || discarding}><BookUser size={14} /></button>
-                {!ccOpen && !cc.trim() && (
-                  <button type="button" className="compose-cc-toggle" onClick={() => setCcOpen(true)} disabled={busy || discarding}>
-                    {t("compose.cc")}
-                  </button>
-                )}
-              </div>
-            </label>
-            {toRecipients.mounted && (
-              <div className={`compose-contact-suggestions${toRecipients.closing ? " closing" : ""}`} id="compose-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
-                {toRecipients.suggestions.map((contact, index) => (
-                  <button key={contact.id} type="button" role="option" id={`compose-contact-suggestion-${index}`} aria-selected={index === toRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => toRecipients.applyContact(contact, to)}>
-                    <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className={`compose-row compose-cc-row${ccOpen || cc.trim() ? " is-open" : " is-collapsed"}`}>
-            <label htmlFor="compose-cc"><span>{t("compose.cc")}</span>
-              <div className="compose-to-input-wrap">
-                <input id="compose-cc" type="text" value={cc} onChange={(event) => { setCc(event.target.value); ccRecipients.search(event.target.value); }} onKeyDown={(event) => ccRecipients.onKeyDown(event, cc)} placeholder={t("compose.ccPlaceholder")} disabled={busy || discarding} aria-autocomplete="list" aria-expanded={ccRecipients.open} aria-controls={ccRecipients.open ? "compose-cc-contact-suggestions" : undefined} aria-activedescendant={ccRecipients.activeDescendantId} />
-                <button type="button" className="compose-contact-picker-btn" aria-label={t("compose.searchContacts")} data-tooltip={t("compose.searchContacts")} onClick={() => ccRecipients.toggle(cc)} disabled={busy || discarding}><BookUser size={14} /></button>
-              </div>
-            </label>
-            {ccRecipients.mounted && (
-              <div className={`compose-contact-suggestions${ccRecipients.closing ? " closing" : ""}`} id="compose-cc-contact-suggestions" role="listbox" aria-label={t("compose.contactSuggestions")}>
-                {ccRecipients.suggestions.map((contact, index) => (
-                  <button key={contact.id} type="button" role="option" id={`compose-cc-contact-suggestion-${index}`} aria-selected={index === ccRecipients.suggestedIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => ccRecipients.applyContact(contact, cc)}>
-                    <span>{contact.name || contact.email}</span><small>{contact.name ? contact.email : ""}</small>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <ComposeRecipients to={to} cc={cc} bcc={bcc} onChange={(kind, value) => ({ to: setTo, cc: setCc, bcc: setBcc })[kind](value)} disabled={busy || discarding} isDemo={isDemo} />
           <label className="compose-row" htmlFor="compose-subject"><span>{t("compose.subject")}</span><input id="compose-subject" type="text" value={subject} onChange={(event) => setSubject(event.target.value)} placeholder={t("compose.subjectPlaceholder")} disabled={busy || discarding} /></label>
           <div className="compose-editor-container">
             <ComposeMarkdownToolbar
@@ -657,6 +626,7 @@ export function ComposeModal({ accounts, draft, onClose, onSent, onDraftSaved, o
             })}</div>}
             {hasPendingUploads && <p className={`compose-attachment-hint${hasUploadErrors ? " error" : ""}`} role={hasUploadErrors ? "alert" : "status"}>{hasUploadErrors ? t("compose.attachment.failedHint") : t("compose.attachment.uploadingHint")}</p>}
           </section>
+          {Boolean(draft.recoveryMissingAttachments) && <div className="form-status warning" role="alert">{t("recovery.missingAttachments", { count: draft.recoveryMissingAttachments })}</div>}
           {deliveryNotice && <div className="form-status warning" role="status"><LoaderCircle className="spin" size={17} />{deliveryNotice}</div>}
           {error && <div id="compose-error" className="form-status error" role="alert"><X size={17} />{error}</div>}
           <footer className="compose-footer">

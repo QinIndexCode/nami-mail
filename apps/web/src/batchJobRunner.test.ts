@@ -76,6 +76,16 @@ describe("createBatchJobRunner", () => {
     vi.clearAllMocks();
   });
 
+  it("reports failed items even when the batch status is completed", async () => {
+    const deps = makeDeps();
+    apiMocks.batchJobCreate.mockResolvedValue(accepted());
+    apiMocks.batchJobStatus.mockResolvedValue({ job: job({ status: "completed", total: 3, updated: 2, failed: 1 }) });
+    createBatchJobRunner(deps).start(MOVE_PAYLOAD, RUN_OPTS);
+    await flush();
+    expect(deps.showToast).toHaveBeenCalledWith('mail.selection.deliveryFailed{"count":1}', "warning");
+    expect(deps.reload).toHaveBeenCalledTimes(1);
+  });
+
   it("reports the committed half the moment the server accepts, and only then watches the push", async () => {
     vi.useFakeTimers();
     try {

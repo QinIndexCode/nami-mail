@@ -90,6 +90,7 @@ describe("IMAP draft saving", () => {
     const result = await saveDraft(db, Buffer.alloc(32, 7), account, {
       to: ["recipient@example.com"],
       cc: ["copy@example.com"],
+      bcc: ["hidden@example.com"],
       inReplyTo: "<parent@example.com>",
       references: ["<root@example.com>", "<parent@example.com>"],
       subject: "A saved draft",
@@ -110,6 +111,7 @@ describe("IMAP draft saving", () => {
     const raw = client.append.mock.calls[0]?.[1] as Buffer;
     expect(raw.toString("utf8")).toContain("Subject: A saved draft");
     expect(raw.toString("utf8")).toContain("Cc: copy@example.com");
+    expect(raw.toString("utf8")).toContain("Bcc: hidden@example.com");
     expect(raw.toString("utf8")).toContain("In-Reply-To: <parent@example.com>");
     expect(raw.toString("utf8")).toContain("References: <root@example.com> <parent@example.com>");
     expect(raw.toString("utf8")).toContain("Draft body");
@@ -131,6 +133,7 @@ describe("IMAP draft saving", () => {
       messageId: result.messageId,
       subject: "A saved draft",
       textBody: "Draft body",
+      bcc: [{ name: "", address: "hidden@example.com" }],
       attachments: null,
     });
   });

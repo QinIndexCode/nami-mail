@@ -1,3 +1,4 @@
+import type { MailRecipientInput } from "./submissionRecipients";
 import { agentUiStreamEventSchema } from "@nami/agent-contracts";
 import {
   ApiError,
@@ -219,7 +220,7 @@ function patchAccountField(id: string, field: string, body: unknown) {
   });
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Only the JSON path is bounded here; streaming requests (agent messages,
   // translation) manage their own lifetime via an explicit signal and must not
   // be cut at a fixed 30s, and binary endpoints move files under the
@@ -667,10 +668,8 @@ export const api = {
     return request<{ items: OutboundSubmission[] }>(`/api/submissions?${query.toString()}`);
   },
   submission: (id: string) => request<{ ok: boolean; submission: OutboundSubmission }>(`/api/submissions/${encodeURIComponent(id)}`),
-  send: (payload: {
+  send: (payload: MailRecipientInput & {
     accountId: string;
-    to: string[];
-    cc?: string[];
     subject: string;
     text: string;
     html?: string;
@@ -695,10 +694,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/messages/${encodeURIComponent(id)}/snooze`, { method: "DELETE" }),
   cancelScheduledSend: (id: string) =>
     request<{ ok: boolean; cancelled: boolean }>(`/api/messages/send/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
-  saveDraft: (payload: {
+  saveDraft: (payload: MailRecipientInput & {
     accountId: string;
-    to: string[];
-    cc?: string[];
     subject: string;
     text: string;
     inReplyTo?: string;
@@ -817,12 +814,13 @@ export const api = {
     }),
   deleteTemplate: (id: string) =>
     request<{ ok: boolean }>(`/api/templates/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  calendarEvents: (range?: { after?: string; before?: string }, limit = 1000) => {
+  calendarEvents: (range?: { after?: string; before?: string }, limit = 1000, cursor?: string) => {
     const searchParams = new URLSearchParams();
     if (range?.after) searchParams.set("after", range.after);
     if (range?.before) searchParams.set("before", range.before);
     searchParams.set("limit", String(limit));
-    return request<{ ok: boolean; items: CalendarEvent[] }>(`/api/calendar/events?${searchParams.toString()}`);
+    if (cursor) searchParams.set("cursor", cursor);
+    return request<{ ok: boolean; items: CalendarEvent[]; nextCursor?: string }>(`/api/calendar/events?${searchParams.toString()}`);
   },
   createCalendarEvent: (input: CalendarEventInput) =>
     request<{ ok: boolean; event: CalendarEvent }>("/api/calendar/events", { method: "POST", body: JSON.stringify(input) }),

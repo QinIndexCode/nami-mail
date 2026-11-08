@@ -1,3 +1,4 @@
+import { mailRecipientFields } from "./mail-write-recipients.js";
 import { z } from "zod";
 import type {
   externalMailAccountOutputSchema,
@@ -760,7 +761,7 @@ function createDraftTool(
     descriptor: {
       name: "mail.draft.create",
       title: "Create a mail draft",
-      description: "Creates a mail draft after a visible confirmation. It does not send the message. Input: { accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. attachmentTokens are opaque out_... tokens of user-uploaded files that should be attached to the draft; only use tokens listed in the system prompt's user attachments section.",
+      description: "Creates a mail draft after a visible confirmation. It does not send the message. Input: { accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], bcc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. attachmentTokens are opaque out_... tokens of user-uploaded files that should be attached to the draft; only use tokens listed in the system prompt's user attachments section.",
       category: "drafts",
       executionMode: "draft",
       requiredScopes: ["write:drafts"],
@@ -780,8 +781,7 @@ function createDraftTool(
       if (denied) return denied;
       const result = await fromMailApplication(context, () => mailApplication.createDraft(scopedContext(context), {
         accountId: input.accountId,
-        to: input.to,
-        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...mailRecipientFields(input),
         subject: input.subject,
         text: input.text,
         ...(input.attachmentTokens?.length ? { attachmentTokens: input.attachmentTokens } : {}),
@@ -799,7 +799,7 @@ function updateDraftTool(
     descriptor: {
       name: "mail.draft.update",
       title: "Update a mail draft",
-      description: "Updates a mail draft after a visible confirmation. It does not send the message. Input: { draftId: string, accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. Omitting attachmentTokens replaces the draft without attachments; pass the user attachment tokens listed in the system prompt's user attachments section to keep or change attachments.",
+      description: "Updates a mail draft after a visible confirmation. It does not send the message. Input: { draftId: string, accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], bcc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. Omitting attachmentTokens replaces the draft without attachments; pass the user attachment tokens listed in the system prompt's user attachments section to keep or change attachments.",
       category: "drafts",
       executionMode: "draft",
       requiredScopes: ["write:drafts"],
@@ -822,8 +822,7 @@ function updateDraftTool(
       const result = await fromMailApplication(context, () => mailApplication.updateDraft(scopedContext(context), {
         draftId: input.draftId,
         accountId: input.accountId,
-        to: input.to,
-        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...mailRecipientFields(input),
         subject: input.subject,
         text: input.text,
         ...(input.attachmentTokens?.length ? { attachmentTokens: input.attachmentTokens } : {}),
@@ -953,7 +952,7 @@ function sendMailTool(
     descriptor: {
       name: "messages.send",
       title: "Send a mail message",
-      description: "Sends a new mail message through the account's SMTP provider after a visible confirmation. Input: { accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. attachmentTokens are opaque out_... tokens of user-uploaded files to attach; only use tokens listed in the system prompt's user attachments section. The message is sent exactly once; retries reuse the same durable submission.",
+      description: "Sends a new mail message through the account's SMTP provider after a visible confirmation. Input: { accountId: string, to: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], bcc?: [{ address: string, name?: string }], subject: string, text: string, attachmentTokens?: string[] }. attachmentTokens are opaque out_... tokens of user-uploaded files to attach; only use tokens listed in the system prompt's user attachments section. The message is sent exactly once; retries reuse the same durable submission.",
       category: "messages",
       executionMode: "high-risk",
       requiredScopes: ["write:mail"],
@@ -972,8 +971,7 @@ function sendMailTool(
       if (denied) return denied;
       const prepared = await fromMailApplication(context, () => mailApplication.prepareSubmission(scopedContext(context), {
         accountId: input.accountId,
-        to: input.to,
-        ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...mailRecipientFields(input),
         subject: input.subject,
         text: input.text,
         ...(input.attachmentTokens?.length ? { attachmentTokens: input.attachmentTokens } : {}),
@@ -997,7 +995,7 @@ function replyDraftTool(
     descriptor: {
       name: "mail.reply",
       title: "Create a reply draft",
-      description: "Creates a reply draft to one mail message after a visible confirmation. It does not send the message. Recipients default to the original sender; the subject defaults to \"Re: <original subject>\". Input: { accountId: string, messageId: string, to?: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], subject?: string, text: string, attachmentTokens?: string[] }.",
+      description: "Creates a reply draft to one mail message after a visible confirmation. It does not send the message. Recipients default to the original sender; the subject defaults to \"Re: <original subject>\". Input: { accountId: string, messageId: string, to?: [{ address: string, name?: string }], cc?: [{ address: string, name?: string }], bcc?: [{ address: string, name?: string }], subject?: string, text: string, attachmentTokens?: string[] }.",
       category: "drafts",
       executionMode: "draft",
       requiredScopes: ["write:mail", "read:messages"],
@@ -1035,6 +1033,7 @@ function replyDraftTool(
         accountId: input.accountId,
         to: replyTo,
         ...(input.cc?.length ? { cc: input.cc } : {}),
+        ...(input.bcc !== undefined ? { bcc: input.bcc } : {}),
         subject: replySubject,
         text: input.text,
         ...(input.attachmentTokens?.length ? { attachmentTokens: input.attachmentTokens } : {}),

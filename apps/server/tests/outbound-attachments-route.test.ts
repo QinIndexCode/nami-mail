@@ -111,7 +111,7 @@ describe("outbound attachment API", () => {
     expect(unsafe.json()).toEqual({ ok: false, code: "invalid_argument", message: "不允许添加可执行或脚本文件。" });
   });
 
-  it("hands resolved content to SMTP through the dispatch task, cleans a successful unsaved send, and rejects hidden BCC input", async () => {
+  it("hands resolved attachments and explicit BCC to the dispatch task and cleans successful uploads", async () => {
     const attachment = await upload();
     sendMail.mockResolvedValue({ messageId: "<sent@nami.local>" });
 
@@ -154,13 +154,15 @@ describe("outbound attachment API", () => {
       payload: {
         accountId: "account-1",
         to: ["recipient@example.com"],
-        subject: "No hidden recipients",
+        subject: "Explicit BCC",
         text: "Body",
         bcc: ["hidden@example.com"],
       },
     });
-    expect(bcc.statusCode).toBe(400);
-    expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(bcc.statusCode).toBe(202);
+    await waitForSendTask(db, bcc.json().taskId);
+    expect(sendMail).toHaveBeenCalledTimes(2);
+    expect(sendMail.mock.calls[1]?.[2]).toMatchObject({ to: ["recipient@example.com"], bcc: ["hidden@example.com"] });
   });
 
   it("persists a saved draft attachment association without exposing a local file path", async () => {

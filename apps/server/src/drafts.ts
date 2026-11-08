@@ -13,6 +13,7 @@ import type { AccountRecord } from "./types.js";
 export type DraftMessage = {
   to: string[];
   cc?: string[];
+  bcc?: string[];
   inReplyTo?: string;
   references?: string[];
   subject: string;
@@ -163,6 +164,7 @@ function persistAppendedDraft(
     fromAddress: account.email,
     to: draft.to.map((address) => ({ name: "", address })),
     cc: draft.cc?.map((address) => ({ name: "", address })) ?? [],
+    bcc: draft.bcc?.map((address) => ({ name: "", address })) ?? [],
     inReplyTo: draft.inReplyTo ?? null,
     references: draft.references ? [...draft.references] : [],
     snippet: redactUrls(draft.text.replace(/\s+/g, " ").trim()).slice(0, 150),
@@ -284,6 +286,7 @@ export async function saveDraft(
     from: account.email,
     to: draft.to.length ? draft.to : undefined,
     cc: draft.cc?.length ? draft.cc : undefined,
+    bcc: draft.bcc?.length ? draft.bcc : undefined,
     inReplyTo: draft.inReplyTo,
     references: draft.references?.length ? draft.references : undefined,
     subject: draft.subject,

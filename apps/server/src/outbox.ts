@@ -3,6 +3,7 @@ import { domainToASCII } from "node:url";
 import { toUtcIsoTimestamp } from "./utc-time.js";
 import {
   outboundSubmissionStatuses as OUTBOUND_SUBMISSION_STATUSES,
+  outboundRecipientDeliverySchema,
   type OutboundSubmission,
   type OutboundSubmissionStatus,
 } from "@nami/agent-contracts";
@@ -12,7 +13,7 @@ import {
   encryptTextEnvelope,
 } from "./crypto.js";
 import type { DatabaseHandle } from "./db.js";
-import { mailErrorCode, type MailErrorCode } from "./mail.js";
+export { deliveryFailureStatus } from "./delivery-failure.js";
 import { messagePayloadForRow, type MessageStorageRow } from "./message-storage.js";
 import { pruneExpiredOutboundSubmissions } from "./outbox-retention.js";
 
@@ -33,6 +34,7 @@ export type { OutboundSubmission, OutboundSubmissionStatus };
 export type OutboundSubmissionRequest = {
   to: string[];
   cc?: string[];
+  bcc?: string[];
   inReplyTo?: string;
   references?: string[];
   subject: string;
@@ -68,6 +70,7 @@ type SubmissionDetails = {
   errorMessage: string | null;
   providerMessageId: string | null;
   postSubmitWarning: string | null;
+  recipientDelivery?: OutboundSubmission["recipientDelivery"];
 };
 
 export class SubmissionConflictError extends Error {
@@ -83,6 +86,7 @@ function canonicalRequest(request: OutboundSubmissionRequest): string {
   return JSON.stringify({
     to: request.to,
     cc: request.cc ?? [],
+    ...(request.bcc?.length ? { bcc: request.bcc } : {}),
     inReplyTo: request.inReplyTo ?? null,
     references: request.references ?? [],
     subject: request.subject,
@@ -163,6 +167,7 @@ function normalizeStoredRequest(value: unknown): OutboundSubmissionRequest {
   return {
     to: stringArray(item.to, "recipients"),
     cc: stringArray(item.cc ?? [], "Cc recipients"),
+    ...(item.bcc === undefined ? {} : { bcc: stringArray(item.bcc, "Bcc recipients") }),
     ...(nullableString(item.inReplyTo, "In-Reply-To") !== undefined ? { inReplyTo: item.inReplyTo as string } : {}),
     references: stringArray(item.references ?? [], "References"),
     subject: item.subject,
@@ -184,7 +189,8 @@ function normalizeStoredDetails(value: unknown): SubmissionDetails {
   const errorMessage = nullableString(item.errorMessage, "error message") ?? null;
   const providerMessageId = nullableString(item.providerMessageId, "provider message ID") ?? null;
   const postSubmitWarning = nullableString(item.postSubmitWarning, "post-submit warning") ?? null;
-  return { rfcMessageId: item.rfcMessageId, errorMessage, providerMessageId, postSubmitWarning };
+  return { rfcMessageId: item.rfcMessageId, errorMessage, providerMessageId, postSubmitWarning,
+    ...(item.recipientDelivery === undefined ? {} : { recipientDelivery: outboundRecipientDeliverySchema.parse(item.recipientDelivery) }) };
 }
 
 /** Everything requestForRow/detailsForRow read — no more.
@@ -275,7 +281,11 @@ function publicSubmission(row: StoredSubmission, masterKey: Buffer): OutboundSub
     accountId: row.account_id,
     messageId: details.rfcMessageId,
     subject: request.subject,
-    recipients: [...request.to, ...(request.cc ?? [])],
+    recipients: [...request.to, ...(request.cc ?? []), ...(request.bcc ?? [])],
+    toRecipients: request.to,
+    ccRecipients: request.cc ?? [],
+    bccRecipients: request.bcc ?? [],
+    ...(details.recipientDelivery ? { recipientDelivery: details.recipientDelivery } : {}),
     deliveryStatus: row.status,
     errorCode: row.error_code,
     errorMessage: details.errorMessage,
@@ -624,6 +634,7 @@ function updateSubmission(
     submittedAt?: string | null;
     confirmedAt?: string | null;
     postSubmitWarning?: string | null;
+    recipientDelivery?: OutboundSubmission["recipientDelivery"];
   },
 ): OutboundSubmission {
   const current = submissionById(db, id);
@@ -635,6 +646,7 @@ function updateSubmission(
     errorMessage: has("errorMessage") ? fields.errorMessage ?? null : currentDetails.errorMessage,
     providerMessageId: has("providerMessageId") ? fields.providerMessageId ?? null : currentDetails.providerMessageId,
     postSubmitWarning: has("postSubmitWarning") ? fields.postSubmitWarning ?? null : currentDetails.postSubmitWarning,
+    ...(fields.recipientDelivery ?? currentDetails.recipientDelivery ? { recipientDelivery: fields.recipientDelivery ?? currentDetails.recipientDelivery } : {}),
   };
   const now = new Date().toISOString();
   db.prepare(`
@@ -670,6 +682,7 @@ export function markSubmissionSubmitted(
   masterKey: Buffer,
   id: string,
   providerMessageId: string | undefined,
+  recipientDelivery?: OutboundSubmission["recipientDelivery"],
 ): OutboundSubmission {
   const submittedAt = new Date().toISOString();
   return updateSubmission(db, masterKey, id, {
@@ -678,6 +691,7 @@ export function markSubmissionSubmitted(
     errorMessage: null,
     providerMessageId: providerMessageId ?? null,
     submittedAt,
+    ...(recipientDelivery ? { recipientDelivery } : {}),
   });
 }
 
@@ -737,44 +751,6 @@ export function setSubmissionPostSubmitWarning(
   const current = submissionById(db, id);
   if (!current) throw new Error("Outbound submission not found.");
   return updateSubmission(db, masterKey, id, { status: current.status, postSubmitWarning: warning });
-}
-
-function smtpCommand(error: unknown, depth = 0): string | undefined {
-  if (!error || typeof error !== "object" || depth > 2) return undefined;
-  const details = error as Record<string, unknown>;
-  if (typeof details.command === "string") return details.command.trim().toUpperCase();
-  return smtpCommand(details.cause, depth + 1);
-}
-
-function isKnownPreAcceptanceFailure(code: MailErrorCode, error: unknown): boolean {
-  if ([
-    "local_data_invalid",
-    "invalid_credential",
-    "imap_auth_failed",
-    "smtp_auth_failed",
-    "imap_disabled",
-    "provider_configuration",
-    "server_not_found",
-    "network_unavailable",
-    "connection_refused",
-    "tls_certificate_failed",
-    "tls_handshake_failed",
-    "oauth_required",
-    "reauth_required",
-  ].includes(code)) return true;
-
-  // Nodemailer labels SMTP protocol failures by command. Explicit SMTP
-  // command rejection before message transfer is safe to retry. `CONN` is
-  // intentionally excluded: socket timeout/reset errors may be reported with
-  // that command even when the final delivery response was lost.
-  const command = smtpCommand(error);
-  return command === "EHLO" || command === "HELO" || command === "AUTH"
-    || command === "MAIL FROM" || command === "RCPT TO" || command === "DATA";
-}
-
-export function deliveryFailureStatus(error: unknown): "failed" | "unknown_delivery" {
-  const code = mailErrorCode(error);
-  return isKnownPreAcceptanceFailure(code, error) ? "failed" : "unknown_delivery";
 }
 
 /** Converts an interrupted process-local SMTP attempt into a safe no-retry state. */

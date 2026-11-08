@@ -144,6 +144,7 @@ export function writePendingSentRow(
     fromAddress: input.account.email,
     to: input.request.to.map((address) => ({ name: "", address })),
     cc: input.request.cc?.map((address) => ({ name: "", address })) ?? [],
+    bcc: input.request.bcc?.map((address) => ({ name: "", address })) ?? [],
     inReplyTo: input.request.inReplyTo ?? null,
     references: input.request.references ? [...input.request.references] : [],
     // The same redaction the synced path applies: a raw URL must not reach a

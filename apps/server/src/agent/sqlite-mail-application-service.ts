@@ -561,6 +561,7 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const result = await saveDraft(this.options.db, this.options.masterKey, account, {
       to: input.to.map((recipient) => recipient.address),
       ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
+      ...(input.bcc?.length ? { bcc: input.bcc.map((recipient) => recipient.address) } : {}),
       subject: input.subject,
       text: input.text,
       ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
@@ -588,6 +589,7 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const result = await saveDraft(this.options.db, this.options.masterKey, account, {
       to: input.to.map((recipient) => recipient.address),
       ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
+      ...(input.bcc?.length ? { bcc: input.bcc.map((recipient) => recipient.address) } : {}),
       subject: input.subject,
       text: input.text,
       ...(input.inReplyTo ? { inReplyTo: input.inReplyTo } : {}),
@@ -703,6 +705,7 @@ export class SqliteMailApplicationService implements MailApplicationService {
     const request: OutboundSubmissionRequest = {
       to: input.to.map((recipient) => recipient.address),
       ...(input.cc?.length ? { cc: input.cc.map((recipient) => recipient.address) } : {}),
+      ...(input.bcc?.length ? { bcc: input.bcc.map((recipient) => recipient.address) } : {}),
       subject: input.subject,
       text: input.text,
       attachmentTokens: [...(input.attachmentTokens ?? [])],

@@ -230,6 +230,7 @@ export async function sendMail(
   message: {
     to: string[];
     cc?: string[];
+    bcc?: string[];
     /** Stable RFC Message-ID generated before the SMTP attempt starts. */
     messageId?: string;
     inReplyTo?: string;
@@ -250,6 +251,7 @@ export async function sendMail(
         from: account.email,
         to: message.to,
         cc: message.cc,
+        ...(message.bcc?.length ? { bcc: message.bcc } : {}),
         ...(message.messageId ? { messageId: message.messageId } : {}),
         inReplyTo: message.inReplyTo,
         references: message.references?.length ? message.references : undefined,

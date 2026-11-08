@@ -8,9 +8,11 @@ import type { OutboundAttachment } from "./types";
 export type ToastKind = "success" | "error" | "info" | "warning";
 
 export type ComposeDraft = {
+  recoveryMissingAttachments?: number;
   accountId?: string;
   to?: string;
   cc?: string;
+  bcc?: string;
   subject?: string;
   text?: string;
   inReplyTo?: string;

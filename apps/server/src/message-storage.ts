@@ -66,6 +66,7 @@ export type MessagePayload = {
   fromAddress: string;
   to: StoredAddress[];
   cc: StoredAddress[] | null;
+  bcc?: StoredAddress[] | null;
   inReplyTo: string | null;
   references: string[] | null;
   snippet: string;
@@ -281,6 +282,7 @@ function normalizePayload(value: unknown): MessagePayload {
     fromAddress: typeof item.fromAddress === "string" ? item.fromAddress : "",
     to: addresses(item.to),
     cc: item.cc === null ? null : addresses(item.cc),
+    ...(item.bcc === undefined ? {} : { bcc: addresses(item.bcc) }),
     inReplyTo: asNullableString(item.inReplyTo),
     references: item.references === null ? null : references(item.references),
     snippet: typeof item.snippet === "string" ? item.snippet : "",
@@ -380,6 +382,7 @@ export function payloadByteEstimate(payload: MessagePayload): number {
     + (payload.references ?? []).reduce((total, value) => total + utf8Bytes(value), 0)
     + addressBytes(payload.to)
     + addressBytes(payload.cc ?? [])
+    + addressBytes(payload.bcc ?? [])
     + attachmentBytes(payload.attachments);
 }
 

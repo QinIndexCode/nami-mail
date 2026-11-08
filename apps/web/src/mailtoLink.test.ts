@@ -31,9 +31,9 @@ describe("parseMailtoUrl", () => {
       .toEqual({ to: "Jane Doe <jane@example.com>" });
   });
 
-  it("merges multiple to, cc, and bcc addresses, folding bcc into cc", () => {
+  it("keeps BCC separate from visible CC addresses", () => {
     expect(parseMailtoUrl("mailto:?to=a@x.com&to=b@x.com&cc=c@x.com&bcc=d@x.com"))
-      .toEqual({ to: "a@x.com, b@x.com", cc: "c@x.com, d@x.com" });
+      .toEqual({ to: "a@x.com, b@x.com", cc: "c@x.com", bcc: "d@x.com" });
   });
 
   it("supports the RFC 6068 to-parameter when the path is empty", () => {

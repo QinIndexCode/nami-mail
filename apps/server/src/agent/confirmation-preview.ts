@@ -21,6 +21,7 @@ type DraftLikeInput = {
   accountId: string;
   to?: ReadonlyArray<Recipient>;
   cc?: ReadonlyArray<Recipient>;
+  bcc?: ReadonlyArray<Recipient>;
   subject?: string;
   text: string;
   attachmentTokens?: readonly string[];
@@ -85,6 +86,7 @@ export function draftConfirmationPreview(
       field(resolved, "confirmation.field.account", input.accountId),
       field(resolved, "confirmation.field.to", recipientPreview(resolved, input.to ?? [])),
       field(resolved, "confirmation.field.cc", recipientPreview(resolved, input.cc ?? [])),
+      ...(input.bcc?.length ? [field(resolved, "confirmation.field.bcc", recipientPreview(resolved, input.bcc))] : []),
       field(resolved, "confirmation.field.subject", input.subject || agentT(resolved, "confirmation.value.no_subject")),
       {
         label: agentT(resolved, "confirmation.field.body_preview", { count: input.text.length }),
@@ -170,6 +172,7 @@ export function sendMailConfirmationPreview(locale: string | undefined, input: D
       field(resolved, "confirmation.field.account", input.accountId),
       field(resolved, "confirmation.field.to", recipientPreview(resolved, input.to ?? [])),
       field(resolved, "confirmation.field.cc", recipientPreview(resolved, input.cc ?? [])),
+      ...(input.bcc?.length ? [field(resolved, "confirmation.field.bcc", recipientPreview(resolved, input.bcc))] : []),
       field(resolved, "confirmation.field.subject", input.subject || agentT(resolved, "confirmation.value.no_subject")),
       {
         label: agentT(resolved, "confirmation.field.body_preview", { count: input.text.length }),
@@ -194,6 +197,7 @@ export function replyMailConfirmationPreview(
       field(resolved, "confirmation.field.replying_to", input.messageId),
       field(resolved, "confirmation.field.to", recipientPreview(resolved, input.to ?? [])),
       field(resolved, "confirmation.field.cc", recipientPreview(resolved, input.cc ?? [])),
+      ...(input.bcc?.length ? [field(resolved, "confirmation.field.bcc", recipientPreview(resolved, input.bcc))] : []),
       field(resolved, "confirmation.field.subject", input.subject || agentT(resolved, "confirmation.value.derived_subject")),
       {
         label: agentT(resolved, "confirmation.field.body_preview", { count: input.text.length }),
