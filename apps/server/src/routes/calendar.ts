@@ -14,6 +14,7 @@ import {
   updateCalendarEvent,
 } from "../calendar.js";
 import { ROUTE_ERROR_CODES } from "./error-codes.js";
+import { decodeCalendarCursor, encodeCalendarCursor } from "../calendar-cursor.js";
 
 export type CalendarRouteDeps = {
   context: RuntimeContext;
@@ -28,9 +29,16 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: CalendarRoute
       after: z.string().datetime({ offset: true }).optional(),
       before: z.string().datetime({ offset: true }).optional(),
       limit: z.coerce.number().int().min(1).max(5000).optional(),
+      cursor: z.string().max(2048).optional(),
     }).strict().safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
-    return { ok: true, items: listCalendarEvents(context.db, context.masterKey, { after: parsed.data.after, before: parsed.data.before }, parsed.data.limit) };
+    let cursor;
+    try { cursor = parsed.data.cursor ? decodeCalendarCursor(parsed.data.cursor) : undefined; }
+    catch { return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "日历游标无效，请重新加载。" }); }
+    const limit = parsed.data.limit ?? 1000;
+    const items = listCalendarEvents(context.db, context.masterKey, { after: parsed.data.after, before: parsed.data.before }, limit, cursor);
+    const last = items.at(-1);
+    return { ok: true, items, ...(items.length === limit && last ? { nextCursor: encodeCalendarCursor({ startAt: last.startAt, id: last.id }) } : {}) };
   });
 
   app.post("/api/calendar/events", async (request, reply) => {
@@ -77,7 +85,9 @@ export function registerCalendarRoutes(app: FastifyInstance, deps: CalendarRoute
       mode: z.enum(["append", "replace"]).default("append"),
     }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: validationMessage(parsed.error) });
-    const parsedEvents = parseIcs(parsed.data.ics);
+    let parsedEvents;
+    try { parsedEvents = parseIcs(parsed.data.ics); }
+    catch { return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "ICS 包含无效日期、不支持的时区或超出解析限制，未导入任何日程。" }); }
     if (parsedEvents.length === 0) {
       return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "未能从 ICS 内容中解析出有效的日程事件。" });
     }

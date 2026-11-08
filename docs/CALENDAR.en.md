@@ -19,7 +19,11 @@ The import modal accepts a local `.ics` file (or attachment content carried over
 - **Append mode (default)**: adds events to the existing calendar. Events are deduplicated by their ICS UID — re-importing the same calendar never double-books; matching events are updated in place (reported as "updated").
 - **Replace mode**: clears all existing events first, then imports the new content.
 
-Events originally imported from external sources preserve their stored UID in exports, making an import → export → re-import round trip lossless and idempotent; events created manually in the app carry a NULL UID in the database (exports synthesize a UID from the internal event ID), so re-importing them will insert duplicate rows since deduplication only matches non-null UIDs.
+Imported events retain their original UID. Locally created events use their stable internal ID as UID; legacy rows with a NULL UID are also matched by that ID. Exporting and appending local events therefore updates the original row instead of creating duplicates.
+
+Valid `TZID` values use IANA time zones and seasonal offsets. Floating times without a zone use local wall time. Invalid dates, unknown zones and nonexistent DST times produce an explicit error rather than the current time; replacement imports parse before deleting existing events. Full RRULE, recurrence exception and invitation cancellation semantics remain unsupported.
+
+The UI follows calendar cursors to load all events. Reminders query a separate recent time window, so the oldest 1,000 historical events cannot hide current reminders.
 
 ## Event Reminders
 
@@ -27,11 +31,11 @@ While the app is running, a reminder toast fires 15 minutes before a timed event
 
 ## Agent Calendar Tools
 
-The embedded Agent registers four local calendar tools (`calendar.list`, `calendar.create`, `calendar.update`, `calendar.delete`), allowing you to inspect schedules and organize events directly through conversation (e.g. "Do I have meetings this Friday?", "Add a sync tomorrow at 10 AM"). Creation, updates, and deletion require explicit user approval on a visible GUI confirmation card; all events are saved directly into the encrypted local database and never leaked externally.
+The Agent registers `calendar.list`, `calendar.create`, `calendar.update` and `calendar.delete`. Writes follow the Agent access level: the default send-confirmed level requires visible approval; full-access follows its explicit authorization. The calendar service does not sync to a cloud calendar. When an authorized cloud Agent is used, selected events can be included in its conversation context.
 
 ## Local Storage and Boundaries
 
-- Event title, description, and location are encrypted at rest with a master-key-derived AES-256-GCM envelope; start/end timestamps stay plaintext in UTC to serve the month view's date-range queries. This matches the mail-cache encryption boundary — it is not whole-database SQLite encryption. Whole-database at-rest encryption has landed on the development trunk but has not shipped; once it does, those UTC timestamps no longer sit in a plaintext database file, and the release notes will state that change.
+- Event title, description and location use a master-key-derived AES-256-GCM envelope; UTC fields support time-range queries. Since 0.6.0 the database file is also encrypted at rest. A field representation in an unlocked database is not plaintext on disk.
 - Field lengths are bounded: title 300 characters, description 10,000 characters, location 500 characters; a single import accepts at most 5,000 events.
-- The calendar sends nothing to third parties. ICS parsing happens entirely on your machine; the invite banner only downloads the attachment itself from the local service.
+- ICS parsing stays local, and the invite banner reads attachments through the local service. The calendar service does not sync to third parties; cloud Agent context follows separate Provider consent.
 

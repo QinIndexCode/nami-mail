@@ -1,3 +1,5 @@
+import { parseCalendarDate } from "./calendar-time.js";
+export { IcsDateError } from "./calendar-time.js";
 import { calendarEventColors, type CalendarEventColor } from "./mail-dto.js";
 
 /**
@@ -112,50 +114,7 @@ export function unfoldIcsLines(raw: string): string[] {
 
 /** Parses iCalendar date / date-time strings into ISO 8601 UTC */
 export function parseIcsDate(value: string, params: Record<string, string> = {}): { iso: string; allDay: boolean } {
-  const cleanVal = value.trim();
-  const isDateValue = params.VALUE?.toUpperCase() === "DATE" || /^\d{8}$/.test(cleanVal);
-
-  if (isDateValue) {
-    const match = cleanVal.match(/^(\d{4})(\d{2})(\d{2})$/);
-    if (match) {
-      const year = Number(match[1]);
-      const month = Number(match[2]) - 1;
-      const day = Number(match[3]);
-      const date = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
-      return { iso: date.toISOString(), allDay: true };
-    }
-  }
-
-  // DateTime format: YYYYMMDDTHHMMSS(Z)?
-  const dtMatch = cleanVal.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/);
-  if (dtMatch) {
-    const year = Number(dtMatch[1]);
-    const month = Number(dtMatch[2]) - 1;
-    const day = Number(dtMatch[3]);
-    const hours = Number(dtMatch[4]);
-    const minutes = Number(dtMatch[5]);
-    const seconds = Number(dtMatch[6]);
-    const isUtc = dtMatch[7] === "Z";
-
-    // If UTC, use Date.UTC
-    if (isUtc) {
-      const date = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-      return { iso: date.toISOString(), allDay: false };
-    }
-
-    // Floating/local time without timezone offset: interpret as UTC for deterministic local storage
-    const date = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-    return { iso: date.toISOString(), allDay: false };
-  }
-
-  // Fallback: standard Date.parse
-  const parsed = Date.parse(cleanVal);
-  if (Number.isFinite(parsed)) {
-    return { iso: new Date(parsed).toISOString(), allDay: false };
-  }
-
-  const fallback = new Date().toISOString();
-  return { iso: fallback, allDay: false };
+  return parseCalendarDate(value, params);
 }
 
 /** Parses an ISO 8601 duration (e.g., PT1H30M, P1D) into milliseconds */
