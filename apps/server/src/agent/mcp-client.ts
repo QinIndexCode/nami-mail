@@ -403,36 +403,46 @@ export class McpStdioClient {
   }
 
   async listTools(options: { signal?: AbortSignal } = {}): Promise<readonly McpDiscoveredTool[]> {
-    const response = await this.request("tools/list", {}, { signal: options.signal });
-    if (!isPlainObject(response)) {
-      throw new McpClientError("PROTOCOL_ERROR", "The MCP tools/list response is not an object.", false);
-    }
-    if (!Array.isArray(response.tools)) {
-      throw new McpClientError("PROTOCOL_ERROR", "The MCP tools/list response is missing a tools array.", false);
-    }
     const tools: McpDiscoveredTool[] = [];
-    for (const raw of response.tools) {
-      if (!isPlainObject(raw) || typeof raw.name !== "string" || !raw.name.trim() || raw.name.length > 128) continue;
-      const inputSchema = isPlainObject(raw.inputSchema) && isSafeJsonValue(raw.inputSchema)
-        ? raw.inputSchema
-        : undefined;
-      const annotations = isPlainObject(raw.annotations)
-        ? {
-          readOnlyHint: raw.annotations.readOnlyHint === true,
-          destructiveHint: raw.annotations.destructiveHint === true,
-          idempotentHint: raw.annotations.idempotentHint === true,
-          openWorldHint: raw.annotations.openWorldHint === true,
-        }
-        : undefined;
-      tools.push({
-        name: raw.name,
-        ...(typeof raw.description === "string" && raw.description ? { description: raw.description } : {}),
-        ...(inputSchema ? { inputSchema } : {}),
-        ...(annotations ? { annotations } : {}),
-      });
-      if (tools.length >= defaultToolLimit) break;
+    const cursors = new Set<string>();
+    const deadline = Date.now() + this.requestTimeoutMs;
+    let cursor: string | undefined;
+    for (let page = 0; page < 32; page += 1) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new McpClientError("TIMEOUT", "MCP tool discovery timed out.", true);
+      const response = await this.request("tools/list", cursor ? { cursor } : {}, { signal: options.signal, timeoutMs: remaining });
+      if (!isPlainObject(response) || !Array.isArray(response.tools)) {
+        throw new McpClientError("PROTOCOL_ERROR", "The MCP tools/list response is missing a tools array.", false);
+      }
+      for (const raw of response.tools) {
+        if (!isPlainObject(raw) || typeof raw.name !== "string" || !raw.name.trim() || raw.name.length > 128) continue;
+        const inputSchema = isPlainObject(raw.inputSchema) && isSafeJsonValue(raw.inputSchema)
+          ? raw.inputSchema
+          : undefined;
+        const annotations = isPlainObject(raw.annotations)
+          ? {
+            readOnlyHint: raw.annotations.readOnlyHint === true,
+            destructiveHint: raw.annotations.destructiveHint === true,
+            idempotentHint: raw.annotations.idempotentHint === true,
+            openWorldHint: raw.annotations.openWorldHint === true,
+          }
+          : undefined;
+        tools.push({
+          name: raw.name,
+          ...(typeof raw.description === "string" && raw.description ? { description: raw.description } : {}),
+          ...(inputSchema ? { inputSchema } : {}),
+          ...(annotations ? { annotations } : {}),
+        });
+        if (tools.length > defaultToolLimit) throw new McpClientError("PROTOCOL_ERROR", `MCP tool discovery exceeds the ${defaultToolLimit}-tool limit. Narrow the server tool set.`, false);
+      }
+      if (response.nextCursor === undefined) return tools;
+      if (typeof response.nextCursor !== "string" || !response.nextCursor || cursors.has(response.nextCursor)) {
+        throw new McpClientError("PROTOCOL_ERROR", "The MCP tools/list response contains an invalid or repeated cursor.", false);
+      }
+      cursor = response.nextCursor;
+      cursors.add(cursor);
     }
-    return tools;
+    throw new McpClientError("PROTOCOL_ERROR", "MCP tool discovery exceeds the 32-page limit.", false);
   }
 
   async callTool(name: string, args: unknown, options: { signal?: AbortSignal } = {}): Promise<McpCallToolResult> {

@@ -2,6 +2,8 @@
 
 [简体中文](tools.zh-CN.md) | [English](tools.en.md)
 
+本文的“需确认”默认描述 send-confirmed 档位；full-access 可按明确授权执行普通高风险写入，标有 irreversible 的不可逆操作仍必须确认，详见[权限](permissions.zh-CN.md)。草稿、发送与回复的可选 `bcc` 字段独立于 `cc`，确认预览会显示密送地址；实际 SMTP 投递不会向其他收件人公开 Bcc 头。
+
 ## 统一注册表
 
 工具使用小写点分标识符和版本化描述符注册。描述符至少声明分类、执行模式、必需 scope、账户访问要求、是否可外部调用、超时和确认策略。Provider 只提出工具调用；只有宿主的 Tool Registry 与 Permission Engine 可以解析和执行它。
@@ -11,7 +13,7 @@
 | `read` | 账户、文件夹、邮件、线程、附件元数据、RAG 查询 | 允许，且必须在配对范围内 | 不需要 |
 | `draft` | 创建/更新/删除草稿、起草回复 | 允许（`send-confirmed` 及以上，7 个写工具之一） | 声明 `required` 的操作需可见确认，直至 `full-access` |
 | `write` | 标记、移动、归档、修改记忆与设置 | 允许（`send-confirmed` 及以上） | 声明 `required` 的操作需可见确认，直至 `full-access`（`memory.*` 等安全写入免确认） |
-| `high-risk` | 发送、转发、永久删除、批量写入、内容外发 | 仅 `messages.send` 对外开放 | 必须一次性 GUI 确认和持久审计 |
+| `high-risk` | 发送、转发、永久删除、批量写入、内容外发 | 仅 `messages.send` 对外开放 | 按权限档位确认；不可逆操作始终确认，持久审计 |
 
 外部 CLI/MCP v1 共 16 个工具：9 个只读 + 7 个受限写入（草稿创建/更新/删除、移动、标记、发送、回复草稿）。默认 `read-only` 档只开放只读；提升档位后写工具可用。命令行的 `--yes`、MCP 参数、已配对身份或模型输出都不会放宽权限档位或代替确认。
 

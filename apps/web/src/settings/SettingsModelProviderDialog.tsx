@@ -255,7 +255,7 @@ export default function SettingsModelProviderDialog({
                       style={{
                         width: "14px",
                         height: "14px",
-                        borderRadius: "3px",
+                        borderRadius: "var(--radius-xs)",
                         border: "1.5px solid var(--focus-ring)",
                         background: "var(--focus-ring)",
                         color: "var(--focus-ring-text)",
@@ -304,7 +304,7 @@ export default function SettingsModelProviderDialog({
                           style={{
                             width: "14px",
                             height: "14px",
-                            borderRadius: "3px",
+                            borderRadius: "var(--radius-xs)",
                             border: `1.5px solid ${isChecked ? "var(--focus-ring)" : "var(--line-strong)"}`,
                             background: isChecked ? "var(--focus-ring)" : "transparent",
                             color: "var(--focus-ring-text)",

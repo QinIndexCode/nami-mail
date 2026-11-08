@@ -272,15 +272,10 @@ export default function SettingsConnectionsSection({
       </div>
 
       {feedbackNotice && (
-        <div className={`form-status ${feedbackNotice.kind}`} role="alert" style={{ marginBottom: 12 }}>
+        <div className={`form-status ${feedbackNotice.kind}`} role="alert">
           {feedbackNotice.kind === "success" ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
           <span>{feedbackNotice.message}</span>
-          <button
-            type="button"
-            className="icon-button"
-            style={{ marginLeft: "auto", minHeight: "auto", padding: 2 }}
-            onClick={() => setFeedbackNotice(null)}
-          >
+          <button type="button" className="form-status-dismiss" onClick={() => setFeedbackNotice(null)}>
             <X size={12} />
           </button>
         </div>

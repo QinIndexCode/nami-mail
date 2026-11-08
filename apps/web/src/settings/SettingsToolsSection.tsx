@@ -306,7 +306,7 @@ export default function SettingsToolsSection({
 
           {/* Tools Grid */}
           {filteredTools.length === 0 ? (
-            <p className="settings-empty" role="status" style={{ padding: "32px 16px" }}>
+            <p className="settings-empty settings-empty-inset" role="status">
               {t("settings.tools.emptyFilter")}
             </p>
           ) : (
