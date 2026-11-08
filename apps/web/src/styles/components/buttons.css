@@ -1,7 +1,7 @@
 .primary-button,.secondary-button
 {
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 justify-content:center;
 align-items:center;
 gap:8px;

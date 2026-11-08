@@ -551,6 +551,17 @@ describe("compose send against the durable acceptance", () => {
     });
   });
 
+  it("keeps a BCC-only draft private through the compose request", async () => {
+    h.send.mockResolvedValue({ ok: true, submission: { ...queuedSubmission, deliveryStatus: "submitted" } });
+    const { onClose } = renderCompose("正文", { accountId: "account-1", bcc: "hidden@example.com" });
+    await flush();
+    expect(container.querySelector<HTMLInputElement>("#compose-bcc")?.value).toBe("hidden@example.com");
+    act(() => sendButton().click());
+    await flush();
+    expect(h.send).toHaveBeenCalledWith(expect.objectContaining({ to: [], cc: undefined, bcc: ["hidden@example.com"] }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("waits for the first attempt before reporting the send and dropping the draft", async () => {
     h.submission.mockResolvedValue({
       ok: true,

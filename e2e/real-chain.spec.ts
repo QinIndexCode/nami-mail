@@ -37,7 +37,7 @@ type Message = { id: string; subject: string; seen: boolean; textBody: string; h
  */
 async function bootRealApp(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.locator("#nami-splash")).toHaveClass(/done/, { timeout: 30_000 });
+  await expect(page.locator("#nami-splash")).toBeHidden({ timeout: 30_000 });
   const terms = page.locator(".translation-terms-card");
   if (await terms.isVisible().catch(() => false)) {
     await terms.locator(".primary-button").click();
@@ -112,10 +112,10 @@ test.describe("real chain (no demo fixtures)", () => {
     // Give any direct image fetch a chance to be issued before asserting.
     await page.waitForTimeout(1_000);
 
-    // The rendered source itself must already point at the proxy: that holds
-    // even though the host never resolves, so this cannot pass by luck.
     const renderedSrc = await page.locator(".mail-html img").first().getAttribute("src");
-    expect(renderedSrc, "the mail image was not rewritten to the proxy").toContain("/api/images/proxy?url=");
+    expect(renderedSrc, "remote images must be blocked before permission").toMatch(/^data:image\/gif/);
+    await page.getByRole("button", { name: "仅加载这封邮件" }).click();
+    await expect(page.locator(".mail-html img").first()).toHaveAttribute("src", /\/api\/images\/proxy\?url=.*messageId=/);
 
     expect(directRequests, "the renderer fetched the sender's image host directly").toEqual([]);
   });

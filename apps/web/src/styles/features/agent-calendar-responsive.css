@@ -39,7 +39,7 @@ width:32px;
 height:32px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 place-items:center;
 padding:0;
 display:grid

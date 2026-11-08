@@ -65,6 +65,7 @@ type QuickMessageActionsApi = ReturnType<typeof useQuickMessageActions>;
 type Locales = ReturnType<typeof useI18n>["locales"];
 
 export interface MailReaderProps {
+  imagePrivacyNotice?: ReactNode;
   state: DialogRoutingState;
   actions: DialogRoutingActions;
   t: Translate;
@@ -454,7 +455,7 @@ export function MailReader(props: MailReaderProps) {
                   </div>
                 </div>
               ) : (
-                <div className="mail-content">{selected.htmlBody
+                <div className="mail-content">{props.imagePrivacyNotice}{selected.htmlBody
                   ? <div className="mail-html" ref={mailHtmlRef} dangerouslySetInnerHTML={{ __html: readerHtml }} />
                   : <div className="mail-text"><MailTextBody body={readerTextParts.quote ? readerTextParts.body : readerTextSource} suffix={readerTextParts.quote ? <button type="button" className="mail-quote-toggle" onClick={() => setQuotedExpanded(true)}>{t("mail.reader.showQuoted")}</button> : null} /></div>}
                 </div>

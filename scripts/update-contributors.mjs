@@ -3,8 +3,8 @@
  * update-contributors.mjs
  *
  * Fetches the contributor list from the GitHub API, filters out bot accounts,
- * and rewrites the <!-- contributors-start / contributors-end --> block inside
- * each target README file.
+ * and rewrites the marked contributor blocks in the README files and on the
+ * landing page (site/index.html).
  *
  * Usage:
  *   node scripts/update-contributors.mjs
@@ -31,6 +31,9 @@ const TOKEN = process.env.GITHUB_TOKEN;
 /** README files to update, relative to the project root. */
 const README_FILES = ["README.md", "README.zh-CN.md", "README.en.md"];
 
+/** Landing page whose contributor list mirrors the READMEs. */
+const SITE_FILE = "site/index.html";
+
 /** Commit label used to format the commit count in each language. */
 const COMMIT_LABEL = {
   "README.md": (n) => `${n} commit${n === 1 ? "" : "s"}`,
@@ -40,6 +43,8 @@ const COMMIT_LABEL = {
 
 const START_MARKER = "<!-- contributors-start -->";
 const END_MARKER = "<!-- contributors-end -->";
+const SITE_START_MARKER = "<!-- site-contributors-start -->";
+const SITE_END_MARKER = "<!-- site-contributors-end -->";
 
 // ── fetch contributors ──────────────────────────────────────────────────────
 
@@ -79,10 +84,20 @@ async function fetchContributors() {
     .sort((a, b) => b.contributions - a.contributions);
 }
 
-// ── build table HTML ────────────────────────────────────────────────────────
+// ── build contributor markup ────────────────────────────────────────────────
 
 /** Number of contributor cards per table row. */
 const COLS = 7;
+
+/** Normalizes the API payload once so every surface shares the same values. */
+function contributorProfile(contributor) {
+  return {
+    login: contributor.login,
+    avatarUrl: contributor.avatar_url,
+    profileUrl: `https://github.com/${contributor.login}`,
+    commits: contributor.contributions,
+  };
+}
 
 function buildTable(contributors, labelFn) {
   if (contributors.length === 0) return "<p><em>No contributors yet.</em></p>";
@@ -91,16 +106,18 @@ function buildTable(contributors, labelFn) {
   for (let i = 0; i < contributors.length; i += COLS) {
     const row = contributors.slice(i, i + COLS);
     const cells = row
-      .map(
-        (c) =>
+      .map((c) => {
+        const { login, avatarUrl, profileUrl, commits } = contributorProfile(c);
+        return (
           `    <td align="center">\n` +
-          `      <a href="https://github.com/${c.login}">\n` +
-          `        <img src="${c.avatar_url}" width="64" height="64" style="border-radius:50%" alt="${c.login}" /><br />\n` +
-          `        <sub><b>${c.login}</b></sub>\n` +
+          `      <a href="${profileUrl}">\n` +
+          `        <img src="${avatarUrl}" width="64" height="64" style="border-radius:50%" alt="${login}" /><br />\n` +
+          `        <sub><b>${login}</b></sub>\n` +
           `      </a><br />\n` +
-          `      <sub>${labelFn(c.contributions)}</sub>\n` +
+          `      <sub>${labelFn(commits)}</sub>\n` +
           `    </td>`
-      )
+        );
+      })
       .join("\n");
     rows.push(`  <tr>\n${cells}\n  </tr>`);
   }
@@ -108,22 +125,33 @@ function buildTable(contributors, labelFn) {
   return `<table>\n${rows.join("\n")}\n</table>`;
 }
 
-// ── update a single README file ─────────────────────────────────────────────
+function buildSiteList(contributors) {
+  const items = contributors
+    .map((c) => {
+      const { login, avatarUrl, profileUrl } = contributorProfile(c);
+      return `            <li><a href="${profileUrl}" rel="noopener"><img src="${avatarUrl}" width="40" height="40" alt="" loading="lazy" decoding="async" />${login}</a></li>`;
+    })
+    .join("\n");
+  return `          <ul class="contributors-list">\n${items}\n          </ul>`;
+}
 
-function updateFile(filePath, table) {
+// ── update a single marked block ────────────────────────────────────────────
+
+function updateFile(filePath, block, startMarker = START_MARKER, endMarker = END_MARKER) {
   let content = readFileSync(filePath, "utf8");
 
-  const startIdx = content.indexOf(START_MARKER);
-  const endIdx = content.indexOf(END_MARKER);
+  const startIdx = content.indexOf(startMarker);
+  const endIdx = content.indexOf(endMarker);
 
   if (startIdx === -1 || endIdx === -1 || startIdx >= endIdx) {
     console.warn(`  ⚠  Markers not found in ${filePath}, skipping.`);
     return false;
   }
 
-  const before = content.slice(0, startIdx + START_MARKER.length);
+  const before = content.slice(0, startIdx + startMarker.length);
+  const startIndent = content.slice(content.lastIndexOf("\n", startIdx) + 1, startIdx);
   const after = content.slice(endIdx);
-  const updated = `${before}\n${table}\n${after}`;
+  const updated = `${before}\n${block}\n${startIndent}${after}`;
 
   if (updated === content) {
     console.log(`  ✓  No changes needed in ${filePath}`);
@@ -151,6 +179,14 @@ async function main() {
     const changed = updateFile(abs, table);
     if (changed) anyChanged = true;
   }
+
+  const siteChanged = updateFile(
+    join(ROOT, SITE_FILE),
+    buildSiteList(contributors),
+    SITE_START_MARKER,
+    SITE_END_MARKER,
+  );
+  if (siteChanged) anyChanged = true;
 
   // Signal to the workflow whether a commit is needed.
   if (process.env.GITHUB_OUTPUT) {

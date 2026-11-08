@@ -279,6 +279,10 @@ export const agentMessageCatalog = {
     "zh-CN": "抄送",
     "en-US": "Cc",
   },
+  "confirmation.field.bcc": {
+    "zh-CN": "密送",
+    "en-US": "Bcc",
+  },
   "confirmation.field.subject": {
     "zh-CN": "主题",
     "en-US": "Subject",

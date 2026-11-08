@@ -1,0 +1,94 @@
+.mail-image-notice {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:12px;
+  margin:0 0 20px;
+  color:var(--text-soft);
+  font-size:12px;
+  line-height:1.5;
+}
+.mail-image-notice-text {
+  flex:1 1 260px;
+  min-width:0;
+  margin:0;
+}
+.mail-image-notice-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-left:auto;
+}
+.mail-image-notice-actions:empty { display:none }
+.mail-image-notice-error { flex-basis:100%; margin:0; color:var(--danger) }
+/* The panel title has no subtitle, so its row centres instead of using the
+   shared 2px top nudge that exists for two-line headings. */
+.settings-data-panel>.settings-section-title { align-items:center }
+/* One icon+text mechanism for this panel: a fixed square slot owns the
+   geometry, the glyph fills it, and the text keeps its own line-height. */
+.settings-data-icon {
+  flex:none;
+  display:grid;
+  place-items:center;
+  width:var(--icon-size,16px);
+  height:var(--icon-size,16px);
+}
+.settings-data-icon>svg { width:var(--icon-size,16px); height:var(--icon-size,16px) }
+.settings-data-entry {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  width:100%;
+  padding:12px 0;
+  border:0;
+  border-top:1px solid var(--line);
+  background:none;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+.settings-data-entry:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; border-radius:var(--radius-sm);corner-shape:var(--corner-shape) }
+.settings-data-entry:disabled { cursor:default; opacity:.55 }
+.settings-data-entry-label { flex:1; min-width:0; font-size:13px; font-weight:550 }
+.settings-data-entry-value { min-width:0; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-soft); font-size:12px }
+.settings-data-entry-chevron { flex:none; color:var(--text-faint) }
+.settings-data-dialog { display:flex; flex-direction:column; max-height:calc(100vh - 48px); overflow:hidden }
+.settings-data-dialog-head { justify-content:flex-start; gap:10px }
+.settings-data-dialog-head>.settings-model-title { flex:1; min-width:0 }
+.settings-data-dialog-body { display:grid; gap:14px; min-height:0; overflow-y:auto; overscroll-behavior:contain }
+.settings-data-dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; padding-top:14px; border-top:1px solid var(--line) }
+.settings-data-dialog-hint,.settings-data-empty { margin:0; color:var(--text-soft); font-size:12px; line-height:1.5 }
+.settings-data-empty { color:var(--text-faint) }
+/* Multi-line notes align the glyph with the first line box, not the whole
+   paragraph: the slot is one line tall and the 14px glyph centres inside it. */
+.settings-data-note { display:flex; align-items:flex-start; gap:8px; margin:0; color:var(--text-soft); font-size:11px; line-height:1.55 }
+.settings-data-note.is-warning { color:var(--warning) }
+.settings-data-note>.settings-data-icon { width:14px; height:1.55em; --icon-size:14px }
+.settings-data-note-text { min-width:0 }
+.settings-data-file,.settings-data-trusted li { display:flex; align-items:center; gap:10px; min-width:0 }
+.settings-data-file>button,.settings-data-trusted button { flex:none }
+.settings-data-file>span,.settings-data-trusted span { min-width:0; overflow-wrap:anywhere; color:var(--text-soft); font-size:12px }
+.settings-data-trusted { display:grid; gap:8px; padding:0; margin:0; list-style:none }
+.settings-data-trusted:empty { display:none }
+.settings-data-trusted li { justify-content:space-between }
+.settings-data-preview {
+  display:grid;
+  gap:12px;
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
+  background:var(--panel-muted);
+}
+.settings-data-preview ul { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; padding:0; margin:0; list-style:none; font-size:12px }
+.settings-data-confirm { display:flex; align-items:flex-start; gap:8px; font-size:12px; line-height:1.6; color:var(--text-soft) }
+.settings-data-confirm>input { flex:none; margin:3px 0 0; accent-color:var(--focus-ring) }
+.task-recovery-items { max-height:240px; overflow:auto; list-style:none; padding:0 }
+.task-recovery-items label { display:flex; align-items:flex-start; gap:6px; overflow-wrap:anywhere }
+.task-recovery-items input { flex:none; margin-top:3px }
+@media (max-width:760px) {
+  .settings-data-preview ul { grid-template-columns:minmax(0,1fr) }
+  .settings-data-panel .setting-select-row { align-items:flex-start }
+}

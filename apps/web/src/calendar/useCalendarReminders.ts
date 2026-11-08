@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { calendarCache } from "../dialogPrefetch";
+import { loadCalendarEvents } from "../dialogPrefetch";
 import { durableGet, durableSet } from "../durablePreferences";
 import { desktopBridge } from "../desktop";
 import type { CalendarEvent } from "../types";
@@ -84,7 +84,8 @@ export function useCalendarReminders({
       if (demoMode) return;
       let events: CalendarEvent[] = [];
       try {
-        events = await calendarCache.get();
+        const now = Date.now();
+        events = await loadCalendarEvents({ after: new Date(now - STALE_WINDOW_MS).toISOString(), before: new Date(now + 86400_000).toISOString() });
       } catch {
         return;
       }

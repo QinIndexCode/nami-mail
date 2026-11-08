@@ -29,7 +29,7 @@ color:var(--text);
 cursor:pointer;
 background:var(--hover);
 border:1px solid var(--line);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 font-size:12px;
 transition:background .16s,color .16s,border-color .16s
 }

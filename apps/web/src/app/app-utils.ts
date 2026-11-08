@@ -379,7 +379,8 @@ export const IMAGE_PROXY_PATH = "/api/images/proxy";
  * arrives at the proxy as an absolute URL the server can parse at all.
  * Taking it over does not hide the open: the proxy request still leaves this
  * machine, so the sender can still observe the time and source address. */
-function proxiedImageSource(source: string): string | null {
+type ImageRewriteOptions = { allowRemote?: boolean; messageId?: string };
+function proxiedImageSource(source: string, options: ImageRewriteOptions = {}): string | null {
   const value = source.trim();
   if (!value) return null;
   let resolved: URL;
@@ -389,8 +390,13 @@ function proxiedImageSource(source: string): string | null {
     return null;
   }
   if (resolved.protocol !== "http:" && resolved.protocol !== "https:") return null;
-  if (resolved.origin === window.location.origin) return null;
-  return `${IMAGE_PROXY_PATH}?url=${encodeURIComponent(resolved.href)}`;
+  if (resolved.origin === window.location.origin) {
+    if (resolved.pathname !== IMAGE_PROXY_PATH) return null;
+    try { resolved = new URL(resolved.searchParams.get("url") ?? ""); } catch { return null; }
+    if (!["http:", "https:"].includes(resolved.protocol) || resolved.origin === window.location.origin) return null;
+  }
+  if (options.allowRemote === false) return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  return `${IMAGE_PROXY_PATH}?url=${encodeURIComponent(resolved.href)}${options.messageId ? `&messageId=${encodeURIComponent(options.messageId)}` : ""}`;
 }
 
 /** Rewrites every candidate URL in an `img[srcset]`. `srcset` is what the
@@ -402,7 +408,7 @@ function proxiedImageSource(source: string): string | null {
  *  ends a candidate when it ends in a comma. Splitting naively would tear a
  *  `data:image/png;base64,AAA=` candidate in half, because that comma belongs to
  *  the URL. */
-function rewriteImageSrcset(srcset: string): string {
+function rewriteImageSrcset(srcset: string, options: ImageRewriteOptions): string {
   const candidates: string[] = [];
   let rest = srcset;
   while (rest.trim()) {
@@ -420,7 +426,7 @@ function rewriteImageSrcset(srcset: string): string {
       descriptor = descriptorEnd === -1 ? tail : tail.slice(0, descriptorEnd);
       tail = descriptorEnd === -1 ? "" : tail.slice(descriptorEnd + 1);
     }
-    if (url) candidates.push(`${proxiedImageSource(url) ?? url}${descriptor}`);
+    if (url) candidates.push(`${proxiedImageSource(url, options) ?? url}${descriptor}`);
     rest = tail;
   }
   // The encoded proxy URL contains neither a comma nor whitespace, so ", " is
@@ -529,7 +535,7 @@ const REMOTE_SRCSET_SELECTOR = 'img, source, input[type="image" i]';
  * `input[type=image][src]` are all reachable, all survive the sanitizer, and
  * all were measured leaking before this list existed.
  */
-export function rewriteRemoteImagesToProxy(html: string): string {
+export function rewriteRemoteImagesToProxy(html: string, options: ImageRewriteOptions = {}): string {
   if (!html) return html;
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -537,7 +543,7 @@ export function rewriteRemoteImagesToProxy(html: string): string {
   for (const { selector, attributes } of REMOTE_SUBRESOURCE_ELEMENTS) {
     for (const element of template.content.querySelectorAll(selector)) {
       for (const attribute of attributes) {
-        const proxied = proxiedImageSource(element.getAttribute(attribute) || "");
+        const proxied = proxiedImageSource(element.getAttribute(attribute) || "", options);
         if (proxied) element.setAttribute(attribute, proxied);
       }
     }
@@ -545,11 +551,11 @@ export function rewriteRemoteImagesToProxy(html: string): string {
   for (const element of template.content.querySelectorAll(REMOTE_SRCSET_SELECTOR)) {
     const srcset = element.getAttribute("srcset");
     if (!srcset) continue;
-    const rewritten = rewriteImageSrcset(srcset);
+    const rewritten = rewriteImageSrcset(srcset, options);
     if (rewritten !== srcset) element.setAttribute("srcset", rewritten);
   }
   for (const element of template.content.querySelectorAll("[background]")) {
-    const proxied = proxiedImageSource(element.getAttribute("background") || "");
+    const proxied = proxiedImageSource(element.getAttribute("background") || "", options);
     if (proxied) element.setAttribute("background", proxied);
   }
   for (const element of template.content.querySelectorAll("[style]")) {
@@ -559,13 +565,13 @@ export function rewriteRemoteImagesToProxy(html: string): string {
     // though the sanitizer and a naive regex both see an unrecognised token.
     const decoded = decodeCssEscapes(style);
     let rewritten = decoded.replace(CSS_URL_FUNCTION, (match, _quote: string, url: string) => {
-      const proxied = proxiedImageSource(url);
+      const proxied = proxiedImageSource(url, options);
       return proxied ? `url("${proxied}")` : match;
     });
     // image-set() carries its URLs as bare strings rather than url() tokens.
     rewritten = rewritten.replace(CSS_IMAGE_SET_FUNCTION, (match, _webkit: string, args: string) =>
       args.replace(CSS_QUOTED_STRING, (quoted, dq: string | undefined, sq: string | undefined) => {
-        const proxied = proxiedImageSource(dq ?? sq ?? "");
+        const proxied = proxiedImageSource(dq ?? sq ?? "", options);
         return proxied ? `"${proxied}"` : quoted;
       }));
     if (rewritten !== style) element.setAttribute("style", rewritten);

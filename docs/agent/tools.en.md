@@ -2,6 +2,8 @@
 
 [Chinese](tools.zh-CN.md) | [English](tools.en.md)
 
+Confirmation requirements below describe send-confirmed by default. Explicit full-access authorization can bypass ordinary high-risk prompts; irreversible operations still require confirmation. See [permissions](permissions.en.md). Draft, send and reply inputs accept a separate optional `bcc` field. Confirmation previews display BCC to the approving user; actual SMTP messages do not publish a Bcc header to other recipients.
+
 ## One registry
 
 Tools register with lower-case dotted identifiers and versioned descriptors. A descriptor declares category, execution mode, required scopes, account access, external availability, timeout, and confirmation policy. A provider only proposes a tool call; only the host Tool Registry and Permission Engine can resolve and execute it.
@@ -11,7 +13,7 @@ Tools register with lower-case dotted identifiers and versioned descriptors. A d
 | `read` | Accounts, folders, messages, threads, attachment metadata, RAG queries | Allowed only inside paired scope | None |
 | `draft` | Create, update, or delete drafts, reply drafts | Allowed at `send-confirmed` and above (one of the seven write tools) | Operations with `required` policy require visible confirmation until `full-access` |
 | `write` | Mark, move, archive, update memory or settings | Allowed at `send-confirmed` and above | Operations with `required` policy require visible confirmation until `full-access` (safe writes like `memory.*` are exempt) |
-| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Only `messages.send` is external | Durable audit and one-time GUI confirmation required |
+| `high-risk` | Send, forward, permanent delete, bulk writes, content egress | Only `messages.send` is external | Confirmation follows the access level; irreversible operations always confirm; durable audit applies |
 
 External CLI/MCP v1 exposes 16 tools: nine read-only plus seven bounded writes (draft create/update/delete, move, flag, send, reply draft). The default `read-only` level keeps only reads available; elevating the level enables the write tools. `--yes`, MCP arguments, a paired identity, or model output never relaxes the access level or replace confirmation.
 

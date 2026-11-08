@@ -107,6 +107,7 @@ function preprocessDraftMutationInput(raw: unknown): unknown {
   if (obj.cc !== undefined) {
     obj.cc = preprocessRecipientsList(obj.cc);
   }
+  if (obj.bcc !== undefined) obj.bcc = preprocessRecipientsList(obj.bcc);
   return obj;
 }
 
@@ -129,16 +130,17 @@ const draftMutationInputShape = {
   accountId: accountIdSchema,
   to: z.array(draftRecipientInputSchema).min(1).max(externalMailWriteBounds.recipientResults),
   cc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
+  bcc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
   subject: z.string().trim().max(externalMailWriteBounds.subjectCharacters),
   text: z.string().max(externalMailWriteBounds.draftBodyCharacters),
   attachmentTokens: outboundAttachmentTokensSchema,
 };
 
 function validateDraftRecipients(
-  input: { to?: readonly unknown[]; cc?: readonly unknown[] },
+  input: { to?: readonly unknown[]; cc?: readonly unknown[]; bcc?: readonly unknown[] },
   context: z.RefinementCtx,
 ): void {
-  if ((input.to?.length ?? 0) + (input.cc?.length ?? 0) > externalMailWriteBounds.totalRecipients) {
+  if ((input.to?.length ?? 0) + (input.cc?.length ?? 0) + (input.bcc?.length ?? 0) > externalMailWriteBounds.totalRecipients) {
     context.addIssue({
       code: "custom",
       path: ["cc"],
@@ -209,6 +211,7 @@ export const externalReplyMailInputSchema = z.preprocess(
     messageId: messageIdSchema,
     to: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
     cc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
+    bcc: z.array(draftRecipientInputSchema).max(externalMailWriteBounds.recipientResults).optional(),
     subject: z.string().trim().max(externalMailWriteBounds.subjectCharacters).optional(),
     text: z.string().max(externalMailWriteBounds.draftBodyCharacters),
     attachmentTokens: outboundAttachmentTokensSchema,

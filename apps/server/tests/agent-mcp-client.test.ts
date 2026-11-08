@@ -30,6 +30,18 @@ function captureWarnings(): LoggedCall[] {
 }
 
 describe("McpStdioClient", () => {
+  it("discovers tools on every page", async () => {
+    const client = new McpStdioClient(transport({ env: { MOCK_MCP_PAGES: "2" } }));
+    try { expect((await client.connect()).tools.map((tool) => tool.name).sort()).toEqual(["add", "delete_file", "echo_env", "get_weather", "send_note", "slow"]); }
+    finally { client.close(); }
+  });
+
+  it.each(["loop", "overflow"])("rejects %s discovery rather than silently returning a partial directory", async (mode) => {
+    const client = new McpStdioClient(transport({ env: { MOCK_MCP_PAGES: mode } }));
+    try { await expect(client.connect()).rejects.toMatchObject({ code: "PROTOCOL_ERROR" }); }
+    finally { client.close(); }
+  });
+
   it("performs the initialize handshake and discovers tools", async () => {
     const client = new McpStdioClient(transport());
     try {

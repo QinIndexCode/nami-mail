@@ -65,3 +65,5 @@ Common errors:
 - [Model provider configuration](providers.en.md): configuring the model and cloud consent for the assistant.
 - [Usage guide](usage.en.md): conversations, mail scope, and the confirmation flow.
 - [Runtime](runtime.en.md) and [Security](security.en.md): the MCP tool execution chain and security boundaries.
+
+For connected external MCP servers, discovery follows `nextCursor` under one overall request deadline. Discovery is bounded to 32 pages and 100 tools. Repeated cursors and exceeded limits produce an explicit error instead of silently publishing a partial directory.

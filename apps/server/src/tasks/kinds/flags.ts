@@ -9,7 +9,7 @@ import {
   type FlagsPushEntry,
   type PreparedFlagsChange,
 } from "../../flags-outbox.js";
-import type { MessageFlagsPatch } from "../../message-flags.js";
+import { messageFlagNames, type MessageFlagsPatch } from "../../message-flags.js";
 import type { ServerEventBus } from "../../events.js";
 import { kickAccountSync } from "../kick-sync.js";
 import { memberTaskId } from "../job-ids.js";
@@ -77,6 +77,8 @@ export type FlagsTaskDeps = CommitTaskDeps & {
 };
 
 export type AcceptFlagsInput = {
+  /** Explicit user recovery reasserts unchanged local flags at the provider. */
+  retryUnchanged?: boolean;
   messageIds: readonly string[];
   patch: MessageFlagsPatch;
   /**
@@ -214,6 +216,13 @@ export function acceptFlagsTaskInTransaction(deps: FlagsTaskDeps, input: AcceptF
   // of `prepared`, so `ids.length - prepared.length` already counts blocked and
   // missing together (the formula the deleted `commitLocalFlags` used for `failed`).
   const { prepared } = prepareLocalFlags(deps.db, ids, input.patch);
+  if (input.retryUnchanged) for (const item of prepared) {
+    for (const [property, flag] of Object.entries(messageFlagNames)) {
+      const desired = input.patch[property as keyof MessageFlagsPatch];
+      if (desired === true && !item.add.includes(flag)) item.add.push(flag);
+      if (desired === false && !item.remove.includes(flag)) item.remove.push(flag);
+    }
+  }
   const appliedIds = applyPreparedFlagsLocally(deps.db, prepared, deps.agentEvents);
 
   const entriesByAccount = new Map<string, FlagsPushEntry[]>();

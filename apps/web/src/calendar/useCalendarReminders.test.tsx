@@ -8,9 +8,7 @@ import type { CalendarEvent } from "../types";
 
 const mockGet = vi.fn();
 vi.mock("../dialogPrefetch", () => ({
-  calendarCache: {
-    get: () => mockGet(),
-  },
+  loadCalendarEvents: (...args: unknown[]) => mockGet(...args),
 }));
 
 const mockNotify = vi.fn();

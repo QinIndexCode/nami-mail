@@ -1,4 +1,5 @@
 import { api } from "./api";
+import type { CalendarEvent } from "./types";
 
 const DEFAULT_TTL_MS = 30_000;
 
@@ -63,5 +64,18 @@ export function createPrefetchCache<T>(loader: () => Promise<T>, ttlMs = DEFAULT
 
 export const contactsCache = createPrefetchCache(() => api.contacts().then((result) => result.items));
 export const templatesCache = createPrefetchCache(() => api.templates().then((result) => result.items));
-/** The full calendar; dialogs filter locally so month paging never refetches. */
-export const calendarCache = createPrefetchCache(() => api.calendarEvents().then((result) => result.items));
+/** Keep the existing full-calendar consumers complete across server pages. */
+export async function loadCalendarEvents(range?: { after?: string; before?: string }) {
+  const items = new Map<string, CalendarEvent>();
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const result = await api.calendarEvents(range, 1000, cursor);
+    for (const item of result.items) items.set(item.id, item);
+    cursor = result.nextCursor;
+    if (cursor && seen.has(cursor)) throw new Error("Calendar pagination did not advance.");
+    if (cursor) seen.add(cursor);
+  } while (cursor);
+  return [...items.values()];
+}
+export const calendarCache = createPrefetchCache(() => loadCalendarEvents());

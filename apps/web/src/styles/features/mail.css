@@ -68,7 +68,7 @@ z-index:20;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 width:284px;
 max-height:min(62vh,440px);
 overflow-y:auto;
@@ -153,7 +153,7 @@ flex-direction:column
 }
 .cloud-sync-row
 {
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 gap:2px;
 padding:6px 8px;
 display:flex;
@@ -216,7 +216,7 @@ min-width:0
 {
 background:0 0;
 border:1px solid #0000;
-border-radius:var(--radius-md);
+border-radius:var(--radius-compact-md);corner-shape:var(--corner-shape);
 flex:none;
 width:34px;
 margin-left:auto;
@@ -233,7 +233,7 @@ padding:4px 8px 4px 4px
 }
 .column-header .search-wrap .search-toggle
 {
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 flex:none;
 width:26px;
 height:26px
@@ -313,7 +313,7 @@ min-height:34px;
 color:var(--text);
 cursor:pointer;
 white-space:nowrap;
-border-radius:var(--radius-md);
+border-radius:var(--radius-compact-md);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:3px 8px 3px 4px;
@@ -330,7 +330,7 @@ width:25px;
 height:25px;
 color:var(--button-text);
 box-shadow:0 2px 6px color-mix(in srgb, var(--text) 22%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 place-items:center;
 display:grid;
 overflow:hidden
@@ -365,7 +365,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 padding:0;
@@ -389,7 +389,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 min-height:38px;
 color:var(--text-faint);
-border-radius:var(--radius-md);
+border-radius:var(--radius-compact-md);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 margin:0;
@@ -413,7 +413,7 @@ min-height:24px
 {
 color:var(--text-faint)
 }
-.search-wrap .search-clear { border-radius:var(--radius-sm); width:27px; height:27px; cursor:pointer }
+.search-wrap .search-clear { border-radius:var(--radius-sm);corner-shape:var(--corner-shape); width:27px; height:27px; cursor:pointer }
 input[type=search]::-webkit-search-cancel-button,
 input[type=search]::-webkit-search-decoration,
 input[type=search]::-webkit-search-results-button,
@@ -446,7 +446,7 @@ gap:2px;
 padding:2px;
 background:var(--panel-muted);
 border:1px solid var(--line);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 font-size:10px
 }
 .search-scope-switch button
@@ -479,7 +479,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 padding:0;
@@ -508,7 +508,7 @@ outline:none
 z-index:20;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 width:210px;
 padding:5px;
 animation:.14s both fade-in;
@@ -544,7 +544,7 @@ font:inherit;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:5px 8px;
@@ -652,7 +652,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 padding:0;
@@ -729,7 +729,7 @@ background:var(--panel-muted);
 min-height:26px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 flex:none;
 padding:4px 8px;
 font-size:10px;
@@ -762,7 +762,7 @@ display:flex
 }
 .selection-actions .icon-button
 {
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 width:27px;
 height:27px
 }
@@ -780,7 +780,7 @@ border:1px solid color-mix(in srgb, var(--danger) 38%, var(--line));
 background:color-mix(in srgb, var(--danger) 8%, var(--panel-muted));
 box-shadow:0 4px 12px color-mix(in srgb, var(--danger) 8%, transparent);
 color:var(--danger);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:flex-start;
 gap:10px;
 margin:8px 14px 8px;
@@ -843,7 +843,7 @@ min-height:30px;
 color:var(--danger);
 cursor:pointer;
 white-space:nowrap;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 align-self:center;
 padding:5px 8px;
@@ -867,7 +867,7 @@ line-height:0
 border:1px solid color-mix(in srgb, var(--warning) 42%, var(--line));
 background:color-mix(in srgb, var(--warning) 7%, var(--panel-muted));
 color:color-mix(in srgb, var(--warning) 82%, var(--text));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:flex-start;
 gap:10px;
 margin:8px 14px 8px;
@@ -908,7 +908,7 @@ min-height:30px;
 color:color-mix(in srgb, var(--warning) 82%, var(--text));
 cursor:pointer;
 white-space:nowrap;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 align-self:center;
 padding:5px 8px;
@@ -926,7 +926,7 @@ background:color-mix(in srgb, var(--warning) 8%, var(--panel-solid))
 border:1px solid color-mix(in srgb, var(--info) 38%, var(--line));
 background:color-mix(in srgb, var(--info) 8%, var(--panel-muted));
 color:color-mix(in srgb, var(--info) 72%, var(--text));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 margin:8px 14px 8px;
@@ -973,7 +973,7 @@ will-change:transform
 }
 .message-item
 {
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 cursor:pointer;
 text-align:left;
 background:0 0;
@@ -1277,7 +1277,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 place-items:center;
 display:grid;
 transition:background .16s,color .16s,border-color .16s
@@ -1399,7 +1399,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:164px;
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:5px;
 animation:.15s cubic-bezier(.2,.8,.2,1) both popup-in;
 transform-origin:top right;
@@ -1416,7 +1416,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:8px 8px;
@@ -1449,7 +1449,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:240px;
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 gap:1px;
 padding:5px;
 animation:.15s cubic-bezier(.2,.8,.2,1) both popup-in;
@@ -1467,7 +1467,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:8px 8px;
@@ -1520,7 +1520,7 @@ min-width:0
 }
 .snooze-custom-controls .date-picker-trigger
 {
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:6px 8px
 }
 .snooze-custom-controls button
@@ -1530,7 +1530,7 @@ min-height:30px;
 color:var(--button-text);
 cursor:pointer;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:5px 10px;
 font-size:11px
 }
@@ -1660,7 +1660,7 @@ transform:rotate(180deg)
 {
 border:1px solid var(--line);
 background:var(--panel-muted);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 grid-template-columns:48px minmax(0,1fr);
 gap:4px 8px;
 width:min(100%,500px);
@@ -1698,7 +1698,7 @@ padding:18px 48px 0
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 66%, transparent);
 box-shadow:inset 0 1px 0 color-mix(in srgb, var(--panel-solid) 42%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 overflow:hidden
 }
 .translation-heading
@@ -1796,7 +1796,7 @@ background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-solid));
 min-height:32px;
 color:var(--text);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 justify-content:center;
 align-self:flex-start;
 align-items:center;
@@ -1854,7 +1854,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 place-items:center;
 padding:0;
 display:grid
@@ -1904,7 +1904,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 place-items:center;
 display:inline-grid
 }
@@ -1935,7 +1935,7 @@ line-height:1.8
 .translation-text.has-mail-surface
 {
 border:1px solid color-mix(in srgb, var(--text) 12%, transparent);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 margin:0 13px 14px;
 padding:16px 18px
 }
@@ -1968,7 +1968,7 @@ padding:24px
 {
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-border-radius:var(--radius-lg);
+border-radius:var(--radius-xl);corner-shape:var(--corner-shape);
 flex-direction:column;
 width:min(560px,100%);
 max-height:calc(100vh - 40px);
@@ -2154,7 +2154,7 @@ line-height:1.3
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 72%, transparent);
 white-space:pre;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 max-width:100%;
 padding:.8em 1em;
 font-family:var(--font-mono);
@@ -2196,7 +2196,7 @@ text-decoration-thickness:2px
 {
 max-width:100%;
 height:auto;
-border-radius:4px;
+border-radius:var(--radius-xs);
 object-fit:contain
 }
 .verification-code-list
@@ -2210,7 +2210,7 @@ border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 62%, transparent);
 min-height:60px;
 box-shadow:inset 0 1px 0 color-mix(in srgb, var(--panel-solid) 48%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:10px;
 margin:0 0 8px;
@@ -2268,7 +2268,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 justify-content:center;
 align-items:center;
@@ -2346,7 +2346,7 @@ min-width:0;
 min-height:74px;
 box-shadow:inset 0 1px 0 color-mix(in srgb, var(--panel-solid) 48%, transparent);
 color:var(--text-soft);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 grid-template-columns:32px minmax(0,1fr);
 grid-template-rows:minmax(0,1fr) auto;
 grid-template-areas:"icon copy" "icon actions";
@@ -2467,7 +2467,7 @@ align-items:stretch
 {
 border:1px solid var(--line);
 background:var(--panel-muted);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 max-width:724px;
@@ -2492,7 +2492,7 @@ border:1px solid color-mix(in srgb, var(--warning) 42%, var(--line));
 background:color-mix(in srgb, var(--warning) 7%, var(--panel-muted));
 max-width:724px;
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 gap:10px;
 margin:20px auto 0;
 padding:11px 12px;
@@ -2547,7 +2547,7 @@ min-width:0;
 max-width:210px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex:none;
 align-items:center;
 gap:8px;
@@ -2606,7 +2606,7 @@ min-width:0;
 max-width:150px;
 color:var(--text-faint);
 cursor:pointer;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex:none;
 align-items:center;
 gap:6px;
@@ -2651,7 +2651,7 @@ color:var(--text-faint)
 {
 outline:2px solid var(--focus-ring);
 outline-offset:1px;
-border-radius:var(--radius-sm)
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape)
 }
 .context-menu-backdrop
 {
@@ -2668,7 +2668,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:176px;
 box-shadow:var(--shadow-raised);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:5px;
 animation:.14s both fade-in;
 display:grid;
@@ -2682,7 +2682,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:8px 8px;
@@ -2724,7 +2724,9 @@ width:70px;
 height:70px;
 color:var(--text-soft);
 box-shadow:inset 0 1px 0 color-mix(in srgb, var(--text-faint) 14%, transparent), 0 8px 22px color-mix(in srgb, var(--text-faint) 10%, transparent);
-border-radius:24px;
+/* 24px pre-token baseline. Squircle-equivalent would be 41px, but a 70px box
+   clamps at 35; that clamped squircle still reads as the same rounded tile. */
+border-radius:calc(24px * var(--squircle-scale));corner-shape:var(--corner-shape);
 place-items:center;
 animation:6s ease-in-out infinite orb-float;
 display:grid

@@ -68,6 +68,8 @@ export const ROUTE_ERROR_CODE_DEFINITIONS = {
   payload_too_large: { status: 413, meaning: "The request body exceeds a declared size or count limit." },
   unprocessable: { status: 422, meaning: "The request was well-formed but the local service rejects it on a business rule." },
   internal_error: { status: 500, meaning: "The local service failed without a more specific classification." },
+  image_blocked: { status: 403, meaning: "Remote mail images have not been authorized." },
+  backup_unavailable: { status: 503, meaning: "Application backup requires a full local runtime." },
 
   // Mailbox lifecycle.
   account_exists: { status: 409, meaning: "The mailbox is already added." },

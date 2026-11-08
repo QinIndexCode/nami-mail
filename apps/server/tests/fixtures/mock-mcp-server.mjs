@@ -147,7 +147,10 @@ for await (const line of lines) {
   } else if (method === "ping") {
     if (hasId) respond(id, {});
   } else if (method === "tools/list") {
-    respond(id, { tools });
+    if (process.env.MOCK_MCP_PAGES === "loop") respond(id, { tools: [], nextCursor: "repeat" });
+    else if (process.env.MOCK_MCP_PAGES === "overflow") respond(id, { tools: Array.from({ length: 101 }, (_, i) => ({ name: `tool_${i}`, inputSchema: { type: "object" } })) });
+    else if (process.env.MOCK_MCP_PAGES === "2") respond(id, params.cursor === "second" ? { tools: tools.slice(2) } : { tools: tools.slice(0, 2), nextCursor: "second" });
+    else respond(id, { tools });
   } else if (method === "tools/call") {
     const name = typeof params.name === "string" ? params.name : "";
     const args = params.arguments && typeof params.arguments === "object" ? params.arguments : {};

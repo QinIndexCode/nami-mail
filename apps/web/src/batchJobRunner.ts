@@ -510,6 +510,13 @@ export function createBatchJobRunner(deps: BatchJobRunnerDeps) {
         return;
       }
       if (job.status === "completed") {
+        if (job.failed > 0) {
+          await finish("failed", async () => {
+            showToast(t("mail.selection.deliveryFailed", { count: job.failed }), "warning");
+            await reload({ silent: true });
+          });
+          return;
+        }
         // Nothing to say: the local commit was the toast the user already saw,
         // and the refresh below is what makes the destination side of a move's
         // counters agree with the server.

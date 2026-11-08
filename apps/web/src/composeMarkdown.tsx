@@ -247,7 +247,7 @@ export const emailMarkdownComponents: Components = {
     </li>
   ),
   blockquote: ({ children }) => (
-    <blockquote style={{ margin: "12px 0", padding: "6px 14px", borderLeft: "3px solid #3b82f6", color: "#4b5563", backgroundColor: "#f8fafc", borderRadius: "0 4px 4px 0" }}>
+    <blockquote style={{ margin: "12px 0", padding: "6px 14px", borderLeft: "3px solid #3b82f6", color: "#4b5563", backgroundColor: "#f8fafc", borderRadius: "0 var(--radius-xs) var(--radius-xs) 0" }}>
       {children}
     </blockquote>
   ),
@@ -260,7 +260,7 @@ export const emailMarkdownComponents: Components = {
     const isInline = !className && typeof children === "string" && !children.includes("\n");
     if (isInline) {
       return (
-        <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace", fontSize: "12px", backgroundColor: "#f3f4f6", padding: "2px 5px", borderRadius: "4px", color: "#be185d" }}>
+        <code style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace", fontSize: "12px", backgroundColor: "#f3f4f6", padding: "2px 5px", borderRadius: "var(--radius-xs)", color: "#be185d" }}>
           {children}
         </code>
       );
@@ -272,7 +272,7 @@ export const emailMarkdownComponents: Components = {
     );
   },
   pre: ({ children }) => (
-    <pre style={{ margin: "12px 0", padding: "12px 14px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "6px", overflowX: "auto", fontFamily: "ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace", fontSize: "12px", lineHeight: "1.5", color: "#1e293b" }}>
+    <pre style={{ margin: "12px 0", padding: "12px 14px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "var(--radius-sm)", overflowX: "auto", fontFamily: "ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace", fontSize: "12px", lineHeight: "1.5", color: "#1e293b" }}>
       {children}
     </pre>
   ),

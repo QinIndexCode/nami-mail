@@ -1,3 +1,4 @@
+import { TaskRecoveryPanel } from "./TaskRecoveryPanel";
 import { CloudUpload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { DeliveryTask } from "./batchJobTypes";
@@ -38,6 +39,7 @@ const PANEL_REFRESH_MS = 5000;
  */
 export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks; t: Translate; locale: string }) {
   const [open, setOpen] = useState(false);
+  const [recoveryId, setRecoveryId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -119,7 +121,7 @@ export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks;
         <section className="cloud-sync-section">
           <p className="eyebrow" id={`${panelId}-syncing`}>{t("cloudSync.syncingSection")}</p>
           <ul aria-labelledby={`${panelId}-syncing`}>
-            {tasks.syncing.map((task) => <CloudSyncRow key={task.id} task={task} t={t} locale={locale} />)}
+            {tasks.syncing.map((task) => <CloudSyncRow key={task.id} task={task} t={t} locale={locale} onRecover={() => setRecoveryId(task.id)} />)}
           </ul>
         </section>
       )}
@@ -127,7 +129,7 @@ export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks;
         <section className="cloud-sync-section">
           <p className="eyebrow" id={`${panelId}-attention`}>{t("cloudSync.attentionSection")}</p>
           <ul aria-labelledby={`${panelId}-attention`}>
-            {tasks.attention.map((task) => <CloudSyncRow key={task.id} task={task} t={t} locale={locale} />)}
+            {tasks.attention.map((task) => <CloudSyncRow key={task.id} task={task} t={t} locale={locale} onRecover={() => setRecoveryId(task.id)} />)}
           </ul>
         </section>
       )}
@@ -166,7 +168,7 @@ export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks;
               <button type="button" className="cloud-sync-retry" onClick={tasks.refresh}>{t("cloudSync.retry")}</button>
             </div>
           )}
-          {total > 0
+          {recoveryId ? <TaskRecoveryPanel id={recoveryId} onBack={() => setRecoveryId(null)} onChanged={tasks.refresh} /> : total > 0
             ? renderRows()
             : !tasks.failed && <p className="cloud-sync-note">{tasks.loading ? t("cloudSync.loading") : t("cloudSync.allClear")}</p>}
         </div>
@@ -180,7 +182,7 @@ export function CloudSyncRailItem({ tasks, t, locale }: { tasks: CloudSyncTasks;
  * about it; a failed row adds the server's own message, which is the only
  * diagnosis of the cause anywhere in this panel.
  */
-function CloudSyncRow({ task, t, locale }: { task: DeliveryTask; t: Translate; locale: string }) {
+function CloudSyncRow({ task, t, locale, onRecover }: { task: DeliveryTask; t: Translate; locale: string; onRecover: () => void }) {
   const account = cloudSyncAccountLabel(task);
   const terminal = task.completedAt !== null;
   return (
@@ -190,6 +192,7 @@ function CloudSyncRow({ task, t, locale }: { task: DeliveryTask; t: Translate; l
         <span className="cloud-sync-account" data-tooltip={account}>{account}</span>
       </span>
       <span className="cloud-sync-detail">{cloudSyncTaskDetail(task, t, locale)}</span>
+      {terminal && <button className="cloud-sync-retry" type="button" onClick={onRecover}>{t("recovery.review")}</button>}
       {task.error?.message && <span className="cloud-sync-message">{task.error.message}</span>}
     </li>
   );

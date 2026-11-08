@@ -11,6 +11,8 @@ import { applyAgentStoreSchema } from "../src/agent/schema.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
 import { encryptMessagePayload } from "../src/message-storage.js";
 import { updateAppSettings } from "../src/settings.js";
+import { prepareSubmission as persistSubmission, markSubmissionSubmitted } from "../src/outbox.js";
+import type { DraftMutation } from "../src/agent/mail-application-service.js";
 
 const FIXED_NOW = "2026-08-08T12:00:00.000Z";
 
@@ -25,6 +27,21 @@ type MessageFixture = {
   textBody?: string;
   headers?: { autoSubmitted?: string; listUnsubscribe?: string; precedence?: string; returnPath?: string; labels?: string[] };
 };
+
+function fixtureMail(db: DatabaseHandle, key: Buffer): MailApplicationService {
+  return {
+    prepareSubmission: vi.fn(async (_context: unknown, input: DraftMutation) => {
+      const { submission } = persistSubmission(db, key, { accountId: input.accountId, accountEmail: "account-1@example.test",
+        request: { to: input.to.map((recipient) => recipient.address), subject: input.subject, text: input.text, attachmentTokens: [] } });
+      return { submissionId: submission.id, accountId: submission.accountId, status: submission.deliveryStatus };
+    }),
+    submitPreparedMail: vi.fn(async (_context: unknown, id: string) => {
+      markSubmissionSubmitted(db, key, id, "<fixture@example.test>");
+      db.prepare("UPDATE outbound_submissions SET submitted_at=? WHERE id=?").run(FIXED_NOW, id);
+      return { submissionId: id, accountId: "account-1", status: "submitted" };
+    }),
+  } as unknown as MailApplicationService;
+}
 
 function insertAccount(db: DatabaseHandle, id = "account-1"): void {
   db.prepare(`
@@ -153,10 +170,7 @@ describe("Agent auto-reply engine", () => {
           ? { principalId: "desktop-main-user", surfaceId: "main-window" }
           : undefined,
     });
-    const mail = {
-      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
-      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
-    } as unknown as MailApplicationService;
+    const mail = fixtureMail(db, masterKey);
     updateAppSettings(db, { autoReply: autoReplyConfig(dailyLimitPerAccount) });
     const engine = new AutoReplyEngine({
       db,
@@ -189,10 +203,7 @@ describe("Agent auto-reply engine", () => {
           ? { principalId: "desktop-main-user", surfaceId: "main-window" }
           : undefined,
     });
-    const mail = {
-      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
-      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
-    } as unknown as MailApplicationService;
+    const mail = fixtureMail(db, masterKey);
     updateAppSettings(db, { autoReply: autoReplyConfig(30) });
     const engine = new AutoReplyEngine({
       db,
@@ -457,10 +468,7 @@ describe("Agent auto-reply engine", () => {
           ? { principalId: "web-main-user", surfaceId: "browser-window" }
           : undefined,
     });
-    const mail = {
-      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
-      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
-    } as unknown as MailApplicationService;
+    const mail = fixtureMail(db, masterKey);
     updateAppSettings(db, { autoReply: autoReplyConfig(dailyLimitPerAccount) });
     const engine = new AutoReplyEngine({
       db,
@@ -535,10 +543,7 @@ describe("Agent auto-reply engine", () => {
     const audit = new EncryptedAgentAuditStore(db, masterKey, lifecycle);
     const memory = new EncryptedAgentMemoryStore(db, masterKey, () => FIXED_NOW);
     const decisions = new EncryptedAutoReplyDecisionStore(db, masterKey, () => FIXED_NOW);
-    const mail = {
-      prepareSubmission: vi.fn(async () => ({ submissionId: "submission-1" })),
-      submitPreparedMail: vi.fn(async () => ({ submissionId: "submission-1" })),
-    } as unknown as MailApplicationService;
+    const mail = fixtureMail(db, masterKey);
     updateAppSettings(db, { autoReply: autoReplyConfig(30) });
     const engine = new AutoReplyEngine({
       db,

@@ -16,6 +16,7 @@ import { defineConfig } from "vitest/config";
 // worst timings observed under that saturation.
 export default defineConfig({
   test: {
+    setupFiles: ["./tests/setup-isolation.ts"],
     env: {
       PORT: "80",
     },

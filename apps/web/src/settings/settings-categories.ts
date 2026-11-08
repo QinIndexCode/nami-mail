@@ -11,6 +11,7 @@ export const SETTINGS_CATEGORY_IDS = [
   "notifications",
   "desktop",
   "sync",
+  "data",
   "filters",
   "models",
   "mcp",
@@ -35,7 +36,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   items: readonly SettingsCategoryId[];
 }> = [
   { key: "general", items: ["language", "appearance", "notifications", "desktop"] },
-  { key: "mail", items: ["sync", "filters"] },
+  { key: "mail", items: ["sync", "data", "filters"] },
   { key: "intelligence", items: ["models", "mcp", "agent", "connections", "translation"] },
 ];
 

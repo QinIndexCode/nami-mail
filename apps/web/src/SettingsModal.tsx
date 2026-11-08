@@ -1,3 +1,4 @@
+import SettingsDataPanel from "./settings/SettingsDataPanel";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type RefObject } from "react";
 import {
   Bell,
@@ -21,7 +22,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { api, type TranslationConfiguration, type TranslationProviderId } from "./api";
+import { api } from "./api";
 import type { AgentBootstrap, AgentProviderList } from "./agentTypes";
 import { desktopBridge, type DesktopUpdateSnapshot, updateBridgeErrorMessage } from "./desktop";
 import { searchSettings } from "./settings/settings-search";
@@ -33,10 +34,7 @@ import AutoReplyDecisionsDialog from "./AutoReplyDecisionsDialog";
 import AutoReplySandboxDialog from "./settings/AutoReplySandboxDialog";
 import { useI18n } from "./i18n";
 import { playNotificationSound, primeNotificationSound } from "./sounds";
-import {
-  hasUnsavedTranslationConfiguration,
-  translationConfigurationErrorMessage,
-} from "./translationPresentation";
+import { useTranslationSettings } from "./settings/useTranslationSettings";
 import { presentUpdateSnapshot } from "./updatePresentation";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
@@ -72,6 +70,7 @@ const categoryMeta: Record<SettingsCategoryId, { icon: LucideIcon; labelKey: str
   appearance: { icon: Palette, labelKey: "settings.appearance.title" },
   notifications: { icon: Bell, labelKey: "settings.notifications.title" },
   desktop: { icon: Laptop, labelKey: "settings.desktop.title" },
+  data: { icon: KeyRound, labelKey: "data.title" },
   sync: { icon: RefreshCw, labelKey: "settings.sync.title" },
   filters: { icon: Filter, labelKey: "settings.nav.filters.title" },
   models: { icon: Cpu, labelKey: "settings.nav.models.title" },
@@ -164,16 +163,6 @@ export default function SettingsModal({
   const updateEventSeqRef = useRef(0);
   const [updateActionBusy, setUpdateActionBusy] = useState<"check" | "download" | "skip" | "snooze" | "install" | null>(null);
   const [updateSnoozeMinutes, setUpdateSnoozeMinutes] = useState(24 * 60);
-  const [translationConfiguration, setTranslationConfiguration] = useState<TranslationConfiguration | null>(null);
-  const [translationConfigurationLoading, setTranslationConfigurationLoading] = useState(!demoMode);
-  const [translationConfigurationLoadAttempt, setTranslationConfigurationLoadAttempt] = useState(0);
-  const [translationConfigurationError, setTranslationConfigurationError] = useState<unknown>(null);
-  const [translationEndpoint, setTranslationEndpoint] = useState("");
-  const [translationApiKey, setTranslationApiKey] = useState("");
-  const [translationApiKeyVisible, setTranslationApiKeyVisible] = useState(false);
-  const [translationTimeoutMs, setTranslationTimeoutMs] = useState(25_000);
-  const [translationPrimary, setTranslationPrimary] = useState<TranslationProviderId>("google");
-  const [translationBackup, setTranslationBackup] = useState<TranslationProviderId>("mymemory");
   const [autoReplyDialogOpen, setAutoReplyDialogOpen] = useState(false);
   const [autoReplyDecisionsOpen, setAutoReplyDecisionsOpen] = useState(false);
   const [memoryDialogOpen, setMemoryDialogOpen] = useState(false);
@@ -187,6 +176,9 @@ export default function SettingsModal({
   const [connectionsOverlayOpen, setConnectionsOverlayOpen] = useState(false);
   const [connectionsBusy, setConnectionsBusy] = useState(false);
   const [filtersOverlayOpen, setFiltersOverlayOpen] = useState(false);
+  // The data & privacy panel owns its own detail dialogs; while one is up, the
+  // settings modal yields Escape/close to it instead of closing underneath.
+  const [dataOverlayOpen, setDataOverlayOpen] = useState(false);
   // One visible panel at a time; the sidebar switches categories instead of
   // scrolling. The choice persists so reopening the modal lands where the user
   // left off, and a stored "desktop" is ignored on browser runtimes. A deep
@@ -214,11 +206,11 @@ export default function SettingsModal({
     // A models form, connections dialog or filter-rules modal stacked over the panel owns the interaction.
     // Switching now would unmount the panel under it and drop its draft without ever asking.
     // The nonce is deliberately not consumed: the deep link lands as soon as the overlay is gone.
-    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
     lastCategoryRequestNonceRef.current = categoryRequest.nonce;
     setActiveCategory(categoryRequest.category);
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
-  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
+  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen, dataOverlayOpen]);
   // The embedded models panel hosts both inner tabs (providers / MCP servers);
   // switching them swaps the body in place so the panel never remounts.
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -233,20 +225,47 @@ export default function SettingsModal({
   const backgroundAlert = useRef<HTMLElement>(null);
   const activeLocale = currentSettings.locale || locale;
   const controlsBusy = Boolean(busyAction || updateActionBusy === "install" || modelsBusy || connectionsBusy);
+  // Translation service state, its load effect and the save/remove flows live in
+  // one hook; the modal only wires the result into the panel and the close guards.
+  const {
+    translationConfiguration,
+    translationConfigurationLoading,
+    translationConfigurationError,
+    translationEndpoint,
+    setTranslationEndpoint,
+    translationApiKey,
+    setTranslationApiKey,
+    translationApiKeyVisible,
+    setTranslationApiKeyVisible,
+    translationTimeoutMs,
+    setTranslationTimeoutMs,
+    translationPrimary,
+    setTranslationPrimary,
+    translationBackup,
+    setTranslationBackup,
+    hasUnsavedTranslationDraft,
+    translationConfigurationNeedsReplacementKey,
+    translationApiKeyHint,
+    saveTranslationConfiguration,
+    retryTranslationConfigurationLoad,
+    removeTranslationConfiguration,
+    removeTranslationApiKey,
+  } = useTranslationSettings({
+    demoMode,
+    busyAction,
+    setBusyAction,
+    controlsBusy,
+    setNotice,
+    t,
+    onTranslationConfigurationChanged,
+  });
   // While a models form or filter rule modal is stacked over the panel, close is owned by that form.
   // The header X and "done" therefore look like live buttons that silently do
   // nothing: they show as disabled and say why.
   const formsOverlayOpen = modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen;
-  const closeBlocked = controlsBusy || formsOverlayOpen;
+  const closeBlocked = controlsBusy || formsOverlayOpen || dataOverlayOpen;
   const closeBlockedHint = (modelsOverlayOpen || connectionsOverlayOpen) ? t("settings.models.formOpenHint") : null;
   const updatePresentation = updateStatus ? presentUpdateSnapshot(updateStatus, t) : null;
-  const hasUnsavedTranslationDraft = hasUnsavedTranslationConfiguration(translationConfiguration, {
-    endpoint: translationEndpoint,
-    apiKey: translationApiKey,
-    timeoutMs: translationTimeoutMs,
-    primary: translationPrimary,
-    backup: translationBackup,
-  });
   const pendingTranslationDiscard = pendingConfirmation === "discard-translation-changes"
     || pendingConfirmation === "discard-translation-changes-and-open-models";
 
@@ -265,14 +284,14 @@ export default function SettingsModal({
     // Same yield Escape already makes below: a stacked models form, connections dialog or filter rules modal
     // owns the interaction. Closing here would unmount the panel under it and drop the
     // draft it holds without ever asking.
-    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes");
       return;
     }
     requestExit();
-  }, [connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
+  }, [connectionsOverlayOpen, controlsBusy, dataOverlayOpen, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
 
   // The "configure model" entry (agent panel button, translation-discard
   // confirmation) now switches to the models category in place — the embedded
@@ -302,39 +321,6 @@ export default function SettingsModal({
   useEffect(() => {
     setIntensityDraft(currentSettings.backgroundIntensity);
   }, [currentSettings.backgroundIntensity]);
-
-  useEffect(() => {
-    if (demoMode) {
-      setTranslationConfigurationLoading(false);
-      setTranslationConfiguration(null);
-      setTranslationConfigurationError(null);
-      return undefined;
-    }
-    let active = true;
-    setTranslationConfigurationLoading(true);
-    setTranslationConfigurationError(null);
-    void api.translationConfiguration().then((configuration) => {
-      if (!active) return;
-      setTranslationConfiguration(configuration);
-      setTranslationEndpoint(configuration.endpoint);
-      setTranslationApiKey("");
-      setTranslationApiKeyVisible(false);
-      setTranslationTimeoutMs(configuration.timeoutMs);
-      setTranslationPrimary(configuration.primary ?? "google");
-      setTranslationBackup(configuration.backup ?? "mymemory");
-    }).catch((error: unknown) => {
-      if (!active) return;
-      setTranslationConfiguration(null);
-      setTranslationConfigurationError(error);
-    }).finally(() => {
-      if (active) setTranslationConfigurationLoading(false);
-    });
-    return () => {
-      active = false;
-    };
-    // Do not overwrite an unsaved service address, API key, or timeout when
-    // the user changes the interface language while this dialog remains open.
-  }, [demoMode, translationConfigurationLoadAttempt]);
 
   useEffect(() => {
     setLocale(activeLocale);
@@ -375,7 +361,7 @@ export default function SettingsModal({
       // The models form dialog, connections dialog or filter rules modal owns Escape while it is up. Yield before stopping the
       // event, otherwise the inner layer never sees it and this dialog would
       // close underneath the form.
-      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (controlsBusy) return;
@@ -391,9 +377,9 @@ export default function SettingsModal({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
+  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, dataOverlayOpen, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -732,81 +718,6 @@ export default function SettingsModal({
     }
   };
 
-  const applyTranslationConfiguration = async (
-    configuration: TranslationConfiguration,
-    successMessage: string,
-    preserveServiceDraft = false,
-  ) => {
-    setTranslationConfiguration(configuration);
-    if (!preserveServiceDraft) {
-      setTranslationEndpoint(configuration.endpoint);
-      setTranslationTimeoutMs(configuration.timeoutMs);
-    }
-    setTranslationApiKey("");
-    setTranslationApiKeyVisible(false);
-    await onTranslationConfigurationChanged?.();
-    setNotice({ kind: "success", message: successMessage });
-  };
-
-  const retryTranslationConfigurationLoad = () => {
-    if (translationConfigurationLoading || controlsBusy) return;
-    setTranslationConfigurationLoadAttempt((attempt) => attempt + 1);
-  };
-
-  const saveTranslationConfiguration = async () => {
-    if (busyAction || !translationConfiguration) return;
-    const endpoint = translationEndpoint.trim();
-    if (!endpoint) {
-      setNotice({ kind: "error", message: t("settings.translation.endpointRequired") });
-      return;
-    }
-    setBusyAction("translation-configuration");
-    setNotice(null);
-    try {
-      const timeoutMs = Number(translationTimeoutMs);
-      const next = await api.updateTranslationConfiguration({
-        endpoint,
-        timeoutMs,
-        primary: translationPrimary,
-        backup: translationBackup,
-        ...(translationApiKey.trim() ? { apiKey: translationApiKey } : {}),
-      });
-      await applyTranslationConfiguration(next, t("settings.translation.saved"));
-    } catch (error) {
-      setNotice({ kind: "error", message: translationConfigurationErrorMessage(error, t) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const removeTranslationConfiguration = async () => {
-    if (busyAction || !translationConfiguration) return;
-    setBusyAction("translation-configuration-remove");
-    setNotice(null);
-    try {
-      const next = await api.removeTranslationConfiguration();
-      await applyTranslationConfiguration(next, t("settings.translation.removed"));
-    } catch (error) {
-      setNotice({ kind: "error", message: translationConfigurationErrorMessage(error, t) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const removeTranslationApiKey = async () => {
-    if (busyAction || !translationConfiguration) return;
-    setBusyAction("translation-configuration-remove-key");
-    setNotice(null);
-    try {
-      const next = await api.updateTranslationConfiguration({ clearApiKey: true });
-      await applyTranslationConfiguration(next, t("settings.translation.keyRemoved"), true);
-    } catch (error) {
-      setNotice({ kind: "error", message: translationConfigurationErrorMessage(error, t) });
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
   const restoreDefaults = async () => {
     if (busyAction) return;
     setBusyAction("restore-defaults");
@@ -839,18 +750,6 @@ export default function SettingsModal({
 
   const hasCustomBackground = Boolean(currentSettings.customBackgroundUrl);
 
-  const translationConfigurationNeedsReplacementKey = Boolean(
-    translationConfiguration?.source === "environment"
-    && translationConfiguration.apiKeyConfigured
-    && !translationApiKey.trim(),
-  );
-  const translationApiKeyHint = translationConfiguration?.configurationError
-    ? t("settings.translation.apiKeyRecoveryHint")
-    : translationConfiguration?.source === "environment" && translationConfiguration.apiKeyConfigured
-      ? t("settings.translation.apiKeyEnvironmentHint")
-      : translationConfiguration?.apiKeyConfigured
-        ? t("settings.translation.apiKeyHint")
-        : t("settings.translation.apiKeyOptionalHint");
   const updateControlsBusy = controlsBusy || Boolean(updateActionBusy);
   const confirmationTitle = pendingConfirmation === "clear-background"
     ? t("settings.confirmation.clearBackgroundTitle")
@@ -933,8 +832,8 @@ export default function SettingsModal({
   };
 
   // The record keys are the full category set, so TypeScript rejects a nav
-  // entry whose panel is missing (the old scroll-nav could point at nothing).
   const panels: Record<SettingsCategoryId, ReactNode> = {
+    data: <SettingsDataPanel demoMode={demoMode} onOverlayOpenChange={setDataOverlayOpen} />,
     language: (
       <SettingsLanguagePanel
         t={t}

@@ -10,7 +10,7 @@ import { expect, type Page } from "@playwright/test";
  */
 export async function bootDemoShell(page: Page): Promise<void> {
   await page.goto("/?demo=1");
-  await expect(page.locator("#nami-splash")).toHaveClass(/done/, { timeout: 15_000 });
+  await expect(page.locator("#nami-splash")).toBeHidden({ timeout: 15_000 });
   const terms = page.locator(".translation-terms-card");
   if (await terms.isVisible().catch(() => false)) {
     await terms.locator(".primary-button").click();

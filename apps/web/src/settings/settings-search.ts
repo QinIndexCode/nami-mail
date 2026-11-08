@@ -28,6 +28,14 @@ export type SettingsCategorySearchResult = {
  * terminology in Chinese & English, and key UI elements across all 10 categories.
  */
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
+  { id: "data-recovery", categoryId: "data", titleKey: "data.title", defaultTitleZh: "数据与隐私", defaultTitleEn: "Data and privacy", targetId: "data-settings-title",
+    keywords: ["备份", "恢复", "迁移", "隐私", "远程图片", "跟踪", "backup", "restore", "migration", "privacy", "remote images", "tracking"] },
+  { id: "trusted-senders", categoryId: "data", titleKey: "images.trustedTitle", defaultTitleZh: "已信任发件人", defaultTitleEn: "Trusted senders", targetId: "data-trusted-senders",
+    keywords: ["信任", "发件人", "白名单", "例外", "远程图片", "trusted", "senders", "allowlist", "whitelist", "exceptions"] },
+  { id: "encrypted-backup", categoryId: "data", titleKey: "data.exportTitle", defaultTitleZh: "导出加密备份", defaultTitleEn: "Export encrypted backup", targetId: "data-backup-export",
+    keywords: ["导出", "备份", "加密", "口令", "export", "backup", "encrypted", "password"] },
+  { id: "restore-backup", categoryId: "data", titleKey: "data.restoreRow", defaultTitleZh: "恢复本地备份", defaultTitleEn: "Restore a local backup", targetId: "data-backup-restore",
+    keywords: ["恢复", "还原", "备份", "导入", "restore", "recover", "import", "backup"] },
   // 1. Language
   {
     id: "interface-language",
@@ -389,6 +397,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchItem[] = [
 
 /** Category fallback labels if key translation is absent */
 const categoryDefaultTitles: Record<SettingsCategoryId, { zh: string; en: string }> = {
+  data: { zh: "数据与隐私", en: "Data and privacy" },
   language: { zh: "界面语言", en: "Language" },
   appearance: { zh: "外观与主题", en: "Appearance & Theme" },
   notifications: { zh: "通知与提示", en: "Notifications" },

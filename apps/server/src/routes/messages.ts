@@ -53,6 +53,7 @@ import { downloadMessageAttachment, inlineImageType } from "../attachments.js";
 import { messageIdSchema } from "../message-id.js";
 import { downloadMessageSource } from "../mail-source.js";
 import { proxyImage } from "../image-proxy.js";
+import { messageImagePermission } from "../image-policy.js";
 import { detectProvider } from "../providers.js";
 import { discardDraft, saveDraft } from "../drafts.js";
 import {
@@ -485,19 +486,19 @@ export function registerMessageRoutes(app: FastifyInstance, deps: MessageRouteDe
     }
   });
 
-  // ---- External image proxy (caches to disk with size/age limits) -----------
 
-  app.get<{ Querystring: { url: string } }>("/api/images/proxy", async (request, reply) => {
+  app.get<{ Querystring: { url: string; messageId?: string } }>("/api/images/proxy", async (request, reply) => {
     const url = typeof request.query.url === "string" ? request.query.url.trim() : "";
     if (!url) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "缺少图片地址。" });
+    if (!messageImagePermission(context.db, context.masterKey, request.query.messageId).allowed) {
+      return reply.code(403).send({ ok: false, code: ROUTE_ERROR_CODES.image_blocked, message: "Remote images are blocked. Authorize this message before loading images." });
+    }
     const result = await proxyImage(url, context.masterKey);
     if (!result) return reply.code(404).send({ ok: false, code: ROUTE_ERROR_CODES.not_found, message: "无法获取图片。" });
     reply
       .type(result.contentType)
       .header("Content-Disposition", "inline")
       .header("X-Content-Type-Options", "nosniff")
-      // Overridden by the `onSend` hook, which stamps no-store on every /api/
-      // response; kept because it documents the intent if that ever changes.
       .header("Cache-Control", "public, max-age=604800");
     // The cache file is sealed, so the proxy hands back the image itself rather
     // than a path to stream.

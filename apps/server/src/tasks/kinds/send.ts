@@ -34,6 +34,7 @@ import { isoToEpochMs } from "../../utc-time.js";
 import { TASK_RUN_TIMEOUT_MS, TaskAbortError } from "../scheduler.js";
 import { commitTask, taskIdForSubmission, type CommitTaskDeps } from "../store.js";
 import type { TaskRunner } from "../types.js";
+import { smtpRecipientDelivery } from "../smtp-recipient-delivery.js";
 
 /**
  * The `send` kind: dispatching one durable outbound submission.
@@ -745,6 +746,7 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
       const smtp = sendMail(account, deps.masterKey, {
         to: request.to,
         cc: request.cc,
+        bcc: request.bcc,
         messageId: attempt.submission.messageId,
         ...threadingHeaders(request),
         subject: request.subject,
@@ -817,7 +819,7 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
     // mail that did leave, which is the worst of both answers. So the record write
     // is separated from the send's outcome, and the task still ends `completed`.
     try {
-      markSubmissionSubmitted(deps.db, deps.masterKey, submissionId, result.messageId);
+      markSubmissionSubmitted(deps.db, deps.masterKey, submissionId, result.messageId, smtpRecipientDelivery(result));
     } catch {
       // The ledger still says `submitting`, which is true -- the outcome could not
       // be written -- but it is not what later passes act on: `submitted` and
@@ -853,7 +855,7 @@ export function createSendRunner(deps: SendTaskDeps): TaskRunner<undefined> {
       }
     }
     try {
-      releaseSubmissionOutboundAttachments(deps.db, deps.outboundAttachmentDirectory, account.id, submissionId);
+      releaseSubmissionOutboundAttachments(deps.db, deps.outboundAttachmentDirectory, account.id, submissionId, Boolean(smtpRecipientDelivery(result)?.rejected.length));
     } catch {
       // The durable link prevents premature stale cleanup, so this can be
       // retried by a later pass without changing the send outcome.

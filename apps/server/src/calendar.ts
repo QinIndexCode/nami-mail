@@ -3,6 +3,7 @@ import { z } from "zod";
 import { calendarEventColors, type CalendarEventColor } from "@nami/agent-contracts";
 import { decryptTextEnvelope, deriveEncryptionKey, encryptTextEnvelope } from "./crypto.js";
 import type { DatabaseHandle } from "./db.js";
+import type { CalendarCursor } from "./calendar-cursor.js";
 
 /**
  * Local calendar. Event title/description/location are encrypted at rest with
@@ -113,7 +114,7 @@ function isCalendarEventColor(value: string): value is CalendarEventColor {
 export function calendarEventFromRow(row: CalendarEventRow, masterKey: Buffer): CalendarEvent {
   return withCalendarKey(masterKey, (key) => ({
     id: row.id,
-    uid: row.uid ?? undefined,
+    uid: row.uid ?? row.id,
     title: decryptTextEnvelope(row.title_enc, key, calendarAad(row.id)),
     description: decryptTextEnvelope(row.description_enc, key, calendarAad(row.id)),
     location: decryptTextEnvelope(row.location_enc, key, calendarAad(row.id)),
@@ -180,15 +181,17 @@ export function listCalendarEvents(
   masterKey: Buffer,
   range?: { after?: string; before?: string },
   limit = 1000,
+  cursor?: CalendarCursor,
 ): CalendarEvent[] {
   const after = range?.after === undefined ? undefined : normalizeTimestamp(range.after);
   const before = range?.before === undefined ? undefined : normalizeTimestamp(range.before);
   const rows = db.prepare(`
     SELECT ${calendarEventSelectColumns} FROM calendar_events
     WHERE (? IS NULL OR start_at < ?) AND (? IS NULL OR end_at > ?)
-    ORDER BY start_at ASC
+      AND (? IS NULL OR start_at > ? OR (start_at = ? AND id > ?))
+    ORDER BY start_at ASC, id ASC
     LIMIT ?
-  `).all(before ?? null, before ?? null, after ?? null, after ?? null, Math.max(1, Math.min(limit, 5000))) as CalendarEventRow[];
+  `).all(before ?? null, before ?? null, after ?? null, after ?? null, cursor?.startAt ?? null, cursor?.startAt ?? null, cursor?.startAt ?? null, cursor?.id ?? null, Math.max(1, Math.min(limit, 5000))) as CalendarEventRow[];
   return rows.map((row) => calendarEventFromRow(row, masterKey));
 }
 
@@ -200,7 +203,7 @@ export function createCalendarEvent(
   const id = randomUUID();
   const now = new Date().toISOString();
   return writeCalendarEvent(db, masterKey, id, {
-    uid: input.uid,
+    uid: input.uid ?? id,
     title: input.title,
     description: input.description ?? "",
     location: input.location ?? "",
@@ -267,7 +270,7 @@ export type CalendarImportResult = {
 };
 
 function calendarEventForUid(db: DatabaseHandle, masterKey: Buffer, uid: string): CalendarEvent | undefined {
-  const row = db.prepare(`SELECT ${calendarEventSelectColumns} FROM calendar_events WHERE uid = ? LIMIT 1`).get(uid) as CalendarEventRow | undefined;
+  const row = db.prepare(`SELECT ${calendarEventSelectColumns} FROM calendar_events WHERE uid = ? OR (uid IS NULL AND id = ?) ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1`).get(uid, uid, uid) as CalendarEventRow | undefined;
   return row ? calendarEventFromRow(row, masterKey) : undefined;
 }
 

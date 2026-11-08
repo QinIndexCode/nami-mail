@@ -62,8 +62,9 @@ export const messageReferencesSchema = z.array(messageIdHeaderSchema).max(50)
 
 export const sendSchema = z.object({
   accountId: z.string().min(1),
-  to: z.array(z.email()).min(1).max(50),
+  to: z.array(z.email()).max(50),
   cc: z.array(z.email()).max(50).optional(),
+  bcc: z.array(z.email()).max(50).optional(),
   inReplyTo: messageIdHeaderSchema.optional(),
   references: messageReferencesSchema,
   subject: z.string().max(998).default(""),
@@ -74,12 +75,13 @@ export const sendSchema = z.object({
   sendAt: z.string().datetime({ offset: true }).optional(),
   attachmentTokens: z.array(z.string().regex(/^out_[0-9a-f-]{36}$/)).max(10).default([])
     .refine((tokens) => new Set(tokens).size === tokens.length, { message: "附件不能重复添加。" }),
-}).strict();
+}).strict().refine((value) => value.to.length + (value.cc?.length ?? 0) + (value.bcc?.length ?? 0) > 0, "至少需要一个收件人。");
 
 export const draftSchema = z.object({
   accountId: z.string().min(1),
   to: z.array(z.email()).max(50).default([]),
   cc: z.array(z.email()).max(50).optional(),
+  bcc: z.array(z.email()).max(50).optional(),
   inReplyTo: messageIdHeaderSchema.optional(),
   references: messageReferencesSchema,
   subject: z.string().max(998).default(""),

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CalendarClock, Check, ChevronLeft, ChevronRight, CircleAlert, Eye, LoaderCircle, Mail, PenLine, RefreshCw, Send, X } from "lucide-react";
+import { recoverSubmissionDraft } from "./dataRecoveryApi";
+import type { ComposeDraft } from "./mailUi";
 import { mailErrorMessage, mailErrorToastMessage } from "./errorPresentation";
 import { translate, type Translate, useI18n } from "./i18n";
 import {
@@ -11,6 +13,7 @@ import type { Account, OutboundSubmission } from "./types";
 import { useDialogFocus } from "./hooks/useDialogFocus";
 import { useDismissTransition } from "./hooks/useDismissTransition";
 import { useStablePagedListHeight } from "./hooks/useStablePagedListHeight";
+import { hasRejectedRecipients, rejectedRecipientsMessage } from "./submissionRecipients";
 
 type SendingStatusModalProps = {
   accounts: Account[];
@@ -20,16 +23,17 @@ type SendingStatusModalProps = {
   onClose: () => void;
   onRefresh: () => Promise<void>;
   onSyncAccount: (accountId: string) => Promise<void>;
-  onCreateNewMessage: (draft: { accountId: string; to?: string; subject?: string }) => void;
+  onCreateNewMessage: (draft: ComposeDraft) => void;
   onCancelScheduled: (submissionId: string) => Promise<void>;
   fallbackFocusRef?: RefObject<HTMLElement | null>;
 };
 
 export function submissionNoticeMessage(
-  submission: Pick<OutboundSubmission, "deliveryStatus" | "errorCode" | "errorMessage" | "postSubmitWarning">,
+  submission: Pick<OutboundSubmission, "deliveryStatus" | "errorCode" | "errorMessage" | "postSubmitWarning" | "recipientDelivery">,
   t: Translate = (key, values) => translate("zh-CN", key, values),
   providerId?: string,
 ): string | null {
+  if (hasRejectedRecipients(submission)) return rejectedRecipientsMessage(submission, t);
   if (submission.deliveryStatus === "unknown_delivery") {
     // `mailErrorMessage` would fall through to its generic unknown-error
     // guidance ("check your network and try again"), which is the opposite of
@@ -110,14 +114,14 @@ export default function SendingStatusModal({
   const accountById = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const counts = useMemo(() => ({
     all: submissions.length,
-    active: submissions.filter((item) => ["pending", "submitting", "submitted"].includes(item.deliveryStatus)).length,
-    attention: submissions.filter((item) => ["unknown_delivery", "failed"].includes(item.deliveryStatus)).length,
+    active: submissions.filter((item) => ["pending", "submitting", "submitted"].includes(item.deliveryStatus) && !hasRejectedRecipients(item)).length,
+    attention: submissions.filter((item) => ["unknown_delivery", "failed"].includes(item.deliveryStatus) || hasRejectedRecipients(item)).length,
     confirmed: submissions.filter((item) => item.deliveryStatus === "confirmed").length,
   }), [submissions]);
   const visibleSubmissions = useMemo(() => {
     if (filter === "all") return submissions;
-    if (filter === "active") return submissions.filter((item) => ["pending", "submitting", "submitted"].includes(item.deliveryStatus));
-    if (filter === "attention") return submissions.filter((item) => ["unknown_delivery", "failed"].includes(item.deliveryStatus));
+    if (filter === "active") return submissions.filter((item) => ["pending", "submitting", "submitted"].includes(item.deliveryStatus) && !hasRejectedRecipients(item));
+    if (filter === "attention") return submissions.filter((item) => ["unknown_delivery", "failed"].includes(item.deliveryStatus) || hasRejectedRecipients(item));
     return submissions.filter((item) => item.deliveryStatus === "confirmed");
   }, [filter, submissions]);
   // Pagination mirrors the management lists (5 rows per page). The page is
@@ -207,11 +211,15 @@ export default function SendingStatusModal({
     });
   };
 
-  const createReplacement = () => {
-    if (!confirmReplacement) return;
-    const draft = newMessageDraftFromSubmission(confirmReplacement);
+  const createRetryDraft = (submission: OutboundSubmission, confirmUnknown = false) => runRecordAction(submission, async () => {
+    const demo = new URLSearchParams(window.location.search).get("demo") === "1";
+    const draft = demo ? newMessageDraftFromSubmission(submission) : (await recoverSubmissionDraft(submission.id, confirmUnknown)).draft;
     setConfirmReplacement(null);
     onCreateNewMessage(draft);
+  });
+  const createReplacement = () => {
+    if (!confirmReplacement) return;
+    void createRetryDraft(confirmReplacement, true);
   };
 
   const openDetails = (submission: OutboundSubmission) => {
@@ -276,7 +284,7 @@ export default function SendingStatusModal({
               const recipients = recipientSummary(submission.recipients, 3, t);
               const title = submission.subject || t("sending.modal.untitled");
               const canSync = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "submitted";
-              const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed";
+              const canCreate = submission.deliveryStatus === "unknown_delivery" || submission.deliveryStatus === "failed" || hasRejectedRecipients(submission);
               const isPendingScheduled = submission.deliveryStatus === "pending" && Boolean(submission.sendAt);
               const isOverdueScheduled = isPendingScheduled && submission.sendAt !== null && new Date(submission.sendAt).getTime() < Date.now();
               const statusMessage = submissionNoticeMessage(submission, t, accountById.get(submission.accountId)?.provider);
@@ -305,7 +313,7 @@ export default function SendingStatusModal({
                         <Eye size={15} />
                       </button>
                       {canSync && <button className="secondary-button" type="button" onClick={() => void syncSent(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
-                      {canCreate && <button className="secondary-button" type="button" onClick={() => { if (submission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(submission); } else onCreateNewMessage(newMessageDraftFromSubmission(submission)); }} disabled={recordBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
+                      {canCreate && <button className="secondary-button" type="button" onClick={() => { if (submission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(submission); } else void createRetryDraft(submission); }} disabled={recordBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
                       {isPendingScheduled && <button className="secondary-button" type="button" onClick={() => void cancelScheduled(submission)} disabled={recordBusy}>{recordBusy ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}{t("sending.modal.cancelScheduled")}</button>}
                     </div>
                   </div>
@@ -383,13 +391,13 @@ export default function SendingStatusModal({
                 <button className="secondary-button" type="button" onClick={closeDetails}>{t("sending.modal.closeDetails")}</button>
                 {(() => {
                   const detailsCanSync = detailsSubmission.deliveryStatus === "unknown_delivery" || detailsSubmission.deliveryStatus === "submitted";
-                  const detailsCanCreate = detailsSubmission.deliveryStatus === "unknown_delivery" || detailsSubmission.deliveryStatus === "failed";
+                  const detailsCanCreate = detailsSubmission.deliveryStatus === "unknown_delivery" || detailsSubmission.deliveryStatus === "failed" || hasRejectedRecipients(detailsSubmission);
                   const detailsPendingScheduled = detailsSubmission.deliveryStatus === "pending" && Boolean(detailsSubmission.sendAt);
                   const detailsBusy = busyIds.has(detailsSubmission.id);
                   return (
                     <>
                       {detailsCanSync && <button className="secondary-button" type="button" onClick={() => void syncSent(detailsSubmission)} disabled={detailsBusy}>{detailsBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}{t("sending.modal.syncSent")}</button>}
-                      {detailsCanCreate && <button className="secondary-button" type="button" onClick={() => { if (detailsSubmission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(detailsSubmission); } else onCreateNewMessage(newMessageDraftFromSubmission(detailsSubmission)); }} disabled={detailsBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
+                      {detailsCanCreate && <button className="secondary-button" type="button" onClick={() => { if (detailsSubmission.deliveryStatus === "unknown_delivery") { resetConfirmClosing(); setConfirmReplacement(detailsSubmission); } else void createRetryDraft(detailsSubmission); }} disabled={detailsBusy}><PenLine size={14} />{t("sending.modal.createRetryDraft")}</button>}
                       {detailsPendingScheduled && <button className="secondary-button" type="button" onClick={() => void cancelScheduled(detailsSubmission)} disabled={detailsBusy}>{detailsBusy ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}{t("sending.modal.cancelScheduled")}</button>}
                     </>
                   );

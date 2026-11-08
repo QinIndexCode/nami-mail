@@ -5,9 +5,7 @@ import type { ComposeDraft } from "./mailUi";
  * forwards the raw URL, and plain web sessions intercept anchor clicks, so
  * both entry points converge on this single parser.
  *
- * The compose UI has no separate bcc field, so bcc recipients are folded into
- * cc to keep the receiver's intent (these addresses must still receive the
- * message) without silently dropping them.
+ * Recipient visibility must survive parsing: BCC must never become CC.
  */
 export function parseMailtoUrl(href: string): Partial<ComposeDraft> | undefined {
   const match = href.trim().match(/^mailto:([^?]*)(?:\?(.*))?$/i);
@@ -33,7 +31,8 @@ export function parseMailtoUrl(href: string): Partial<ComposeDraft> | undefined 
 
   const draft: Partial<ComposeDraft> = {};
   if (to.length > 0) draft.to = to.join(", ");
-  if (cc.length > 0 || bcc.length > 0) draft.cc = [...cc, ...bcc].join(", ");
+  if (cc.length > 0) draft.cc = cc.join(", ");
+  if (bcc.length > 0) draft.bcc = bcc.join(", ");
   const subject = params?.get("subject");
   if (subject) draft.subject = subject;
   const body = params?.get("body");

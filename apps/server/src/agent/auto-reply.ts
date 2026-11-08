@@ -21,12 +21,16 @@ import { autoReplyLedgerKinds, buildMemoryContextLines, type EncryptedAgentMemor
 import type { ImmutableGuiConfirmationStore } from "./confirmations.js";
 import { canonicalAgentJson } from "./store-crypto.js";
 import type { MailApplicationContext, MailApplicationService } from "./mail-application-service.js";
-import { applyAutoReplyScope, renderAutoReplyTemplate, sanitizeLinksForScreening, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain, type AutoReplyScopeReason } from "./auto-reply-screening.js";
+import { applyAutoReplyScope, renderAutoReplyTemplate, sanitizeLinksForScreening, scanSensitiveKeywords, screenAutoReply, screeningIgnoreReasonText, senderDomain } from "./auto-reply-screening.js";
 import { type AutoReplyDecisionAttribution, type AutoReplyDecisionListOptions, type AutoReplyDecisionReason, type AutoReplyDecisionRecord, type EncryptedAutoReplyDecisionStore } from "./auto-reply-decisions.js";
 import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./auto-reply-decision.js";
+import { parsedFlags, replySubject, scopeReasonText } from "./auto-reply-format.js";
+export { replySubject } from "./auto-reply-format.js";
+import { AutoReplyWorkQueue } from "./auto-reply-work.js";
+import { trackAutoReplyDelivery, reconcileAutoReplyDeliveries, resumableAutoReplyDeliveries, retainAcceptedAutoReply } from "./auto-reply-delivery.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;
-const MESSAGES_PER_PASS = 40;
+
 
 // The evaluation wire shapes and the decision strategies live in
 // auto-reply-decision.ts; re-exported here because the engine's `evaluate`
@@ -173,20 +177,44 @@ export class AutoReplyEngine {
   private readonly folderSpecialUseCache = new Map<string, string | null>();
   private readonly mailContextSignal = new AbortController();
 
+  private readonly work: AutoReplyWorkQueue;
+  private deliveryTimer?: NodeJS.Timeout;
+  private recovering = false;
+
   constructor(private readonly options: AutoReplyEngineOptions) {
     this.clock = options.clock ?? (() => new Date().toISOString());
+    this.work = new AutoReplyWorkQueue(options.db, (accountId) => {
+      const config = getAppSettings(options.db).autoReply;
+      return config?.enabled === true && config.accountIds.includes(accountId);
+    }, (accountId, messageId) => this.processMessage(accountId, messageId, getAppSettings(options.db).autoReply), this.clock);
+  }
+
+  start(): void {
+    if (this.deliveryTimer || this.mailContextSignal.signal.aborted) return;
+    const tick = () => {
+      this.reconcileDeliveries();
+      void this.resumePreparedReplies();
+      void this.work.resume().catch((error: unknown) => serverLog.warn({}, "Auto-reply queue recovery failed", error));
+    };
+    this.deliveryTimer = setInterval(tick, 1000);
+    this.deliveryTimer.unref();
+    tick();
+  }
+
+  private async resumePreparedReplies(): Promise<void> {
+    if (this.recovering || this.mailContextSignal.signal.aborted) return;
+    this.recovering = true;
+    try {
+      for (const row of resumableAutoReplyDeliveries(this.options.db)) {
+        if (this.mailContextSignal.signal.aborted) break;
+        await this.options.mail.submitPreparedMail({ requestId: row.requestId, caller: autoReplyCaller, accountIds: [row.accountId], allowedMessageIds: [row.messageId], signal: this.mailContextSignal.signal }, row.submissionId);
+      }
+    } catch (error) { serverLog.warn({}, "Prepared auto-reply recovery will retry", error); }
+    finally { this.recovering = false; }
   }
 
   async notifyInboxMessages(accountId: string, messageIds: readonly string[]): Promise<void> {
-    const config = getAppSettings(this.options.db).autoReply;
-    if (!config.enabled || !config.accountIds.includes(accountId)) return;
-    let processed = 0;
-    for (const messageId of messageIds) {
-      if (this.pending.has(messageId)) continue;
-      if (processed >= MESSAGES_PER_PASS) break;
-      processed += 1;
-      await this.processMessage(accountId, messageId, config);
-    }
+    await this.work.enqueue(accountId, messageIds);
   }
 
   resolveConfirmation(
@@ -266,6 +294,8 @@ export class AutoReplyEngine {
   }
 
   close(): void {
+    this.work.close();
+    if (this.deliveryTimer) clearInterval(this.deliveryTimer);
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     for (const pending of [...this.pending.values()]) {
@@ -553,25 +583,15 @@ export class AutoReplyEngine {
         ...(pending.inReplyTo ? { inReplyTo: pending.inReplyTo } : {}),
         ...(pending.references?.length ? { references: [...pending.references] } : {}),
       });
+      if (this.mailContextSignal.signal.aborted) return;
+      trackAutoReplyDelivery(this.options.db, { messageId: pending.messageId, accountId: pending.accountId, threadKey,
+        submissionId: prepared.submissionId, requestId: context.requestId, confirmationId: pending.confirmation.id }, this.clock());
       await this.options.mail.submitPreparedMail(context, prepared.submissionId);
-      this.recordLedger(pending.messageId, pending.accountId, "sent", threadKey);
-      this.audit(pending.accountId, pending.confirmation.requestId, "auto-reply.send", pending.replyText.slice(0, 120), "succeeded", pending.confirmation.id);
-      this.rememberSent(pending.accountId, pending.messageId, pending.toName || pending.toAddress, pending.subject, pending.replyText);
-      try {
-        this.options.onEvent?.({
-          kind: "sent",
-          messageId: pending.messageId,
-          accountId: pending.accountId,
-          subject: pending.subject,
-          toName: pending.toName,
-          toAddress: pending.toAddress,
-          replyPreview: pending.replyText.slice(0, 200),
-        });
-      } catch (error) {
-        serverLog.warn({ messageId: pending.messageId }, "Auto-reply sent event failed", error);
-      }
+      this.reconcileDeliveries();
     } catch (error) {
       serverLog.warn({ messageId: pending.messageId }, "Auto-reply send failed", error);
+      if (this.mailContextSignal.signal.aborted) return;
+      if (retainAcceptedAutoReply(this.options.db, this.options.masterKey, pending.messageId)) { this.reconcileDeliveries(); return; }
       this.recordLedger(pending.messageId, pending.accountId, "failed", threadKey);
       this.audit(pending.accountId, pending.confirmation.requestId, "auto-reply.send", "发送失败", "failed", pending.confirmation.id);
       this.rememberIgnored(pending.accountId, pending.messageId, `自动回复发送失败：${pending.subject}`);
@@ -581,6 +601,24 @@ export class AutoReplyEngine {
         subject: pending.subject,
       });
     }
+  }
+
+  reconcileDeliveries(): void {
+    reconcileAutoReplyDeliveries(this.options.db, this.options.masterKey, this.clock(), (row, submission, request, sent) => {
+      const source = messagePayloadById(this.options.db, this.options.masterKey, row.messageId)?.payload;
+      const sender = source?.fromAddress ?? request.to[0] ?? "";
+      const name = source?.fromName ?? "";
+      const subject = source?.subject ?? submission.subject;
+      this.audit(row.accountId, row.requestId, "auto-reply.send", sent ? request.text.slice(0, 120) : "发送失败", sent ? "succeeded" : "failed", row.confirmationId);
+      if (sent) {
+        this.rememberSent(row.accountId, row.messageId, name || sender, subject, request.text);
+        this.options.onEvent?.({ kind: "sent", messageId: row.messageId, accountId: row.accountId, subject,
+          toName: name, toAddress: sender, replyPreview: request.text.slice(0, 200) });
+      } else {
+        this.rememberIgnored(row.accountId, row.messageId, `自动回复发送失败：${subject}`);
+        this.recordDecision(row.accountId, row.messageId, row.threadKey, "send-failed", { fromAddress: sender, fromName: name, subject });
+      }
+    });
   }
 
   private expirePending(confirmationId: string): void {
@@ -676,21 +714,18 @@ export class AutoReplyEngine {
     const today = this.clock().slice(0, 10);
     const row = this.options.db.prepare(`
       SELECT COUNT(*) AS count FROM auto_reply_processed
-      WHERE account_id = ? AND decision = 'sent' AND occurred_at >= ?
+      WHERE account_id = ? AND ((decision = 'sent' AND occurred_at >= ?)
+        OR (decision = 'pending' AND EXISTS(SELECT 1 FROM auto_reply_deliveries d WHERE d.message_id=auto_reply_processed.message_id)))
     `).get(accountId, today) as { count: number };
     return row.count;
   }
 
-  /**
-   * Thread-once dedup: a thread with a previously sent reply (any time) or an
-   * explicit user rejection is never auto-answered again. Controlled by the
-   * `scope.threadOnce` flag; when disabled the pipeline replies to every
-   * eligible message regardless of thread history.
-   */
+  /** Pending submissions reserve the thread until their delivery is resolved. */
   private threadAlreadyReplied(threadKey: string): boolean {
     const sent = this.options.db.prepare(`
       SELECT 1 FROM auto_reply_processed
-      WHERE thread_key = ? AND decision = 'sent'
+      WHERE thread_key = ? AND (decision = 'sent' OR (decision = 'pending'
+        AND EXISTS(SELECT 1 FROM auto_reply_deliveries d WHERE d.message_id=auto_reply_processed.message_id)))
       LIMIT 1
     `).get(threadKey) as { "1": unknown } | undefined;
     if (sent) return true;
@@ -812,30 +847,4 @@ export class AutoReplyEngine {
       serverLog.warn({}, "Auto-reply audit append failed", error);
     });
   }
-}
-
-function parsedFlags(value: string | null): string[] {
-  try {
-    const parsed = JSON.parse(value ?? "[]") as unknown;
-    return Array.isArray(parsed) ? parsed.filter((flag): flag is string => typeof flag === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-export function replySubject(subject: string): string {
-  const trimmed = subject.trim();
-  if (/^re\s*:/i.test(trimmed)) return trimmed;
-  return trimmed.length > 0 ? `Re: ${trimmed}` : "(无主题)";
-}
-
-const SCOPE_REASON_TEXT: Record<AutoReplyScopeReason, string> = {
-  "outside-date-range": "不在回复日期范围内",
-  "not-contact": "发件人不在联系人中",
-  "ignore-rule": "命中忽略规则",
-  "not-in-whitelist": "不在回复白名单中",
-};
-
-function scopeReasonText(reason: AutoReplyScopeReason): string {
-  return SCOPE_REASON_TEXT[reason] ?? reason;
 }

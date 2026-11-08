@@ -140,8 +140,8 @@ export function useOutboundSubmissions({ isDemo, locale, t, showToast, accounts 
     .map((submission) => submission.id)
     .sort()
     .join("|");
-  const submissionAttentionCount = submissions.filter((submission) => ["unknown_delivery", "failed"].includes(submission.deliveryStatus)).length;
-  const submissionActiveCount = submissions.filter((submission) => ["pending", "submitting", "submitted"].includes(submission.deliveryStatus)).length;
+  const submissionAttentionCount = submissions.filter((submission) => ["unknown_delivery", "failed"].includes(submission.deliveryStatus) || Boolean(submission.recipientDelivery?.rejected.length)).length;
+  const submissionActiveCount = submissions.filter((submission) => ["pending", "submitting", "submitted"].includes(submission.deliveryStatus) && !submission.recipientDelivery?.rejected.length).length;
   const submissionOutstandingCount = submissionAttentionCount + submissionActiveCount;
   const accountIdsKey = accounts.map((account) => account.id).sort().join("|");
 

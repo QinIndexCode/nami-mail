@@ -54,7 +54,7 @@ background:var(--panel-muted);
 width:28px;
 height:28px;
 color:var(--text);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 place-items:center;
 flex:none;
 display:grid
@@ -221,7 +221,7 @@ min-height:48px;
 color:var(--text-soft);
 cursor:pointer;
 text-align:left;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 padding:6px 8px;
@@ -365,7 +365,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 min-height:40px;
 color:var(--text);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:10px 34px 10px 11px;
 font-family:inherit;
 font-size:11px
@@ -486,7 +486,7 @@ font-weight:500
 {
 border:1px solid var(--line-strong);
 background:var(--panel-muted);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 outline:none;
 width:100%;
 padding:11px 12px;
@@ -545,7 +545,7 @@ height:24px;
 place-items:center;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 color:var(--text-faint);
 cursor:pointer;
 padding:0;
@@ -608,7 +608,7 @@ flex:none
 border:1px solid var(--line);
 background:var(--panel-muted);
 color:var(--text-soft);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 gap:8px;
 padding:10px 11px;
 display:flex
@@ -835,7 +835,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 min-height:40px;
 color:var(--text);
-border-radius:var(--radius-md);
+border-radius:var(--radius-compact-md);corner-shape:var(--corner-shape);
 padding:10px;
 font-size:11px
 }
@@ -872,7 +872,7 @@ color:var(--text-soft);
 cursor:pointer;
 text-align:left;
 background:0 0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:10px 11px;
@@ -901,7 +901,7 @@ transform:rotate(180deg)
 {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 72%, transparent);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 padding:14px;
 animation:.18s both fade-in
 }
@@ -941,7 +941,7 @@ color:var(--text-soft)
 {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-solid) 56%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:8px 8px;
 color:var(--text-soft)!important;
 margin:-2px 0 11px!important;
@@ -1003,7 +1003,7 @@ border:1px solid var(--line-strong);
 width:18px;
 height:18px;
 color:var(--text);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 place-items:center;
 font-family:var(--font-mono);
 font-size:7px;
@@ -1054,7 +1054,7 @@ background:var(--panel-solid);
 min-height:36px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-self:flex-start;
 align-items:center;
 gap:6px;
@@ -1089,7 +1089,7 @@ line-height:1.45
 background:var(--text);
 min-height:40px;
 color:var(--panel-solid);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 justify-content:space-between;
 align-items:center;
 gap:8px;
@@ -1266,7 +1266,7 @@ to{opacity:1;transform:translateX(0)}
 {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 50%, transparent);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 padding:12px 14px;
 flex-direction:column;
 gap:8px;
@@ -1290,7 +1290,7 @@ min-width:0
 {
 width:20px;
 height:20px;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 object-fit:contain;
 flex-shrink:0
 }
@@ -1298,7 +1298,7 @@ flex-shrink:0
 {
 width:20px;
 height:20px;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 background:var(--panel-solid);
 border:1px solid var(--line);
 color:var(--text);
@@ -1352,7 +1352,7 @@ box-sizing:border-box;
 background:var(--panel-solid);
 color:var(--text);
 border:1px solid var(--line-strong);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 min-height:36px;
 font-size:12px;
 font-weight:600;
@@ -1388,7 +1388,7 @@ width:100%;
 box-sizing:border-box;
 background:0 0;
 border:1px solid var(--line);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 min-height:34px;
 color:var(--text-soft);
 font-size:11px;
@@ -1437,7 +1437,7 @@ font-weight:700
 {
 background:0 0;
 border:1px solid var(--line);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 color:var(--text-soft);
 padding:4px 8px;
 font-size:10px;
@@ -1457,7 +1457,7 @@ color:var(--text)
 {
 border:1px solid var(--line);
 background:var(--panel-muted);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:12px 14px;
 flex-direction:column;
 gap:8px;
@@ -1478,7 +1478,7 @@ display:flex
 {
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:2px 6px;
 font-size:9px;
 font-weight:700;
@@ -1509,7 +1509,7 @@ margin:0
 background:var(--panel-solid);
 border:1px solid var(--line);
 padding:1px 4px;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 font-size:10px;
 font-family:var(--font-mono);
 color:var(--text)
@@ -1523,7 +1523,7 @@ background:var(--panel-solid);
 border:1px solid var(--line-strong);
 color:var(--text);
 padding:6px 10px;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 font-size:11px;
 font-weight:600;
 text-decoration:none;
@@ -1562,7 +1562,7 @@ font-size:11px
 {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 50%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:8px 10px;
 font-size:11px
 }
@@ -1584,7 +1584,7 @@ font-size:11px
 {
 overflow-wrap:anywhere;
 border:1px solid #0000;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 min-height:42px;

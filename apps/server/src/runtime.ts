@@ -59,11 +59,13 @@ import { config } from "./config.js";
 import { loadOrCreateMasterKey } from "./crypto.js";
 import { ensureDatabaseEncrypted } from "./database-encryption.js";
 import { openDatabase, type DatabaseHandle } from "./db.js";
+import { resolveBackupStorage } from "./portable-backup-storage.js";
+import { PortableBackupService } from "./portable-backup.js";
 import { ServerEventBus, emitAccountSynced, emitSettingsChanged } from "./events.js";
 import { createIdleWatcher, type IdleWatcher } from "./idle.js";
 import { serverLog, setServerLogger } from "./logging.js";
 import { OAuthService } from "./oauth.js";
-import { cleanupExpiredOutboundAttachments, outboundAttachmentDirectory } from "./outbound-attachments.js";
+import { cleanupExpiredOutboundAttachments } from "./outbound-attachments.js";
 import { hasStoredCustomBackground } from "./background-image.js";
 import { getAppSettings, getSyncMessageLimit, updateAppSettings, type AppSettings, type AppSettingsPatch } from "./settings.js";
 import { restoreScheduledSubmissionAttachments } from "./scheduled-send.js";
@@ -362,6 +364,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   let microsoftOAuthCallbackBridge: Server | undefined;
   let closePromise: Promise<void> | undefined;
   let masterKey: Buffer | undefined;
+  let hostKey: Buffer | undefined;
   let agentService: AgentService | undefined;
   let autoReplyEngine: AutoReplyEngine | undefined;
   const translationAbortController = new AbortController();
@@ -377,14 +380,17 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
   };
 
   try {
-    const runtimeMasterKey = options.masterKey ? Buffer.from(options.masterKey) : loadOrCreateMasterKey(config.masterKeyPath);
+    const hostMasterKey = options.masterKey ? Buffer.from(options.masterKey) : loadOrCreateMasterKey(config.masterKeyPath);
+    hostKey = hostMasterKey;
+    const storage = resolveBackupStorage(config.databasePath, hostMasterKey);
+    const runtimeMasterKey = storage.masterKey;
     if (runtimeMasterKey.length !== 32) throw new Error("Master key must be exactly 32 bytes.");
     masterKey = runtimeMasterKey;
     // The store is sealed before it is opened, never after: the conversion
     // rewrites the file, so no connection may hold a handle on it yet. This is
     // also why the key is resolved ahead of `openDatabase` -- opening without it
     // would read the encrypted pages as garbage.
-    const encryptionOutcome = ensureDatabaseEncrypted(config.databasePath, runtimeMasterKey);
+    const encryptionOutcome = ensureDatabaseEncrypted(storage.databasePath, runtimeMasterKey);
     if (encryptionOutcome.status === "recovered") {
       // Loud on purpose: this only happens after a conversion crashed with the
       // plaintext original already destroyed, and the user should know the store
@@ -406,7 +412,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         "Nami Mail could not open the surviving database copy with the current master key; it was preserved beside the new store and the app starts empty",
       );
     }
-    const database = openDatabase(config.databasePath, { encryptionKey: runtimeMasterKey });
+    const database = openDatabase(storage.databasePath, { encryptionKey: runtimeMasterKey });
     db = database;
     noteStartupPhase("server:open-database");
     // Legacy credentials are rewrapped before OAuth, sync scheduling, Fastify
@@ -425,7 +431,8 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         if (event.type === "settings.changed") onSettingsChanged();
       });
     }
-    const backgroundDirectory = path.join(path.dirname(config.databasePath), "backgrounds");
+    const backgroundDirectory = path.join(path.dirname(storage.databasePath), "backgrounds");
+    const outboundDirectory = path.join(path.dirname(storage.databasePath), "outbound-attachments");
     const agentLifecycle = new AccountLifecycleStore(database, runtimeMasterKey);
     const agentSourceEvents = new AgentSourceEventOutbox(database, runtimeMasterKey, agentLifecycle);
     const agentMailEvents = new AgentMailStateEvents(runtimeMasterKey, agentLifecycle, agentSourceEvents);
@@ -446,7 +453,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
       oauthService,
       agentMailEvents: agentMailChanges,
       syncMessageLimit: getSyncMessageLimit(database),
-      outboundAttachmentDirectory: outboundAttachmentDirectory({}),
+      outboundAttachmentDirectory: outboundDirectory,
       acceptPreparedSend: (input) => {
         if (!taskDeps) throw new Error("Agent submissions cannot be accepted before the task scheduler is built.");
         return acceptPreparedSendTask(taskDeps, input);
@@ -509,7 +516,6 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     });
     registerAutoReplyEngine(autoReplyEngine);
     noteStartupPhase("server:auto-reply-engine");
-    const outboundDirectory = outboundAttachmentDirectory({});
     try {
       // Scheduled tasks parked before park-time linking existed may have
       // lost their attachment link rows; rebuild them before the stale
@@ -615,12 +621,15 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     });
 
     const runtimeContext: RuntimeContext = {
+      portableBackup: new PortableBackupService({ db: database, masterKey: runtimeMasterKey, hostKey: hostMasterKey,
+        originalDatabasePath: config.databasePath, backgroundDirectory, outboundDirectory }),
       db: database,
       masterKey: runtimeMasterKey,
       agentMailEvents,
       agentLifecycle,
       agentSourceEvents,
       agentService,
+      backgroundDirectory,
       outboundAttachmentDirectory: outboundDirectory,
       onRefreshIntervalChanged: () => scheduler?.reschedule(),
       onAccountDeleted: async (accountId: string) => {
@@ -661,6 +670,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
         taskDeps = { db: database, masterKey: runtimeMasterKey, scheduler };
       },
     });
+    autoReplyEngine.start();
     app = fastify;
     // Background modules log through the facade; from here on their lines carry
     // the same pid/level shape as request logs instead of plain console output.
@@ -732,6 +742,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
             }
             database.close();
             masterKey?.fill(0);
+            hostKey?.fill(0);
           }
         }
       })();
@@ -779,6 +790,7 @@ export async function startServer(options: ServerRuntimeOptions = {}): Promise<R
     if (app) await app.close().catch(() => undefined);
     db?.close();
     masterKey?.fill(0);
+    hostKey?.fill(0);
     throw error;
   }
 }

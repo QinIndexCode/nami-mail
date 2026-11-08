@@ -1,7 +1,7 @@
 .app-frame
 {
 border:1px solid var(--line-strong);
-border-radius:var(--radius-lg);
+border-radius:var(--radius-xl);corner-shape:var(--corner-shape);
 background:color-mix(in srgb, var(--frame) var(--bg-panel-opacity), transparent);
 width:min(1680px,100vw - 28px);
 height:min(1050px,100vh - 28px);

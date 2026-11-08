@@ -1,5 +1,6 @@
 import { translate, type Translate } from "./i18n";
 import type { OutboundSubmission, OutboundSubmissionStatus } from "./types";
+import { retryRecipientGroups } from "./submissionRecipients";
 
 export type SubmissionStatusPresentation = {
   label: string;
@@ -136,13 +137,16 @@ export function recipientSummary(recipients: string[], maxVisible = 3, t: Transl
 export function newMessageDraftFromSubmission(submission: OutboundSubmission): {
   accountId: string;
   to?: string;
+  cc?: string;
+  bcc?: string;
   subject?: string;
 } {
+  const recipients = retryRecipientGroups(submission);
   return {
     accountId: submission.accountId,
-    // subject/recipients are required on the wire (the server always emits
-    // them), so the old null/undefined guards are dead.
-    ...(submission.recipients.length ? { to: submission.recipients.join(", ") } : {}),
+    ...(recipients.to.length ? { to: recipients.to.join(", ") } : {}),
+    ...(recipients.cc.length ? { cc: recipients.cc.join(", ") } : {}),
+    ...(recipients.bcc.length ? { bcc: recipients.bcc.join(", ") } : {}),
     subject: submission.subject,
   };
 }

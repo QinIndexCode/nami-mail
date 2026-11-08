@@ -551,6 +551,7 @@ export function releaseSubmissionOutboundAttachments(
   directory: string,
   accountId: string,
   submissionId: string,
+  keepForRetry = false,
 ): number {
   const rows = db.prepare(`
     SELECT attachment_token FROM outbound_attachment_submissions
@@ -561,6 +562,11 @@ export function releaseSubmissionOutboundAttachments(
   db.prepare(`
     DELETE FROM outbound_attachment_submissions WHERE account_id = ? AND submission_id = ?
   `).run(accountId, submissionId);
+  if (keepForRetry) {
+    const renew = db.prepare("UPDATE outbound_attachments SET created_at=? WHERE token=? AND account_id=?");
+    for (const token of tokens) renew.run(new Date().toISOString(), token, accountId);
+    return 0;
+  }
   return removeUnlinkedAttachments(db, directory, tokens);
 }
 

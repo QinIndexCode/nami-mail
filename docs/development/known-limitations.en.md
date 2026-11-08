@@ -4,7 +4,7 @@
 
 This page collects Nami Mail's **verified capability boundaries and deliberate trade-offs** in one place. Each entry states the evidence (a code location or a document), what it affects, and how it is handled today or why we accept it. It is not a roadmap — no dates are promised — and it is not a bug list; report reproducible defects through GitHub Issues. Release notes, audits and troubleshooting all reference this page instead of restating the gaps.
 
-Verified against commit `508727e` (2026-11-03, current HEAD). The 2026-11-06 pass narrowed the SSE entry in section 12 to what the current code still does; the remaining entries keep their 2026-10-22 verification record. Re-check the relevant entry when the code changes.
+Verified against commit `508727e` (2026-11-03, the baseline of that review). The 2026-11-06 pass narrowed the SSE entry in section 12 to what the current code still does; the remaining entries keep their 2026-10-22 verification record. Re-check the relevant entry when the code changes.
 
 ## At a glance
 

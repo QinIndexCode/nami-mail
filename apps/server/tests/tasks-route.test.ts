@@ -176,6 +176,13 @@ describe("GET /api/tasks", () => {
     return body;
   };
 
+  it("keeps completed tasks with failed items in attention", async () => {
+    const id = recordTask(db, masterKey, { accountId: "account-1", kind: "flags", total: 2 });
+    db.prepare("UPDATE tasks SET updated=1,failed=1 WHERE id=?").run(id);
+    settleTask(db, id, "completed", null, Date.now());
+    expect((await list()).attention).toMatchObject([{ id, status: "completed", updated: 1, failed: 1 }]);
+  });
+
   it("lists a running task with its account address, and no other key", async () => {
     const id = recordTask(db, masterKey, {
       accountId: "account-1",

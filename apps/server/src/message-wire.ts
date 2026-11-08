@@ -91,6 +91,7 @@ export function messageRow(row: MessageStorageRow, masterKey: Buffer, options: M
     from: { name: payload.fromName, address: payload.fromAddress },
     to: payload.to,
     cc: payload.cc ?? [],
+    ...(payload.bcc?.length ? { bcc: payload.bcc } : {}),
     messageId: payload.messageId,
     inReplyTo: payload.inReplyTo,
     references: payload.references ?? [],

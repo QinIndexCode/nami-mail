@@ -120,6 +120,7 @@ export const messageSchema = z.object({
   from: mailAddressSchema,
   to: z.array(mailAddressSchema),
   cc: z.array(mailAddressSchema),
+  bcc: z.array(mailAddressSchema).optional(),
   /** RFC Message-ID, when the provider supplied one. */
   messageId: z.string().nullish(),
   /** RFC In-Reply-To header, retained for re-opening a reply draft. */
@@ -191,12 +192,21 @@ export type Stats = z.infer<typeof statsSchema>;
  * `subject` and `recipients` are display-only summaries decrypted from the
  * stored request; the producer always emits them, so they are required here.
  */
+export const outboundRecipientDeliverySchema = z.object({
+  accepted: z.array(z.string()),
+  rejected: z.array(z.object({ address: z.string(), responseCode: z.number().int().optional() })),
+});
+
 export const outboundSubmissionSchema = z.object({
   id: z.string(),
   accountId: z.string(),
   messageId: z.string(),
   subject: z.string(),
   recipients: z.array(z.string()),
+  toRecipients: z.array(z.string()).optional(),
+  ccRecipients: z.array(z.string()).optional(),
+  bccRecipients: z.array(z.string()).optional(),
+  recipientDelivery: outboundRecipientDeliverySchema.optional(),
   deliveryStatus: z.enum(outboundSubmissionStatuses),
   /** ISO time a scheduled send should leave the local queue, when this is a scheduled send. */
   sendAt: z.string().nullable(),

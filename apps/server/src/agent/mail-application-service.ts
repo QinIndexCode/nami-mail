@@ -100,6 +100,7 @@ export type DraftMutation = {
   draftId?: string;
   to: readonly { name?: string; address: string }[];
   cc?: readonly { name?: string; address: string }[];
+  bcc?: readonly { name?: string; address: string }[];
   subject: string;
   text: string;
   html?: string;
