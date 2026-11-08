@@ -59,7 +59,8 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-md);
+/* 28px square: compact-md (14px) is exactly half, i.e. a circle. */
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 padding:0;
@@ -98,7 +99,7 @@ border:1px solid var(--line);
 background:var(--panel-solid);
 min-height:35px;
 color:var(--text-faint);
-border-radius:var(--radius-md);
+border-radius:var(--radius-compact-md);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 margin-bottom:8px;
@@ -145,7 +146,7 @@ display:grid
 .agent-conversation-row
 {
 border:1px solid #0000;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 min-width:0;
 position:relative;
 /* Conversation rails can hold hundreds of rows; offscreen rows skip render. */
@@ -161,7 +162,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 grid-template-columns:minmax(0,1fr) auto;
 align-items:start;
 gap:8px;
@@ -223,7 +224,7 @@ cursor:pointer;
 opacity:0;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 place-items:center;
 padding:0;
 display:grid;
@@ -234,7 +235,7 @@ right:5px
 .agent-row-delete:before
 {
 content:"";
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 position:absolute;
 inset:-4px
 }
@@ -269,7 +270,7 @@ margin:0
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 26%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 7%, var(--panel-muted));
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 padding:8px 8px;
@@ -289,7 +290,7 @@ background:var(--panel-solid);
 min-height:26px;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:4px 8px;
@@ -324,7 +325,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 place-items:center;
 padding:0;
 display:grid;
@@ -456,7 +457,7 @@ overflow:hidden
 border:1px solid color-mix(in srgb, var(--focus-ring) 42%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 10%, var(--panel-muted));
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 width:28px;
@@ -497,7 +498,7 @@ min-width:0
 flex:none;
 width:26px;
 height:26px;
-border-radius:var(--radius-sm)
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape)
 }
 .agent-conversation-heading form
 {
@@ -510,7 +511,7 @@ background:var(--panel-muted);
 width:min(330px,55vw);
 min-height:34px;
 color:var(--text);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 outline:none;
 padding:6px 8px;
 font-size:15px;
@@ -533,7 +534,7 @@ min-height:34px;
 color:var(--text-soft);
 white-space:nowrap;
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 padding:6px 8px;
@@ -644,7 +645,7 @@ display:none
 border:1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
 min-width:0;
 color:color-mix(in srgb, var(--danger) 82%, var(--text));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:5px 8px;
@@ -787,7 +788,7 @@ color:var(--text-soft);
 box-shadow:var(--shadow-sm);
 white-space:nowrap;
 text-overflow:ellipsis;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:8px 10px;
 font-size:10px;
 line-height:1.5;
@@ -810,7 +811,7 @@ border:1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
 background:color-mix(in srgb, var(--danger) 7%, var(--panel-muted));
 max-width:780px;
 color:var(--danger);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:flex-start;
 gap:10px;
 margin:0 auto 18px;
@@ -949,7 +950,7 @@ min-height:86px;
 color:var(--text-soft);
 cursor:pointer;
 text-align:left;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex-direction:column;
 align-items:flex-start;
 gap:8px;
@@ -1019,7 +1020,7 @@ border:1px solid var(--line);
 background:var(--panel-muted);
 min-height:20px;
 color:var(--text-soft);
-border-radius:5px;
+border-radius:var(--radius-xs);
 align-items:center;
 padding:3px 6px;
 font-size:11px;
@@ -1032,7 +1033,7 @@ border:1px solid color-mix(in srgb, var(--warning) 40%, var(--line));
 background:color-mix(in srgb, var(--warning) 8%, var(--panel-muted));
 min-height:20px;
 color:color-mix(in srgb, var(--warning) 80%, var(--text));
-border-radius:5px;
+border-radius:var(--radius-xs);
 align-items:center;
 padding:3px 6px;
 font-size:10px;
@@ -1087,7 +1088,7 @@ cursor:pointer;
 opacity:.8;
 background:0 0;
 border:1px solid #0000;
-border-radius:5px;
+border-radius:var(--radius-xs);
 place-items:center;
 padding:0;
 display:grid;
@@ -1133,7 +1134,7 @@ user-select:text!important
 border:1px solid color-mix(in srgb, var(--focus-ring) 18%, var(--line-strong));
 background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-solid));
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);corner-shape:var(--corner-shape);
 max-width:min(100%,630px); margin-left:auto; padding:10px 15px
 }
 .agent-message-content p
@@ -1150,7 +1151,7 @@ margin-bottom:0
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--canvas) 72%, var(--panel-solid));
 color:var(--text);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 margin:10px 0;
 padding:10px;
 font-family:Cascadia Code,Consolas,monospace;
@@ -1217,7 +1218,7 @@ appearance:none;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
 vertical-align:-2px;
-border-radius:3px;
+border-radius:var(--radius-xs);
 place-items:center;
 width:14px;
 height:14px;
@@ -1244,7 +1245,7 @@ transform:translateY(-1px)rotate(45deg)
 border:1px solid color-mix(in srgb, var(--focus-ring) 25%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 5%, transparent);
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 margin:10px 0;
 padding:6px 10px;
 font-size:12px
@@ -1258,7 +1259,7 @@ margin-bottom:0
 border:1px solid var(--line);
 background:var(--panel-muted);
 color:var(--text);
-border-radius:4px;
+border-radius:var(--radius-xs);
 padding:1px 4px;
 font-family:Cascadia Code,Consolas,monospace;
 font-size:.9em
@@ -1287,7 +1288,7 @@ text-decoration-color:currentColor
 {
 outline:2px solid var(--focus-ring);
 outline-offset:2px;
-border-radius:2px
+border-radius:var(--radius-xs)
 }
 .agent-message-content .agent-markdown-blocked-link,.agent-message-content .agent-markdown-image-blocked
 {
@@ -1304,7 +1305,7 @@ overflow:hidden
 }
 .agent-table-wrap
 {
-border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel-solid);
+border:1px solid var(--line); border-radius:var(--radius-sm);corner-shape:var(--corner-shape); background:var(--panel-solid);
 max-width:100%; margin:12px 0; overflow-x:auto
 }
 .agent-message-content table
@@ -1397,7 +1398,7 @@ padding:2px 0 14px
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 14%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 4%, transparent);
-border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);
+border-radius:var(--radius-md) var(--radius-md) var(--radius-xs) var(--radius-md);corner-shape:var(--corner-shape);
 max-width:min(100%,480px); width:320px; margin-left:auto; padding:10px 14px
 }
 .agent-message.skeleton.user .agent-skeleton-content { align-items:flex-end }
@@ -1410,13 +1411,13 @@ display:flex
 .agent-skeleton-line
 {
 height:11px;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 background:color-mix(in srgb, var(--text) 32%, transparent);
 animation:1.4s ease-in-out infinite agent-skeleton-sweep
 }
 .agent-skeleton-chrome
 {
-border-radius:4px;
+border-radius:var(--radius-xs);
 width:44px;
 height:8px;
 background:color-mix(in srgb, var(--text) 24%, transparent);
@@ -1453,7 +1454,7 @@ display:flex
 {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-muted) 55%, transparent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 min-height:32px;
@@ -1471,7 +1472,7 @@ background:color-mix(in srgb, var(--panel-solid) 70%, transparent);
 width:20px;
 height:20px;
 color:var(--text-faint);
-border-radius:5px;
+border-radius:var(--radius-xs);
 place-items:center;
 display:grid
 }
@@ -1520,7 +1521,7 @@ min-height:26px;
 color:var(--text-soft);
 cursor:pointer;
 background:0 0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 padding:4px 8px;
@@ -1680,7 +1681,7 @@ background:var(--panel-solid);
 color:var(--text-soft);
 cursor:pointer;
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-lg);
+border-radius:var(--radius-xl);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:5px 8px 5px 8px;
@@ -1706,7 +1707,7 @@ background:var(--panel-solid);
 width:280px;
 max-height:0;
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 transition:max-height .3s,opacity .2s;
 position:absolute;
 top:34px;
@@ -1827,7 +1828,7 @@ background:color-mix(in srgb, var(--panel-solid) 92%, var(--canvas));
 max-width:840px;
 max-height:360px;
 box-shadow:0 -8px 18px -12px color-mix(in srgb, var(--warning) 26%, transparent);
-border-radius:16px 16px 0 0;
+border-radius:var(--radius-lg) var(--radius-lg) 0 0;corner-shape:var(--corner-shape);
 margin:4px auto 0;
 padding:14px 16px 24px;
 /* The bottom edge tucks cleanly behind the composer instead of ending in an awkward gap,
@@ -1988,7 +1989,7 @@ display:block
 border:1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
 background:color-mix(in srgb, var(--danger) 9%, var(--panel-muted));
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 margin-top:8px;
@@ -2033,7 +2034,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 min-width:140px;
 box-shadow:var(--shadow-sm);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 padding:4px;
 position:fixed;
 transition:opacity .12s ease,transform .12s ease
@@ -2052,7 +2053,7 @@ text-align:left;
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:8px 10px;
@@ -2078,7 +2079,7 @@ display:flex
 {
 border:1px solid color-mix(in srgb, var(--focus-ring) 32%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:2px;
 min-width:0;
@@ -2090,7 +2091,7 @@ border:0;
 background:0 0;
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 min-width:0;
@@ -2130,7 +2131,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:5px;
+border-radius:var(--radius-xs);
 flex:none;
 place-items:center;
 padding:0;
@@ -2148,7 +2149,7 @@ border:1px solid color-mix(in srgb, var(--focus-ring) 30%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 6%, var(--panel-muted));
 max-width:840px;
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 margin:0 auto 6px;
@@ -2180,7 +2181,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:4px;
+border-radius:var(--radius-xs);
 flex:none;
 place-items:center;
 padding:0;
@@ -2191,7 +2192,7 @@ position:relative
 .agent-quote-preview button:before
 {
 content:"";
-border-radius:4px;
+border-radius:var(--radius-xs);
 position:absolute;
 inset:-6px
 }
@@ -2206,7 +2207,7 @@ border:1px solid color-mix(in srgb, var(--warning) 40%, var(--line));
 background:color-mix(in srgb, var(--warning) 8%, var(--panel-muted));
 max-width:840px;
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 margin:0 auto 6px;
@@ -2244,7 +2245,7 @@ color:var(--text-soft);
 cursor:pointer;
 padding:2px;
 margin-left:auto;
-border-radius:4px;
+border-radius:var(--radius-xs);
 display:flex
 }
 .agent-revoke-notice.error .agent-revoke-dismiss:hover
@@ -2257,7 +2258,7 @@ color:var(--text)
 border:1px solid color-mix(in srgb, var(--focus-ring) 25%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 5%, transparent);
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:flex-start;
 gap:4px;
 margin-bottom:8px;
@@ -2292,7 +2293,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 max-width:220px;
 color:var(--text-soft);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:4px 8px 4px 8px;
@@ -2354,7 +2355,7 @@ color:var(--danger)
 .agent-attachment-chip-note
 {
 letter-spacing:.02em;
-border-radius:5px;
+border-radius:var(--radius-xs);
 flex:none;
 padding:1px 5px;
 font-size:9px;
@@ -2380,7 +2381,7 @@ background:color-mix(in srgb, var(--text-faint) 10%, transparent)
 z-index:1;
 border:1px solid var(--line);
 background:var(--panel-solid);
-border-radius:18px;
+border-radius:var(--radius-xl);corner-shape:var(--corner-shape);
 flex-direction:column;
 gap:0;
 max-width:840px;
@@ -2449,7 +2450,7 @@ color:var(--text-faint)
 z-index:30;
 border:1px solid var(--line);
 background:var(--panel);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex-direction:column;
 gap:2px;
 max-height:320px;
@@ -2472,7 +2473,7 @@ text-align:left;
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:baseline;
 gap:8px;
 padding:8px 8px;
@@ -2529,7 +2530,7 @@ font-size:11px
 z-index:30;
 border:1px solid var(--line);
 background:var(--panel);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex-direction:column;
 gap:2px;
 max-height:248px;
@@ -2560,7 +2561,7 @@ text-align:left;
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:6px 8px;
@@ -2575,7 +2576,7 @@ background:var(--hover)
 {
 background:color-mix(in srgb, var(--accent) 14%, transparent);
 color:var(--accent);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 width:26px;
 height:26px;
 flex:none;
@@ -2627,7 +2628,7 @@ color:color-mix(in srgb, var(--danger) 82%, var(--text))
 .agent-memory-suggestion {
 border:1px solid var(--line);
 background:color-mix(in srgb, var(--panel-solid) 94%, var(--canvas));
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 box-shadow:0 2px 8px color-mix(in srgb, var(--text) 4%, transparent);
 padding:8px 12px;
 font-size:11px;
@@ -2684,7 +2685,7 @@ color:var(--text-faint);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 flex:none;
 place-items:center;
 padding:0;
@@ -2708,7 +2709,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:0 8px;
@@ -2754,7 +2755,7 @@ color:var(--text-soft);
 cursor:pointer;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:5px;
 padding:0 8px;
@@ -2800,7 +2801,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 opacity:0;
 pointer-events:none;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 width:max-content;
 min-width:100%;
 max-width:min(320px,100vw - 32px);
@@ -2855,7 +2856,7 @@ cursor:pointer;
 text-align:left;
 background:0 0;
 border:0;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:8px;
 padding:8px 8px;
@@ -2969,7 +2970,7 @@ display:flex
 border:1px solid var(--line-strong);
 background:var(--panel-muted);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 max-width:240px;
@@ -3009,7 +3010,7 @@ border:1px solid color-mix(in srgb, var(--focus-ring) 32%, var(--line));
 background:color-mix(in srgb, var(--focus-ring) 5%, var(--panel-muted));
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 max-width:280px;
@@ -3110,7 +3111,7 @@ background:var(--panel-muted);
 min-height:36px;
 color:var(--text);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 justify-content:center;
 align-items:center;
 gap:8px;

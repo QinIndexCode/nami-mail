@@ -107,7 +107,7 @@ overflow:hidden
 {
 border:1px solid var(--line);
 object-fit:contain;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 align-self:center;
 max-width:100%;
 max-height:100%
@@ -127,7 +127,7 @@ min-height:0;
 color:var(--text-soft);
 white-space:pre-wrap;
 word-break:break-word;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex:1;
 margin:0;
 padding:16px;
@@ -239,7 +239,7 @@ display:flex
 {
 border:1px solid var(--line);
 background:var(--canvas);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 max-width:100%;
 max-height:100%
 }
@@ -283,7 +283,7 @@ display:flex
 {
 border:1px solid var(--line-strong);
 background:#fff;
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 max-width:100%;
 height:auto;
 box-shadow:var(--shadow-raised)
@@ -300,7 +300,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-compact);corner-shape:var(--corner-shape);
 align-items:center;
 justify-content:center;
 width:26px;
@@ -330,7 +330,7 @@ border:1px solid var(--line-strong);
 background:var(--panel-muted);
 color:var(--text-soft);
 cursor:pointer;
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 align-items:center;
 gap:6px;
 padding:8px 12px;
@@ -403,7 +403,7 @@ font-weight:600
 .attachment-preview-sheet-scroll
 {
 border:1px solid var(--line);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 max-height:60vh;
 overflow:auto
 }
@@ -451,7 +451,7 @@ font-size:11px
 {
 border:1px solid var(--line);
 background:var(--panel-muted);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex:1;
 min-height:0;
 margin:0;
@@ -526,7 +526,7 @@ padding-inline-start:12px
 .attachment-preview-markdown code
 {
 background:var(--panel-muted);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 padding:1px 4px;
 font-family:var(--font-mono);
 font-size:12px
@@ -535,7 +535,7 @@ font-size:12px
 {
 border:1px solid var(--line);
 background:var(--panel-muted);
-border-radius:var(--radius-md);
+border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 padding:12px;
 overflow:auto
 }
@@ -562,7 +562,7 @@ text-decoration:underline dotted
 .attachment-preview-md-image
 {
 border:1px dashed var(--line-strong);
-border-radius:var(--radius-sm);
+border-radius:var(--radius-sm);corner-shape:var(--corner-shape);
 color:var(--text-faint);
 padding:1px 6px;
 font-size:11px

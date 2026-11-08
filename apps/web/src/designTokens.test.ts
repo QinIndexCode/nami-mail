@@ -40,6 +40,10 @@ const debtBudget = {
     "0 0 10px 10px": 1,
     "10px 10px 0 0": 1,
     "16px 16px 0 0": 1,
+    // Visual literals that follow the squircle compensation instead of a tier:
+    // the two 14px alert cards and the 70px empty-state orb's 24px.
+    "calc(14px * var(--squircle-scale))": 2,
+    "calc(24px * var(--squircle-scale))": 1,
   },
   /**
    * State halos — a tinted lift that expresses selection, hover, error or glow,
@@ -91,10 +95,11 @@ const debtBudget = {
 const ALLOWED_RADII = new Set(["0", "2px", "4px", "50%"]);
 
 function declarationsOf(property: string): string[] {
-  const matches = stylesheet.match(new RegExp(`^${property}:(.+)$`, "gm")) ?? [];
-  // Values may or may not carry the block's closing semicolon (it is only
-  // mandatory when another property follows), so normalise it away.
-  return matches.map((line) => line.slice(property.length + 1).replace(/;\s*$/, "").trim());
+  // Stop at the first semicolon: this stylesheet routinely packs several
+  // declarations onto one line (`border-radius:…;corner-shape:…`), and taking
+  // the rest of the line would fold the next property into the value.
+  const matches = stylesheet.match(new RegExp(`^${property}:([^;\\n]+)`, "gm")) ?? [];
+  return matches.map((line) => line.slice(property.length + 1).trim());
 }
 
 function countBy(values: readonly string[]): Record<string, number> {
@@ -104,7 +109,16 @@ function countBy(values: readonly string[]): Record<string, number> {
 }
 
 /** The radius tiers a `border-radius` value is allowed to reference. */
-const RADIUS_TOKENS = ["--radius-xs", "--radius-sm", "--radius-md", "--radius-lg", "--radius-pill"] as const;
+const RADIUS_TOKENS = [
+  "--radius-xs",
+  "--radius-sm",
+  "--radius-md",
+  "--radius-lg",
+  "--radius-xl",
+  "--radius-compact",
+  "--radius-compact-md",
+  "--radius-pill",
+] as const;
 
 describe("radius policy", () => {
   it("has no radius outside the documented budget", () => {
@@ -117,7 +131,9 @@ describe("radius policy", () => {
       // skip to `startsWith("var(--radius-")` is what let this family through
       // unchecked: it hid any shorthand whose *last* corner was a literal.
       const corners = value.split(/\s+/);
-      const allTiered = corners.every((corner) => /^var\(--radius-[\w-]+(?:,\s*\S+)?\)$/.test(corner));
+      const allTiered = corners.every(
+        (corner) => corner === "0" || /^var\(--radius-[\w-]+(?:,\s*\S+)?\)$/.test(corner),
+      );
       if (allTiered) continue;
       const budget = (debtBudget.offScaleRadius as Record<string, number>)[value];
       expect(budget, `border-radius:${value} is not one of the four tiers; use --radius-xs/sm/md/lg/pill`).toBeDefined();

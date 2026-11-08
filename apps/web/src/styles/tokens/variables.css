@@ -39,11 +39,21 @@ font-synthesis:none;
 --scrim-nested:#05050785;
 --scrim-alert:#05050794;
 --scrim-drawer:#0505078a;
+/* Radius tiers are visual sizes (xs 4 / sm 8 / md 12 / lg 16 / xl 20). A squircle
+   corner cuts ~42% less, so supporting engines get 1.72x the geometric radius;
+   everywhere else --squircle-scale stays 1 (plain-arc fallback, no layout shift). */
+--squircle-scale:1;
 --radius-xs:4px;
---radius-sm:8px;
---radius-md:12px;
---radius-lg:20px;
+--radius-sm:calc(8px * var(--squircle-scale));
+--radius-md:calc(12px * var(--squircle-scale));
+--radius-lg:calc(16px * var(--squircle-scale));
+--radius-xl:calc(20px * var(--squircle-scale));
+/* Compact controls: cap below half the control height, where a squircle would
+   collapse into a pill or circle. Fallback engines keep the plain 8/12px. */
+--radius-compact:min(var(--radius-sm),10px);
+--radius-compact-md:min(var(--radius-md),14px);
 --radius-pill:999px;
+--corner-shape:squircle;
 /* Prose measure for plain-text mail only. The reading column itself is fluid —
    it fills the reader pane the way Gmail does — because capping it reflows
    provider-authored HTML: a 600px-wide newsletter table squeezed into a narrower
@@ -57,6 +67,15 @@ font-synthesis:none;
 --font-ui:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable","Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
 --font-mono:ui-monospace,"SFMono-Regular",Consolas,monospace;
 font-family:var(--font-ui)
+}
+/* Measured in Chromium: squircle 14/21/28/34 read as round 8.1/12.2/16.2/19.7.
+   Only engines that render `corner-shape` see this; others keep scale 1. */
+@supports (corner-shape:squircle)
+{
+:root
+{
+--squircle-scale:1.72
+}
 }
 :root[data-theme=dark]
 {
