@@ -36,7 +36,8 @@ const mockT = (key: string) => {
 describe("settings-search", () => {
   it("covers all categories in the search index", () => {
     const categoriesInIndex = new Set(SETTINGS_SEARCH_INDEX.map((item) => item.categoryId));
-    expect(categoriesInIndex.size).toBe(11);
+    expect(categoriesInIndex.size).toBe(12);
+    expect(categoriesInIndex.has("data")).toBe(true);
     expect(categoriesInIndex.has("language")).toBe(true);
     expect(categoriesInIndex.has("appearance")).toBe(true);
     expect(categoriesInIndex.has("notifications")).toBe(true);

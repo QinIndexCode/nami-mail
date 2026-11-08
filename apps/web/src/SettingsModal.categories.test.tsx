@@ -123,7 +123,7 @@ describe("settings category navigation", () => {
     }
     // Browser runtime: the desktop category is not offered in the sidebar at all.
     expect(container.querySelector("#settings-nav-desktop")).toBeNull();
-    expect(container.querySelectorAll(".settings-nav-item").length).toBe(10);
+    expect(container.querySelectorAll(".settings-nav-item").length).toBe(11);
   });
 
   it("covers every category exactly once across the sidebar groups with translated labels", () => {
@@ -207,9 +207,9 @@ describe("settings category navigation", () => {
     const intelligence = SETTINGS_NAV_GROUPS.find((group) => group.key === "intelligence");
     expect(intelligence?.items).toEqual(["models", "mcp", "agent", "connections", "translation"]);
     const mail = SETTINGS_NAV_GROUPS.find((group) => group.key === "mail");
-    expect(mail?.items).toEqual(["sync", "filters"]);
-    // Eleven categories in total; only "desktop" is filtered out on the web.
-    expect(SETTINGS_CATEGORY_IDS).toHaveLength(11);
+    expect(mail?.items).toEqual(["sync", "data", "filters"]);
+    // Twelve categories in total; only "desktop" is filtered out on the web.
+    expect(SETTINGS_CATEGORY_IDS).toHaveLength(12);
   });
 
   it("lands on the deep-linked category on a cold mount, beating the persisted choice", () => {

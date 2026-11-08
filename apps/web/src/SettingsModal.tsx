@@ -1,3 +1,4 @@
+import SettingsDataPanel from "./settings/SettingsDataPanel";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type RefObject } from "react";
 import {
   Bell,
@@ -72,6 +73,7 @@ const categoryMeta: Record<SettingsCategoryId, { icon: LucideIcon; labelKey: str
   appearance: { icon: Palette, labelKey: "settings.appearance.title" },
   notifications: { icon: Bell, labelKey: "settings.notifications.title" },
   desktop: { icon: Laptop, labelKey: "settings.desktop.title" },
+  data: { icon: KeyRound, labelKey: "data.title" },
   sync: { icon: RefreshCw, labelKey: "settings.sync.title" },
   filters: { icon: Filter, labelKey: "settings.nav.filters.title" },
   models: { icon: Cpu, labelKey: "settings.nav.models.title" },
@@ -187,6 +189,9 @@ export default function SettingsModal({
   const [connectionsOverlayOpen, setConnectionsOverlayOpen] = useState(false);
   const [connectionsBusy, setConnectionsBusy] = useState(false);
   const [filtersOverlayOpen, setFiltersOverlayOpen] = useState(false);
+  // The data & privacy panel owns its own detail dialogs; while one is up, the
+  // settings modal yields Escape/close to it instead of closing underneath.
+  const [dataOverlayOpen, setDataOverlayOpen] = useState(false);
   // One visible panel at a time; the sidebar switches categories instead of
   // scrolling. The choice persists so reopening the modal lands where the user
   // left off, and a stored "desktop" is ignored on browser runtimes. A deep
@@ -214,11 +219,11 @@ export default function SettingsModal({
     // A models form, connections dialog or filter-rules modal stacked over the panel owns the interaction.
     // Switching now would unmount the panel under it and drop its draft without ever asking.
     // The nonce is deliberately not consumed: the deep link lands as soon as the overlay is gone.
-    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
     lastCategoryRequestNonceRef.current = categoryRequest.nonce;
     setActiveCategory(categoryRequest.category);
     if (settingsBody.current) settingsBody.current.scrollTop = 0;
-  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen]);
+  }, [categoryRequest, modelsOverlayOpen, filtersOverlayOpen, connectionsOverlayOpen, dataOverlayOpen]);
   // The embedded models panel hosts both inner tabs (providers / MCP servers);
   // switching them swaps the body in place so the panel never remounts.
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -237,7 +242,7 @@ export default function SettingsModal({
   // The header X and "done" therefore look like live buttons that silently do
   // nothing: they show as disabled and say why.
   const formsOverlayOpen = modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen;
-  const closeBlocked = controlsBusy || formsOverlayOpen;
+  const closeBlocked = controlsBusy || formsOverlayOpen || dataOverlayOpen;
   const closeBlockedHint = (modelsOverlayOpen || connectionsOverlayOpen) ? t("settings.models.formOpenHint") : null;
   const updatePresentation = updateStatus ? presentUpdateSnapshot(updateStatus, t) : null;
   const hasUnsavedTranslationDraft = hasUnsavedTranslationConfiguration(translationConfiguration, {
@@ -265,14 +270,14 @@ export default function SettingsModal({
     // Same yield Escape already makes below: a stacked models form, connections dialog or filter rules modal
     // owns the interaction. Closing here would unmount the panel under it and drop the
     // draft it holds without ever asking.
-    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+    if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
     if (hasUnsavedTranslationDraft) {
       resetConfirmClosing();
       setPendingConfirmation("discard-translation-changes");
       return;
     }
     requestExit();
-  }, [connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
+  }, [connectionsOverlayOpen, controlsBusy, dataOverlayOpen, filtersOverlayOpen, hasUnsavedTranslationDraft, modelsOverlayOpen, requestExit, resetConfirmClosing]);
 
   // The "configure model" entry (agent panel button, translation-discard
   // confirmation) now switches to the models category in place — the embedded
@@ -375,7 +380,7 @@ export default function SettingsModal({
       // The models form dialog, connections dialog or filter rules modal owns Escape while it is up. Yield before stopping the
       // event, otherwise the inner layer never sees it and this dialog would
       // close underneath the form.
-      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) return;
+      if (modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       if (controlsBusy) return;
@@ -391,9 +396,9 @@ export default function SettingsModal({
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
+  }, [backgroundUploadError, connectionsOverlayOpen, controlsBusy, dataOverlayOpen, filtersOverlayOpen, modelsOverlayOpen, pendingConfirmation, requestClose, requestConfirmClose, requestAlertClose, searchQuery]);
 
-  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen) });
+  useDialogFocus(true, settingsDialog, { fallbackFocusRef, suspended: Boolean(pendingConfirmation || backgroundUploadError || autoReplyDialogOpen || autoReplyDecisionsOpen || memoryDialogOpen || autoReplySandboxOpen || modelsOverlayOpen || filtersOverlayOpen || connectionsOverlayOpen || dataOverlayOpen) });
   useDialogFocus(Boolean(pendingConfirmation), confirmationDialog, { fallbackFocusRef: settingsDialog });
   useDialogFocus(Boolean(backgroundUploadError), backgroundAlert, { restoreFocusRef: uploadButton });
 
@@ -933,8 +938,8 @@ export default function SettingsModal({
   };
 
   // The record keys are the full category set, so TypeScript rejects a nav
-  // entry whose panel is missing (the old scroll-nav could point at nothing).
   const panels: Record<SettingsCategoryId, ReactNode> = {
+    data: <SettingsDataPanel demoMode={demoMode} onOverlayOpenChange={setDataOverlayOpen} />,
     language: (
       <SettingsLanguagePanel
         t={t}

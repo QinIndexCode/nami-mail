@@ -1,3 +1,5 @@
+import { useImagePrivacy, ImagePrivacyNotice } from "./imagePrivacy";
+import { draftRecipientFields } from "./submissionRecipients";
 import { lazy, Profiler, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { hasVisibleAttachments, visibleAttachments as visibleAttachmentParts } from "@nami/agent-contracts";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
@@ -1459,15 +1461,10 @@ const emptyMessageList = useMemo(() => (query.trim()
       ? { title: t("mail.empty.folderTitle", { folder: selectedFolderName || selectedFolder }), description: t("mail.empty.folderDescription"), canClearSearch: false }
       : { title: t("mail.empty.inboxTitle"), description: t("mail.empty.inboxDescription"), canClearSearch: false }), [query, selectedFolderName, selectedFolder, t, view]);
   const { issues: accountIssues, accountsNeedingAttention, primaryAccountNeedingAttention, primaryAccountIssue, healthAlert, dismissHealthAlert } = useAccountHealth(accounts, t);
+  const imagePrivacy = useImagePrivacy(selected?.id, isDemo);
   const safeHtml = useMemo(
-    // Sanitize first, then route remote images through the proxy: the renderer
-    // itself must not contact a mail's image host. The proxy request still
-    // leaves this machine at open time, so this does NOT prevent the sender
-    // from observing the open; blocking images by default or requiring
-    // per-message consent is still a product decision.
-    // `data:`, `cid:` and the server's inline-attachment URLs stay untouched.
-    () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark")) : "",
-    [selected?.htmlBody, theme],
+    () => selected?.htmlBody ? rewriteRemoteImagesToProxy(sanitizeMailHtml(selected.htmlBody, theme === "dark"), { messageId: selected.id }) : "",
+    [selected?.id, selected?.htmlBody, theme],
   );
   // Reply quotes collapse to a one-line toggle (Gmail-style). The fold lives
   // at render time: sanitization, the translation pipeline and reply quoting
@@ -1511,9 +1508,9 @@ const emptyMessageList = useMemo(() => (query.trim()
   const readerHtml = useMemo(() => {
     if (!safeHtml) return "";
     const translatedHtml = translationState.phase === "ready" && translationState.visible ? translationState.translatedHtml : null;
-    const body = translatedHtml ?? safeHtml;
+    const body = rewriteRemoteImagesToProxy(translatedHtml ?? safeHtml, { allowRemote: imagePrivacy.allowed, messageId: selected?.id });
     return quotedExpanded ? body : collapseQuotedMailHtml(body, t("mail.reader.showQuoted"));
-  }, [safeHtml, translationState, quotedExpanded, t]);
+  }, [safeHtml, translationState, quotedExpanded, t, imagePrivacy.allowed, selected?.id]);
   const readerTextSource = selected?.textBody || (selected?.snippet ? localizeMessageLinks(selected.snippet, locale) : "") || "";
   const readerTextParts = useMemo(
     () => quotedExpanded ? { body: readerTextSource, quote: "" } : splitQuotedMailText(readerTextSource),
@@ -1564,8 +1561,7 @@ const emptyMessageList = useMemo(() => (query.trim()
       }
       actions.openCompose({
         accountId: draft.accountId,
-        to: draft.to.map((recipient) => recipient.address).filter(Boolean).join(", "),
-        cc: draft.cc.map((recipient) => recipient.address).filter(Boolean).join(", "),
+        ...draftRecipientFields(draft),
         subject: draft.subject,
         text: draft.textBody || draft.snippet,
         inReplyTo: draft.inReplyTo ?? undefined,
@@ -2818,6 +2814,7 @@ const emptyMessageList = useMemo(() => (query.trim()
           cancelTranslation={cancelTranslation}
           setForceShowTranslationId={setForceShowTranslationId}
           readerHtml={readerHtml}
+          imagePrivacyNotice={safeHtml.includes("/api/images/proxy") ? <ImagePrivacyNotice privacy={imagePrivacy} /> : undefined}
           readerTextParts={readerTextParts}
           readerTextSource={readerTextSource}
           setQuotedExpanded={setQuotedExpanded}

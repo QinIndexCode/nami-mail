@@ -172,7 +172,20 @@ describe("styles.css size ratchet", () => {
   // 合 18_577 行，阈值取实测 +12 缓冲。下轮 CSS 瘦身时应优先收回。
   const FROZEN_ROOT_MAX_LINES = 40;
   // 2026-10-28 邮件撰写器 Markdown 模式、格式化工具栏与实时/分屏预览（18_279 → 18_575）：新增 Markdown 工具栏、视图模式切换、最大化分屏渲染容器、富文本预览排版（标题/引用/代码/表格）与字数统计（实测 18_563 行 + 12 缓冲）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_589;
+  // 2026-11-07 数据与隐私、恢复预览及图片提示居中/窄窗样式：新增独立 data-privacy.css；随后设置页问号提示与布局对齐（data-privacy.css 分组标题/首行分隔线/共享 note 字号、settings.css 独立操作键恢复 36px）实测 18_646 行，阈值取实测 +12 行缓冲。
+  // 2026-11-07 圆角连续曲率（squircle）补偿与紧凑控件档位：tokens/variables.css 增加
+  // --squircle-scale / --radius-compact(+md) 与 @supports 说明，mail.css 恢复 70px orb
+  // 的 24px 基线注释，实测 18_673 行，阈值取实测 +12 行缓冲。
+  // 2026-11-08 有记录的一次上调（18_685 → 18_715）：「设置-数据与隐私」改为一级入口行
+  // + 三个二级弹窗（方案 C）。data-privacy.css 重写：删掉旧流程化区块
+  // （.settings-data-block / -fields / 内联 h4 与段落规则），新增统一图标槽
+  // .settings-data-icon（固定尺寸 + 显式 svg 尺寸，取代各处 line-height / 负 margin
+  // 硬顶）、入口行 .settings-data-entry 及标签/状态值/箭头三段、弹窗外壳
+  // .settings-data-dialog(-head/-body/-actions)、说明行 .settings-data-note
+  // （图标槽按首行行高对齐）。净 +30 行（实测 18_703），阈值取实测 +12 行缓冲。
+  // 下轮 CSS 瘦身时应优先收回：入口行三段文字可合并为一条规则，弹窗外壳与
+  // overlays/modals.css 的 .settings-model-* 已有重复，可整体收敛。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_715;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

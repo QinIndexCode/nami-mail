@@ -1,4 +1,5 @@
 import http from "node:http";
+import { writeImagePolicy } from "../src/image-policy.js";
 import type { AddressInfo } from "node:net";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,6 +54,7 @@ describe("GET /api/images/proxy", () => {
   beforeEach(async () => {
     db = openDatabase(":memory:");
     app = await buildApp({ db, masterKey });
+    writeImagePolicy(db, masterKey, { mode: "allow", trustedSenders: [] });
     // proxyImage refuses loopback hosts by design, so the fixture is reached
     // through a public-looking origin and only the DNS step is pinned — the same
     // seam `image-proxy.test.ts` uses. The address policy itself is covered there.
