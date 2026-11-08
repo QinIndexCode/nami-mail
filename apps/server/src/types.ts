@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from "./db.js";
+import type { PortableBackupService } from "./portable-backup.js";
 import type { AccountLifecycleStore } from "./agent/lifecycle.js";
 import type { AgentMailStateEvents } from "./agent/mail-state-events.js";
 import type { AgentService } from "./agent-service.js";
@@ -54,6 +55,7 @@ export type AccountRecord = {
 };
 
 export type RuntimeContext = {
+  portableBackup?: PortableBackupService;
   db: DatabaseHandle;
   masterKey: Buffer;
   // Runtime-owned Agent bridge for mail-state events and account lifecycle

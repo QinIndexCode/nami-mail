@@ -20,6 +20,9 @@ import { registerTemplateRoutes } from "./routes/templates.js";
 import { registerOAuthRoutes } from "./routes/oauth.js";
 import { registerEventsRoutes } from "./routes/events.js";
 import { registerBackupRoutes } from "./routes/backup.js";
+import { registerImagePolicyRoutes } from "./routes/image-policy.js";
+import { registerPortableBackupRoutes } from "./routes/portable-backup.js";
+import { registerTaskRecoveryRoutes } from "./routes/task-recovery.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
@@ -646,6 +649,8 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   });
 
   registerBackupRoutes(app, { context, log: app.log });
+  registerImagePolicyRoutes(app, context);
+  registerPortableBackupRoutes(app, context);
 
   registerBatchJobRoutes(app, { context, scheduler });
   // The task layer's own read surface: `/api/tasks/:id` answers about a `tasks`
@@ -655,6 +660,7 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   // because a second write layer survives: every write path this build mounts goes
   // through the task layer.
   registerTaskRoutes(app, { context });
+  registerTaskRecoveryRoutes(app, context, scheduler);
   notePhase("build:register-remaining-routes");
 
   // Superseded, in place: this endpoint used to be a single statement with two

@@ -102,10 +102,10 @@ export function deleteMessagesWithBatchFtsCleanup<T>(
 // v3 is the count-column deletion (contract §3.6): sidebar counts come from
 // `messages`, and the two account-scoped list indexes are rebuilt rather than
 // merely created (`CREATE INDEX IF NOT EXISTS` matches on name alone).
-// v4 adds the acceptance-time UID generation to `task_items`: a queued write
-// must prove its UID still belongs to the generation it was accepted in, since
-// a rebuild can hand that number to another message.
-export const SCHEMA_VERSION = 4;
+// v4 freezes task UID generations to reject stale remote targets.
+// v5 gates recipient-aware sends and durable auto-reply recovery:
+// an older runner must not dispatch a newer BCC request.
+export const SCHEMA_VERSION = 5;
 
 /**
  * Optional behavior for `openDatabase`. The only production caller passes

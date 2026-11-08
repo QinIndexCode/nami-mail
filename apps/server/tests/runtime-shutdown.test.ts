@@ -63,7 +63,7 @@ vi.mock("../src/agent/source-events.js", () => ({
 vi.mock("../src/app.js", () => ({ buildApp: mocks.buildApp }));
 vi.mock("../src/config.js", () => ({ config: mocks.config }));
 vi.mock("../src/crypto.js", () => ({ loadOrCreateMasterKey: mocks.loadOrCreateMasterKey }));
-vi.mock("../src/db.js", () => ({ openDatabase: mocks.openDatabase }));
+vi.mock("../src/db.js", () => ({ openDatabase: mocks.openDatabase, SCHEMA_VERSION: 5 }));
 vi.mock("../src/idle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof idleModule>();
   return {

@@ -1,5 +1,7 @@
 import { MESSAGE_FTS_SCHEMA_SQL } from "./message-search.js";
 import { TASKS_SCHEMA_SQL } from "./tasks/schema.js";
+import { AUTO_REPLY_WORK_SCHEMA_SQL } from "./agent/auto-reply-schema.js";
+import { TASK_RECOVERY_SCHEMA_SQL } from "./tasks/recovery-schema.js";
 
 export const MESSAGES_FTS_AFTER_DELETE_TRIGGER_SQL = `
 CREATE TRIGGER IF NOT EXISTS messages_fts_after_delete
@@ -291,6 +293,8 @@ CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_account_occurred
 CREATE INDEX IF NOT EXISTS idx_auto_reply_processed_thread
   ON auto_reply_processed(thread_key);
 
+${AUTO_REPLY_WORK_SCHEMA_SQL}
+
 -- Audit of auto-reply declines and failures. Sender/subject/detail are
 -- encrypted with a derived master-key envelope; reason/thread_key/occurred_at
 -- stay plaintext so the review dialog can filter without decrypting rows.
@@ -410,4 +414,5 @@ ${MESSAGE_FTS_SCHEMA_SQL}
 -- Keep the search index aligned when messages disappear through any delete
 -- path, including a cascading account deletion.
 ${MESSAGES_FTS_AFTER_DELETE_TRIGGER_SQL}
+${TASK_RECOVERY_SCHEMA_SQL}
 `;

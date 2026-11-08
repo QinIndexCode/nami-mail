@@ -368,7 +368,7 @@ function toDeliveryTask(row: DeliveryTaskRow): DeliveryTask {
  * `cancelled` is deliberately NOT part of the attention half: it is a stop
  * somebody asked for (the user, or a shutdown), not a delivery that went wrong,
  * and a panel that reports every cancelled snooze as a problem is a panel people
- * learn to ignore. `completed` is out for the plainer reason that it delivered.
+ * learn to ignore. `completed` is out unless its item failure count is positive.
  * A terminal status this build has never heard of therefore lands in `attention`
  * by default -- the fail-loud direction, since an unaccounted-for ending is
  * likelier to want a human than to want hiding.
@@ -395,9 +395,10 @@ export function deliveryTaskList(db: DatabaseHandle, now: number = Date.now()): 
     .all(...terminal, DELIVERY_SYNCING_LIMIT) as DeliveryTaskRow[];
   const attention = db
     .prepare(`${DELIVERY_TASK_SELECT}
-       WHERE t.status IN (${placeholders(problems.length)})
+       WHERE (t.status IN (${placeholders(problems.length)}) OR (t.status = 'completed' AND t.failed > 0))
          AND t.completed_at IS NOT NULL
          AND t.completed_at >= ?
+         AND NOT EXISTS(SELECT 1 FROM task_acknowledgements ack WHERE ack.task_id=t.id)
        ORDER BY t.completed_at DESC, t.rowid DESC
        LIMIT ?`)
     .all(...problems, now - TASK_TERMINAL_ROW_TTL_MS, DELIVERY_ATTENTION_LIMIT) as DeliveryTaskRow[];

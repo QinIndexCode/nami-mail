@@ -46,12 +46,10 @@ function withProgress(list: DeliveryTaskList, progress: TaskProgressPayload): De
 /**
  * Whether a settled task is one the panel lists.
  *
- * `completed` and `cancelled` are the two terminal statuses the server's own
- * projection keeps OUT of `attention` (its `nonProblems` set), so a frame
- * carrying one means the row is done with the panel entirely and can go now
- * instead of after the next read. The other two (`failed`, `unknown_delivery`)
- * belong in `attention`, but the row that lands there carries the error the
- * server recorded — so the read is what puts it there, not this hook guessing.
+ * `completed` and `cancelled` can leave immediately, except for completed rows
+ * with known item failures, which applySettled retains until the next read.
+ * The authoritative read moves failures into `attention` with their recorded
+ * error; a settlement frame alone does not contain enough evidence to do so.
  */
 function leavesThePanel(status: TaskSettledPayload["status"]): boolean {
   return status === "completed" || status === "cancelled";
@@ -148,8 +146,8 @@ export function useCloudSyncTasks(enabled: boolean): CloudSyncTasks {
     epochRef.current += 1;
     knownIdsRef.current.delete(settled.taskId);
     setList((current) => ({
-      syncing: current.syncing.filter((task) => task.id !== settled.taskId),
-      attention: current.attention.filter((task) => task.id !== settled.taskId),
+      syncing: current.syncing.filter((task) => task.id !== settled.taskId || (settled.status === "completed" && task.failed > 0)),
+      attention: current.attention.filter((task) => task.id !== settled.taskId || (settled.status === "completed" && task.failed > 0)),
     }));
     scheduleRead();
   }, [scheduleRead]);
