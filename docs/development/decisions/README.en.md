@@ -40,3 +40,5 @@ Not needed: the shape of a single endpoint, UI interaction details, a one-off bu
 |---|---|---|---|
 | [0001](0001-2026-10-task-layer.en.md) | One task layer and derived counts | accepted (2026-10) | Server write paths, HTTP contract, web list state |
 | [0002](0002-2026-10-attachment-preview.en.md) | A four-stage attachment preview and one budget | accepted (2026-10) | Renderer fetch and preview, preview budgets and failure codes, CSP and top-level navigation |
+| [0003](0003-2026-11-mail-result-correctness.en.md) | Recipient privacy and background delivery results | accepted (2026-11) | BCC, outbound results, auto-reply recovery and visible failure |
+| [0004](0004-recovery-backup-image-privacy.en.md) | Recovery, portable backups and image authorization | Accepted (2026-11) | Task recovery, data generations, image privacy and settings |
