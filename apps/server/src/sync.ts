@@ -5,6 +5,7 @@ import { simpleParser } from "mailparser";
 import { attachmentMetadataFromParsedMail } from "./attachments.js";
 import { attachmentKindsJson } from "./attachment-kind.js";
 import type { AgentMailEventSink } from "./agent/mail-state-events.js";
+import { enqueueAutoReplyMessage } from "./agent/auto-reply-work.js";
 import { deleteMessagesWithBatchFtsCleanup, type DatabaseHandle } from "./db.js";
 import { remoteIdLookup } from "./message-remote-id.js";
 import { friendlyMailError, imapClientForAccount, mailErrorCode, type AccountAccessTokenProvider } from "./mail.js";
@@ -190,15 +191,12 @@ export async function syncAccount(
   const agentLease = agentEvents?.acquireLease(accountId);
   markAccountSyncing(accountId);
 let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
-  // New inbox messages from a successful pass are handed to the filter-rule
-  // automation only after the sync guard below is released.
+  // Inbox work is accepted atomically; automation starts after the sync guard releases.
   let pendingRuleTargets: Array<{ id: string }> = [];
   let pendingAutoReplyTargets: string[] = [];
-  // Gmail category labels are fetched for every folder only while this
-  // account is actively participating in the auto-reply feature.
+  // Fetch Gmail category labels only for accounts participating in auto-reply.
   const autoReplyActive = autoReplyActiveForAccount(db, accountId);
-  // A caller that injects nothing keeps the rotation shared across passes; one
-  // that owns a state gets an isolated sweep (see sync-deletion-probe.ts).
+  // Explicit deletion state gets an isolated sweep; other callers share the rotation.
   const deletionProbe = deletionProbeState ?? defaultRemoteDeletionProbeState();
 
   try {
@@ -963,6 +961,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
           };
           const recipients = addressValues(parsed?.to);
           const copiedRecipients = addressValues(parsed?.cc);
+          const blindRecipients = addressValues(parsed?.bcc);
           const messageId = messageIdValues(parsed?.messageId ?? message.envelope?.messageId)[0] ?? null;
           const inReplyTo = messageIdValues(parsed?.inReplyTo)[0] ?? null;
           const references = messageIdValues(parsed?.references);
@@ -995,6 +994,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
             fromAddress: from.address,
             to: recipients,
             cc: copiedRecipients,
+            bcc: blindRecipients,
             inReplyTo,
             references,
             snippet: snippet(text || htmlToSnippetText(html)),
@@ -1031,6 +1031,9 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
               payloadMetadataReady: 1,
               createdAt: new Date().toISOString(),
             });
+            if (autoReplyActive && newUidSet.has(message.uid) && (folder.specialUse === "\\Inbox" || folder.path.toUpperCase() === "INBOX") && !flags.includes("\\Seen")) {
+              enqueueAutoReplyMessage(db, accountId, id, new Date().toISOString());
+            }
             // The search index mirrors the decrypted payload text so a later
             // FTS query never needs to decrypt the whole candidate set.
             indexMessageFts(db, id, {
