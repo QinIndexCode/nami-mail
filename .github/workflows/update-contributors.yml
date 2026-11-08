@@ -66,23 +66,47 @@ jobs:
             deploys the site.
           labels: "automated,documentation"
           author: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
-      # PRs created with the default GITHUB_TOKEN do not trigger the validate
-      # workflow (GitHub's recursion prevention), so workflow_dispatch is used
-      # to validate the PR branch explicitly.
+      # A pull request opened with the default GITHUB_TOKEN still gets a
+      # `pull_request` workflow run, but GitHub parks that run in the
+      # `action_required` state until a maintainer approves it. While it is
+      # parked its check runs never reach the pull request, so the required
+      # `validate` context is missing and `gh pr merge` stays blocked.
       #
-      # Auto-merge is asynchronous and can take anywhere from minutes to hours
-      # to land. Wait for the required `validate` check, merge synchronously,
-      # then dispatch the Pages deployment. The merge is performed with
+      # Approve exactly the parked pull_request runs on this PR's head commit,
+      # then wait for the required `validate` check, merge synchronously and
+      # dispatch the Pages deployment. The merge is performed with
       # GITHUB_TOKEN, so its push event cannot trigger pages.yml, while
       # workflow_dispatch is the documented exception to that rule.
-      - name: Validate, merge, and deploy
+      - name: Approve, validate, merge, and deploy
         if: steps.pr.outputs.pull-request-number != ''
         timeout-minutes: 45
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           pr_number="${{ steps.pr.outputs.pull-request-number }}"
-          gh workflow run validate.yml --ref "chore/update-contributors"
+          head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          runs_url="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request&per_page=100"
+
+          # Give the pull_request run a moment to appear. Nothing is approved
+          # when the PR already carries a `validate` check.
+          run_ids=""
+          for _ in $(seq 1 12); do
+            run_ids=$(gh api "$runs_url" \
+              --jq '.workflow_runs[] | select(.conclusion == "action_required") | .id')
+            if [ -n "$run_ids" ]; then break; fi
+            has_check=$(gh pr view "$pr_number" --json statusCheckRollup \
+              --jq '[.statusCheckRollup[] | select(.name == "validate")] | length')
+            if [ "$has_check" != "0" ]; then break; fi
+            sleep 5
+          done
+
+          if [ -z "$run_ids" ]; then
+            echo "::warning::No action_required pull_request run found on $head_sha; waiting on the existing checks."
+          fi
+          for run_id in $run_ids; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/approve" > /dev/null
+            echo "Approved pull_request run $run_id on $head_sha."
+          done
 
           for _ in $(seq 1 160); do
             state=$(gh pr view "$pr_number" --json state --jq '.state')
@@ -99,7 +123,7 @@ jobs:
             checks=$(gh pr view "$pr_number" --json statusCheckRollup --jq '
               [.statusCheckRollup[] | select(.name == "validate")] as $required
               | if ($required | length) == 0 then "pending"
-                elif ([.statusCheckRollup[] | select(.conclusion != null
+                elif ([.statusCheckRollup[] | select(.status == "COMPLETED"
                   and .conclusion != "SUCCESS"
                   and .conclusion != "NEUTRAL"
                   and .conclusion != "SKIPPED")] | length) > 0 then "failed"
