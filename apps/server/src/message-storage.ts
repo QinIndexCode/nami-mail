@@ -421,7 +421,7 @@ export function messagePayloadForRow(row: MessageStorageRow, masterKey: Buffer):
       return payload;
     } catch (error) {
       if (error instanceof Error && error.message === "Encrypted message payload is invalid.") throw error;
-      throw new Error("Encrypted message payload is invalid.");
+      throw new Error("Encrypted message payload is invalid.", { cause: error });
     }
   });
 }

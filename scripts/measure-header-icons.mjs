@@ -29,7 +29,7 @@ try {
       const cs = getComputedStyle(el);
       let union = null;
       for (const g of els) {
-        let b = null;
+        let b;
         try {
           b = g.getBBox({ stroke: true });
         } catch {

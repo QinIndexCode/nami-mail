@@ -130,7 +130,7 @@ export class ToolRegistry {
       );
     }
 
-    let accountIds: readonly string[] = [];
+    let accountIds: readonly string[];
     try {
       accountIds = [...new Set(tool.resolveAccountIds?.(input.data) ?? [])];
     } catch {

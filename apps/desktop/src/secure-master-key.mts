@@ -31,7 +31,7 @@ function unavailableSecureStorageError(): Error {
 }
 
 function assertSecureStorageAvailable(safeStorage: DesktopSafeStorage): void {
-  let available = false;
+  let available: boolean;
   try {
     available = safeStorage.isEncryptionAvailable();
   } catch {

@@ -242,7 +242,7 @@ function quarantineCorruptMeta(reason: string): void {
  * marker) is gone, and the legacy branch is no longer taken.
  */
 function discardLegacyDirectory(reason: string): void {
-  let names: string[] = [];
+  let names: string[];
   try {
     names = fs.readdirSync(CACHE_DIR);
   } catch {

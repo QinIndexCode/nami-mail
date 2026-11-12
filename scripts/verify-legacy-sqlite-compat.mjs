@@ -47,6 +47,7 @@ async function assertLegacyElectronRuntime() {
     if (error?.code !== "ENOENT") throw error;
     throw new Error(
       `The legacy Electron runtime is missing. In the isolated legacy worktree, run node node_modules/electron/install.js, then npm.cmd run rebuild:electron before rerunning this command: ${legacyElectronExecutable}`,
+      { cause: error },
     );
   }
 }

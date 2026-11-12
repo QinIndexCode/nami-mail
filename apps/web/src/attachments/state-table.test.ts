@@ -59,7 +59,7 @@ async function codeFrom(run: () => Promise<unknown> | unknown): Promise<FailureC
     await run();
   } catch (error) {
     const normalized = failureFromUnknown(error);
-    if (normalized instanceof PreviewCanceled) throw new Error("construction was cancelled, not failed");
+    if (normalized instanceof PreviewCanceled) throw new Error("construction was cancelled, not failed", { cause: error });
     return normalized.code;
   }
   throw new Error("the construction did not fail");

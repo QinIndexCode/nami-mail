@@ -229,7 +229,7 @@ function parseLocalePack(file, source) {
     return JSON.parse(source);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${file} contains invalid JSON: ${reason}`);
+    throw new Error(`${file} contains invalid JSON: ${reason}`, { cause: error });
   }
 }
 
