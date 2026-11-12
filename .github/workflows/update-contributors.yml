@@ -4,6 +4,10 @@ name: Update contributors
 # GitHub Actions allows scheduled runs as frequent as every 5 minutes;
 # once per day is well within limits and consumes only 1–2 API calls
 # against the 5 000 req/h GITHUB_TOKEN quota.
+#
+# Scheduled runs are queued by GitHub and routinely start hours after the cron
+# time (observed 09:20–10:35 UTC for this "0 3 * * *" schedule), so judge a day's
+# run by the UTC-morning window, not by 03:00 UTC. Do not "fix" the cron offset.
 on:
   schedule:
     - cron: "0 3 * * *"
