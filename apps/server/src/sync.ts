@@ -236,7 +236,7 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     for (const folder of folders) {
       let status: { messages?: number; unseen?: number } = {};
       try {
-        status = await client.status(folder.path, { messages: true, unseen: true });
+        status = (await client.status(folder.path, { messages: true, unseen: true })) || {}; // false keeps the last observation
       } catch {
         // Some providers do not permit STATUS for every virtual folder.
       }
