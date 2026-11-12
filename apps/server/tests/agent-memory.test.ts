@@ -48,7 +48,9 @@ describe("Agent memory store", () => {
         SELECT encrypted_payload FROM agent_memory_records WHERE record_id = ?
       `).get(created.id) as { encrypted_payload: string };
       expect(row.encrypted_payload).not.toContain("机密记忆内容");
-      expect(row.encrypted_payload).not.toContain("note");
+      // The quoted form, not the bare word: the ciphertext is base64url, which
+      // spells "note" by chance about once in forty thousand runs.
+      expect(row.encrypted_payload).not.toContain('"note"');
       expect(row.encrypted_payload).toContain("nami-agent-root-envelope-v1");
     } finally {
       db.close();
