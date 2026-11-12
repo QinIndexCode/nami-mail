@@ -791,9 +791,9 @@ describe("DatePicker (Escape layering)", () => {
   });
 
   it("lets a live time dropdown take Escape before the panel does", async () => {
-    // The time selects render their menus inline inside the panel; the claim
-    // stands down while one is open so the menu peels first, then the panel
-    // on the next press.
+    // The time selects portal their menus to body; the claim stands down while
+    // one is open (it asks the trigger, not the panel subtree) so the menu peels
+    // first, then the panel on the next press.
     mountWith(
       <I18nProvider>
         <DatePicker mode="datetime" value="2026-08-14T14:30" onChange={() => undefined} aria-label="选择日期" />

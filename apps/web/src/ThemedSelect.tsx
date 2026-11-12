@@ -10,8 +10,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { useI18n } from "./i18n";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
+import { useFloatingPanel } from "./hooks/useFloatingPanel";
 
 type SelectOption = {
   value: string;
@@ -33,6 +35,10 @@ type ThemedSelectProps = {
   disabled?: boolean;
   className?: string;
   containerClassName?: string;
+  /**
+   * Preferred side for the menu. `flip()` still picks the other side when this
+   * one has no room, so this is a hint, not an override.
+   */
   menuPlacement?: "bottom" | "top";
   "aria-describedby"?: string;
   "aria-invalid"?: boolean | "true" | "false";
@@ -72,8 +78,33 @@ function extractOptions(children: ReactNode, group?: string): SelectOption[] {
 }
 
 /**
+ * Whether a listbox owned by a trigger inside `scope` is open (and not already
+ * playing its exit transition).
+ *
+ * Menus are portaled to document.body, so they are no longer descendants of a
+ * panel that hosts their trigger. Callers that layer Escape (the date picker
+ * panel) must ask this instead of querying `.themed-select-menu` inside
+ * themselves — the trigger stays where it was rendered, and `aria-controls`
+ * names the listbox it currently owns.
+ */
+export function hasOpenSelectMenuWithin(scope: HTMLElement): boolean {
+  return Array.from(scope.querySelectorAll<HTMLElement>('[role="combobox"][aria-expanded="true"]')).some((trigger) => {
+    const menuId = trigger.getAttribute("aria-controls");
+    const menu = menuId ? document.getElementById(menuId) : null;
+    return menu !== null && !menu.classList.contains("closing");
+  });
+}
+
+/**
  * A theme-owned listbox. It keeps the select interaction keyboard-accessible
  * while avoiding the browser's platform-specific option popup.
+ *
+ * The menu is portaled to document.body and placed by floating-ui: every dialog
+ * card clips its overflow and the settings body is its own scroll container, so
+ * an in-flow menu both stretched its container (the bug this replaces) and got
+ * cut off in narrow rows. Focus stays on the trigger throughout — options are
+ * `tabIndex={-1}` and mousedown is cancelled — so the portaled menu never needs
+ * registering with a dialog's focus trap.
  */
 export default function ThemedSelect({
   id,
@@ -108,15 +139,30 @@ export default function ThemedSelect({
   const [activeValue, setActiveValue] = useState(selectedEnabledValue);
   const rootRef = useRef<HTMLSpanElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLSpanElement>(null);
   const listboxId = useId();
   const activeIndex = options.findIndex((option) => option.value === activeValue);
   const activeOptionId = open && activeIndex >= 0 ? `${listboxId}-${activeIndex}` : undefined;
+  const isDropup = menuPlacement === "top" || containerClassName.includes("dropup");
+
+  useFloatingPanel({
+    open,
+    triggerRef,
+    panelRef: menuRef,
+    placement: isDropup ? "top-start" : "bottom-start",
+    matchTriggerWidth: true,
+  });
 
   useEffect(() => {
     if (!open) return undefined;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target;
-      if (!(target instanceof Node) || !rootRef.current?.contains(target)) beginMenuClose();
+      if (!(target instanceof Node)) return;
+      // The menu is portaled out of the trigger wrapper, so the check must
+      // cover it explicitly or the press that picks an option closes the menu
+      // before the option's click handler runs.
+      if (rootRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      beginMenuClose();
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -190,46 +236,49 @@ export default function ThemedSelect({
     }
   };
 
-    const isDropup = menuPlacement === "top" || containerClassName.includes("dropup");
-    return (
-      <span
-        ref={rootRef}
-        className={`select-control${isDropup ? " dropup" : ""} ${containerClassName}`.trim()}
-        onBlur={(event) => {
-          const nextFocusTarget = event.relatedTarget;
-          if (!(nextFocusTarget instanceof Node) || !rootRef.current?.contains(nextFocusTarget)) beginMenuClose();
+  return (
+    <span
+      ref={rootRef}
+      className={`select-control${isDropup ? " dropup" : ""} ${containerClassName}`.trim()}
+      onBlur={(event) => {
+        const nextFocusTarget = event.relatedTarget;
+        if (
+          !(nextFocusTarget instanceof Node)
+          || (!rootRef.current?.contains(nextFocusTarget) && !menuRef.current?.contains(nextFocusTarget))
+        ) beginMenuClose();
+      }}
+    >
+      <button
+        ref={triggerRef}
+        id={id}
+        className={`themed-select ${className}`.trim()}
+        type="button"
+        role="combobox"
+        aria-describedby={ariaDescribedBy}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={activeOptionId}
+        aria-invalid={ariaInvalid}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) {
+            if (open) beginMenuClose();
+            else openMenu();
+          }
         }}
+        onKeyDown={handleKeyDown}
       >
-        <button
-          ref={triggerRef}
-          id={id}
-          className={`themed-select ${className}`.trim()}
-          type="button"
-          role="combobox"
-          aria-describedby={ariaDescribedBy}
-          aria-expanded={open}
-          aria-haspopup="listbox"
-          aria-controls={open ? listboxId : undefined}
-          aria-activedescendant={activeOptionId}
-          aria-invalid={ariaInvalid}
-          aria-label={ariaLabel}
-          disabled={disabled}
-          onClick={() => {
-            if (!disabled) {
-              if (open) beginMenuClose();
-              else openMenu();
-            }
-          }}
-          onKeyDown={handleKeyDown}
-        >
-          <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
-          <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
-        </button>
-        {menuMounted && (
-          <span
-            id={listboxId}
-            className={`themed-select-menu${isDropup ? " dropup" : ""}${menuClosing ? " closing" : ""}`}
-            role="listbox"
+        <span className="themed-select-value">{selected?.label ?? t("common.notSelected")}</span>
+        <ChevronDown className={`select-control-icon${open ? " open" : ""}`} size={15} aria-hidden="true" />
+      </button>
+      {menuMounted && createPortal(
+        <span
+          ref={menuRef}
+          id={listboxId}
+          className={`themed-select-menu${menuClosing ? " closing" : ""}`}
+          role="listbox"
           aria-label={ariaLabel}
           aria-labelledby={ariaLabel ? undefined : id}
         >
@@ -269,7 +318,8 @@ export default function ThemedSelect({
               </span>
             );
           })}
-        </span>
+        </span>,
+        document.body,
       )}
     </span>
   );

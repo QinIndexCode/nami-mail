@@ -374,8 +374,9 @@ opacity:.6
 	padding:11px;
 	animation:.16s cubic-bezier(.2,.8,.2,1) both popup-in;
 	position:fixed;
-	/* The floating-ui size() middleware caps maxHeight to the viewport space;
-	   scrolling keeps the nav row reachable when neither flip side fits. */
+	/* useFloatingPanel publishes the viewport's height budget here; scrolling
+	   keeps the nav row reachable when neither flip side fits. */
+	max-height:var(--floating-panel-max-height,100dvh);
 	overflow-y:auto
 }
 .date-picker-nav
@@ -584,10 +585,6 @@ border:1px solid var(--line-strong);
 background:var(--panel-solid);
 color:var(--text);
 border-radius:var(--radius-compact);corner-shape:var(--corner-shape)
-}
-.date-picker-time-segments .themed-select-menu
-{
-width:64px
 }
 .date-picker-select:focus
 {

@@ -185,7 +185,12 @@ describe("styles.css size ratchet", () => {
   // （图标槽按首行行高对齐）。净 +30 行（实测 18_703），阈值取实测 +12 行缓冲。
   // 下轮 CSS 瘦身时应优先收回：入口行三段文字可合并为一条规则，弹窗外壳与
   // overlays/modals.css 的 .settings-model-* 已有重复，可整体收敛。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_715;
+  // 2026-11-13 下拉浮层（18_707 → 18_699）：.themed-select-menu 改为 portal 到
+  // body + fixed（删掉 absolute 定位、left/right 拉伸、.dropup 定向与日历
+  // .date-picker-time-segments 的宽度覆盖；注释同步收缩），日期面板改用
+  // --floating-panel-max-height 承接高度预算。净 -8 行，阈值随实测收紧到
+  // 18_711（实测 +12 行缓冲）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_711;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
