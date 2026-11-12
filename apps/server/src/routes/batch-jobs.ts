@@ -70,8 +70,8 @@ export function registerBatchJobRoutes(app: FastifyInstance, deps: BatchJobRoute
     // by construction, which is the precondition the alias's id grammar needs.
     const jobId = randomUUID();
     const handles: TaskHandle[] = [];
-    let updated = 0;
-    let failed = 0;
+    let updated: number;
+    let failed: number;
     // The selection is materialised at accept, before the acceptance's
     // transaction, for the reason the list endpoints keep the optimistic
     // spelling: the job must act on the messages the user selected when they

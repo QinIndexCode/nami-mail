@@ -57,7 +57,7 @@ export function gravatarUrl(hash: string): string | null {
  * carries the host name, never an address.
  */
 export function isAllowedGravatarUrl(raw: string): boolean {
-  let url: URL | null = null;
+  let url: URL | null;
   try {
     url = new URL(raw);
   } catch {

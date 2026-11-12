@@ -362,10 +362,10 @@ describe("collectMailBackup when the download is closed mid-run", () => {
     let emitted = 0;
     let report: Awaited<ReturnType<typeof collectMailBackup>> | undefined;
     let account: unknown;
-    let fetches = 0;
-    let firstFetch: number[] = [];
-    let released = false;
-    let loggedOut = false;
+    let fetches: number;
+    let firstFetch: number[];
+    let released: boolean;
+    let loggedOut: boolean;
     try {
       report = await collectMailBackup(db, Buffer.alloc(32, 21), {
         emit: () => {

@@ -209,7 +209,7 @@ export async function processFile(file: File): Promise<ProcessedFile> {
     throw new Error(`File exceeds the ${maxFileBytes / 1024 / 1024} MB limit.`);
   }
   const ext = extensionOf(file.name);
-  let raw = "";
+  let raw: string;
   if (textExtensions.has(ext)) {
     raw = await extractFromText(file);
   } else if (ext === "pdf") {

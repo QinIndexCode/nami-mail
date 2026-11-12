@@ -1175,7 +1175,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     await safeLogout(client);
     if (pendingRuleTargets.length > 0) {
       const targets = pendingRuleTargets;
-      pendingRuleTargets = [];
       // Filter-rule automation must never break the sync result. Failures are
       // logged and the affected messages remain visible for manual handling.
       void applyFilterRulesToNewMessages(db, masterKey, accountId, targets, accessTokenProvider, agentEvents)
@@ -1183,7 +1182,6 @@ let client: Awaited<ReturnType<typeof imapClientForAccount>> | undefined;
     }
     if (pendingAutoReplyTargets.length > 0) {
       const targets = pendingAutoReplyTargets;
-      pendingAutoReplyTargets = [];
       // Auto-reply processing is equally non-blocking: confirmation prompts
       // live in the engine and their expiry is guarded by its own timers.
       getAutoReplyEngine()?.notifyInboxMessages(accountId, targets)

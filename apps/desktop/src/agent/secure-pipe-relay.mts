@@ -227,7 +227,7 @@ export class WindowsSidDaclPipeRelay {
   private async handleRequest(message: RelayRequestMessage): Promise<void> {
     const child = this.child;
     if (!child || child.killed || this.closed) return;
-    let payload = asStableRelayFailure();
+    let payload: string;
     try {
       payload = await this.options.onRequest(message.payload);
       if (typeof payload !== "string" || payload.length > maximumMessageLength) payload = asStableRelayFailure();

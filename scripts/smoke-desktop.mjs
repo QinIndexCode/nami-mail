@@ -145,7 +145,7 @@ async function fetchRenderer(url) {
     return await fetch(url, { signal: AbortSignal.timeout(rendererFetchTimeoutMs) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Desktop renderer HTTP probe did not complete within ${rendererFetchTimeoutMs / 1_000} seconds: ${message}`);
+    throw new Error(`Desktop renderer HTTP probe did not complete within ${rendererFetchTimeoutMs / 1_000} seconds: ${message}`, { cause: error });
   }
 }
 

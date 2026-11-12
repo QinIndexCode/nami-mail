@@ -808,7 +808,7 @@ export class AgentRunEngine {
     const commandMatch = (input.attachments?.length ?? 0) === 0
       ? matchAgentSlashCommand(input.content)
       : null;
-    let providerContent = input.content.trim();
+    let providerContent: string;
     let commandConstraints: readonly string[] = [];
     if (commandMatch) {
       const command = commandMatch.command;

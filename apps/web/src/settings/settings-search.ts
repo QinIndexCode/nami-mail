@@ -452,7 +452,7 @@ export function searchSettings(
     const itemsForCategory = SETTINGS_SEARCH_INDEX.filter((it) => it.categoryId === catId);
 
     for (const item of itemsForCategory) {
-      let itemTitle = "";
+      let itemTitle: string;
       try {
         const translated = t(item.titleKey);
         itemTitle = (translated && translated !== item.titleKey) ? translated : item.defaultTitleZh;

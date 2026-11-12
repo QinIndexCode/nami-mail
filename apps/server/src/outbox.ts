@@ -223,7 +223,7 @@ function requestForRow(row: SubmissionReadRow, masterKey: Buffer): OutboundSubmi
     return normalizeStoredRequest(JSON.parse(plaintext) as unknown);
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Stored outbound submission")) throw error;
-    throw new Error("Stored outbound submission request is invalid.");
+    throw new Error("Stored outbound submission request is invalid.", { cause: error });
   }
 }
 
@@ -236,7 +236,7 @@ function detailsForRow(row: SubmissionReadRow, masterKey: Buffer): SubmissionDet
       details = normalizeStoredDetails(JSON.parse(plaintext) as unknown);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("Stored outbound submission")) throw error;
-      throw new Error("Stored outbound submission details are invalid.");
+      throw new Error("Stored outbound submission details are invalid.", { cause: error });
     }
   } else {
     if (!row.rfc_message_id) throw new Error("Stored outbound submission Message-ID is invalid.");

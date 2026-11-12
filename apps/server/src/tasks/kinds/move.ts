@@ -461,7 +461,7 @@ export function acceptMoveTask(deps: CommitTaskDeps, input: AcceptMoveInput): Mo
   const resolved = new Map<string, MoveDestination | null>();
   const destinationFor = (accountId: string): MoveDestination | null => {
     if (!resolved.has(accountId)) {
-      let destination: MoveDestination | null = null;
+      let destination: MoveDestination | null;
       try {
         destination = "target" in input.destination
           ? resolveMoveDestination(deps.db, accountId, input.destination.target)

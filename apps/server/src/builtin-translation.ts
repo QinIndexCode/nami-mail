@@ -109,15 +109,13 @@ export class BuiltinTranslationService {
     let lastError: TranslationServiceError | undefined;
     const detectedLanguageRef: DetectedLanguageRef = {};
 
-    // Engine 1: Google Translate unofficial API (primary).
+    // Engine 1: Google Translate unofficial API (primary). The failure is
+    // intentionally not retained: if the fallback also fails, the error it
+    // reports is the one surfaced to the caller below.
     try {
       return await this.translateWithGoogle(text, targetLanguage, signal, detectedLanguageRef);
-    } catch (error) {
-      if (error instanceof TranslationServiceError) {
-        lastError = error;
-      } else {
-        lastError = new TranslationServiceError("translation_service_unavailable", "The Google translation service is unavailable.");
-      }
+    } catch {
+      // Fall through to the fallback engine.
     }
 
     // Engine 2: MyMemory API (fallback). Use the Google-detected source language

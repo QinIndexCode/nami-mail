@@ -82,7 +82,7 @@ export function useCalendarReminders({
 
     const checkReminders = async () => {
       if (demoMode) return;
-      let events: CalendarEvent[] = [];
+      let events: CalendarEvent[];
       try {
         const now = Date.now();
         events = await loadCalendarEvents({ after: new Date(now - STALE_WINDOW_MS).toISOString(), before: new Date(now + 86400_000).toISOString() });

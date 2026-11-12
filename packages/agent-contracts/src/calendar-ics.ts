@@ -312,7 +312,7 @@ function processVEvent(fields: Record<string, { value: string; params: Record<st
 
   const { iso: startIso, allDay: startAllDay } = parseIcsDate(dtStartField.value, dtStartField.params);
 
-  let endIso = startIso;
+  let endIso: string;
   let allDay = startAllDay;
 
   const dtEndField = fields.DTEND;
