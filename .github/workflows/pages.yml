@@ -8,12 +8,26 @@ on:
     paths:
       - "site/**"
       - "docs/**"
-      # Root READMEs are inputs to the docs build (see ROOT_DOCS in
-      # scripts/build-docs-site.mjs), so a normal README edit must rebuild
-      # the published README pages too.
+      # Every root document in ROOT_DOCS (scripts/build-docs-site.mjs) is
+      # published under docs/_root/, so editing one must rebuild its page.
       - "README.md"
       - "README.zh-CN.md"
       - "README.en.md"
+      - "SUPPORT.md"
+      - "SUPPORT.zh-CN.md"
+      - "SUPPORT.en.md"
+      - "SECURITY.md"
+      - "SECURITY.zh-CN.md"
+      - "SECURITY.en.md"
+      - "CONTRIBUTING.md"
+      - "CONTRIBUTING.zh-CN.md"
+      - "CONTRIBUTING.en.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CODE_OF_CONDUCT.zh-CN.md"
+      - "CODE_OF_CONDUCT.en.md"
+      - "CHANGELOG.md"
+      - "CHANGELOG.zh-CN.md"
+      - "CHANGELOG.en.md"
       - "apps/web/**"
       - "packages/agent-contracts/**"
       - "package.json"
