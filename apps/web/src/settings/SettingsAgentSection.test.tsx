@@ -6,6 +6,12 @@ import type { AgentProviderSummary } from "../agentTypes";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+/** The listbox a trigger currently owns; menus are portaled to document.body. */
+function listboxFor(trigger: HTMLElement | null): HTMLElement | null {
+  const menuId = trigger?.getAttribute("aria-controls");
+  return menuId ? document.getElementById(menuId) : null;
+}
+
 const h = vi.hoisted(() => {
   const local: AgentProviderSummary = {
     id: "provider-local",
@@ -132,7 +138,7 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
       decisionTrigger?.click();
     });
 
-    const menu = container.querySelector('[role="listbox"]');
+    const menu = listboxFor(decisionTrigger);
     expect(menu).not.toBeNull();
     const options = Array.from(menu!.querySelectorAll('[role="option"]'));
     expect(options).toHaveLength(3);
@@ -155,13 +161,11 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
     );
 
     // Open draft dropdown and select the local model
-    const draftControl = draftTrigger!.closest(".select-control")!;
     await act(async () => {
       draftTrigger?.click();
     });
 
-    const draftMenu = draftControl.querySelector('[role="listbox"]');
-    const draftOptions = Array.from(draftMenu!.querySelectorAll('[role="option"]'));
+    const draftOptions = Array.from(listboxFor(draftTrigger!)?.querySelectorAll('[role="option"]') ?? []);
     await act(async () => {
       (draftOptions[1] as HTMLElement).click();
     });
@@ -240,9 +244,7 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
     await act(async () => {
       decisionTrigger.click();
     });
-    const decisionOptions = Array.from(
-      decisionTrigger.closest(".select-control")!.querySelectorAll('[role="option"]'),
-    );
+    const decisionOptions = Array.from(listboxFor(decisionTrigger)?.querySelectorAll('[role="option"]') ?? []);
     const decisionLabels = decisionOptions.map((option) => option.textContent);
     expect(decisionLabels.some((label) => label?.includes("System One (jev-latest)"))).toBe(true);
 
@@ -260,9 +262,8 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
       decisionTrigger.click();
       draftTrigger.click();
     });
-    const draftLabels = Array.from(
-      draftTrigger.closest(".select-control")!.querySelectorAll('[role="option"]'),
-    ).map((option) => option.textContent);
+    const draftLabels = Array.from(listboxFor(draftTrigger)?.querySelectorAll('[role="option"]') ?? [])
+      .map((option) => option.textContent);
     expect(draftLabels.some((label) => label?.includes("System One"))).toBe(false);
   });
 
@@ -310,7 +311,7 @@ describe("SettingsAgentSection auto-reply decoupled model configuration", () => 
     await act(async () => {
       thresholdTrigger?.click();
     });
-    const menu = container.querySelector('[role="listbox"]');
+    const menu = listboxFor(thresholdTrigger);
     expect(menu).not.toBeNull();
     const options = Array.from(menu!.querySelectorAll('[role="option"]'));
     expect(options).toHaveLength(5);

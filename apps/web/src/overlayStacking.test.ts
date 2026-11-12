@@ -370,13 +370,17 @@ describe("overlay containing blocks", () => {
   });
 
   it("keeps the select menu wider than its narrow triggers", () => {
-    // `.themed-select-menu` is stretched to the trigger by left:0/right:0.
-    // The narrow triggers are .filter-rule-value-select (96px),
-    // .filter-rule-kind-select / .filter-rule-action-kind-select (150px) and
-    // .auto-reply-rule-select (132px), so without a min-width every option
+    // The menu is portaled to body and sized by useFloatingPanel: the hook sets
+    // the trigger width as an inline min-width, and `width: max-content` lets the
+    // widest option raise that floor. Without it the narrow triggers
+    // (.filter-rule-value-select 96px, .filter-rule-kind-select /
+    // .filter-rule-action-kind-select 150px, .auto-reply-rule-select 132px) would
+    // ellipsise every option. The value has to be a bare `max-content`:
+    // Chromium's CSS parser discards the whole declaration for
+    // `min(max-content, 90vw)`.
     // ellipsised. Note the value has to be a bare `max-content`: Chromium's
     // CSS parser discards the whole declaration for `min(max-content, 90vw)`.
-    expect(effectiveValue(".themed-select-menu", "min-width"), "the select menu must keep its min-width").toBe("max-content");
+    expect(effectiveValue(".themed-select-menu", "width"), "the select menu must keep its content width").toBe("max-content");
     for (const narrow of [".filter-rule-row-editor .filter-rule-value-select", ".filter-rule-row-editor .filter-rule-kind-select"]) {
       expect(effectiveValue(narrow, "width"), `${narrow} must stay narrow so this guard means something`).toBeTruthy();
     }
@@ -398,12 +402,13 @@ const LADDER: { value: number; note: string; selectors: string[] }[] = [
   { value: 40, note: "the .modal-backdrop base: App-owned alertdialogs. Must not collide with anything (see the base-uniqueness test)", selectors: [".modal-backdrop"] },
   { value: 45, note: "first-level peer scrims: settings / management / sending status", selectors: [".settings-backdrop", ".management-backdrop", ".sending-status-backdrop"] },
   { value: 46, note: "the background-update progress toast; must clear the agent workspace", selectors: [".update-background-status"] },
-  { value: 58, note: "menus that drop out of a panel they are nested in", selectors: [".themed-select-menu", ".compose-template-picker", ".compose-contact-suggestions"] },
+  { value: 58, note: "menus that drop out of a panel they are nested in", selectors: [".compose-template-picker", ".compose-contact-suggestions"] },
   { value: 60, note: "second-level peers: nested editors, confirmations, point menus and the compose schedule popover", selectors: [".confirmation-backdrop", ".accounts-editor-backdrop", ".contact-editor-backdrop", ".template-editor-backdrop", ".calendar-editor-backdrop", ".auto-reply-backdrop", ".agent-memory-backdrop", ".sending-status-details-backdrop", ".context-menu-backdrop", ".compose-template-wrap .compose-template-picker", ".compose-schedule-popover"] },
   { value: 61, note: "the context menu itself, above its own scrim", selectors: [".context-menu"] },
   { value: 70, note: "third-level peers: alerts and the transient menus anchored to a point", selectors: [".settings-alert-backdrop", ".sending-status-confirmation-backdrop", ".agent-context-menu", ".date-picker-panel"] },
   { value: 80, note: "the first-run translation-terms gate", selectors: [".translation-terms-backdrop"] },
   { value: 90, note: "the desktop update prompt, plus the hover tooltip", selectors: [".update-prompt-backdrop", ".nami-tooltip"] },
+  { value: 91, note: "the select listbox, portaled to body so no dialog overflow can clip it; above every dialog that can host one (deepest: the update prompt at 90), below shell toasts", selectors: [".themed-select-menu"] },
   { value: 92, note: "shell toasts; deliberately above the update prompt instead of tied with it", selectors: [".toast"] },
   { value: 95, note: "desktop window controls, reachable over every dialog", selectors: [".desktop-app .window-controls"] },
   { value: 100, note: "the AutoReply toast stack, deliberately on top of everything", selectors: [".auto-reply-toast-stack"] },

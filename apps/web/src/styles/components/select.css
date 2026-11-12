@@ -61,32 +61,26 @@ opacity:.46
 }
 .themed-select-menu
 {
-z-index:58;
+z-index:91;
 border:1px solid var(--line-strong);
 background:var(--panel-solid);
-max-height:min(280px,44dvh);
-/* left:0/right:0 stretches the menu to the trigger's width, so a narrow trigger
-   (the 96px filter-rule value select, the 150px kind selects, the 132px
-   auto-reply rule select) ellipsised every option. min-width raises the floor to
-   the widest option, leaving wider triggers exactly as they were. A
-   `min(max-content,90vw)` cap is NOT usable here: Chromium's CSS parser drops
-   any math function that contains an intrinsic sizing keyword, so the whole
-   declaration is discarded (verified in-browser). The option labels are short
-   enum values and account addresses, so nothing here reaches the viewport edge;
-   flipping the menu near one stays a separate portal follow-up. */
-min-width:max-content;
+max-height:min(280px,44dvh,var(--floating-panel-max-height,100dvh));
+/* Portaled to body and placed by useFloatingPanel (fixed + flip/shift), so an
+   ancestor's overflow cannot clip it and opening it no longer stretches the
+   container. width:max-content keeps the widest option readable; the hook sets
+   the trigger's width inline as min-width, because a 96px filter-value select
+   would otherwise ellipsise every option. */
+width:max-content;
 box-shadow:var(--shadow-raised);
 border-radius:var(--radius-md);corner-shape:var(--corner-shape);
 flex-direction:column;
 padding:5px;
 display:flex;
-position:absolute;
-top:calc(100% + 6px);
+position:fixed;
+top:0;
 left:0;
-right:0;
 overflow-y:auto
 }
-.themed-select-menu.dropup { top:auto; bottom:calc(100% + 6px) }
 .themed-select-group
 {
 color:var(--text-faint);

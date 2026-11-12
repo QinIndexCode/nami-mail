@@ -62,10 +62,10 @@ describe("settings language picker interaction", () => {
     act(() => {
       trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
-    const menu = container.querySelector('[role="listbox"]');
+    const menu = document.querySelector('[role="listbox"]');
     expect(menu, "listbox should expand after clicking the trigger").not.toBeNull();
 
-    const english = Array.from(container.querySelectorAll<HTMLSpanElement>('[role="option"]'))
+    const english = Array.from(document.querySelectorAll<HTMLSpanElement>('[role="option"]'))
       .find((option) => option.textContent === "English");
     expect(english, "English option should be present").not.toBeNull();
 

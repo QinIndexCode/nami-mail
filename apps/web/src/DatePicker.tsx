@@ -1,32 +1,13 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { autoUpdate, computePosition, flip, offset, shift, size } from "@floating-ui/dom";
 import { buildGrid, chunkRows, dateKey, pad, parseTime, parseValue, timeValue } from "./datePickerUtils";
 import { usePopupExitTransition } from "./hooks/usePopupExitTransition";
-import { registerDialogPortal } from "./hooks/useDialogFocus";
-import ThemedSelect from "./ThemedSelect";
+import { useFloatingPanel, type PanelHost } from "./hooks/useFloatingPanel";
+import ThemedSelect, { hasOpenSelectMenuWithin } from "./ThemedSelect";
 import { useI18n } from "./i18n";
 
 export type DatePickerMode = "date" | "datetime";
-
-/**
- * The dialog whose focus trap owns this panel, if any. The panel is portaled to
- * document.body either way, because every dialog card clips its overflow and
- * two of them are scroll containers — an in-dialog `position: absolute` panel
- * is cut off, and inside a scroller it rides the content. Escaping that means
- * leaving the dialog subtree, which is why the element is needed: it registers
- * the panel with the trap so a day button taking focus is not yanked straight
- * back out (see registerDialogPortal). A ref is accepted so callers can hand
- * over their dialog ref directly: it is dereferenced during this component's
- * own render, which is always after the dialog element has been attached.
- */
-type PanelHost = HTMLElement | RefObject<HTMLElement | null> | null | undefined;
-
-function resolvePanelHost(host: PanelHost): HTMLElement | null {
-  if (!host) return null;
-  return "current" in host ? host.current : host;
-}
 
 type DatePickerProps = {
   mode: DatePickerMode;
@@ -151,62 +132,12 @@ export default function DatePicker({
   const { hour, minute } = useMemo(() => parseTime(parsed.time), [parsed.time]);
   const todayKey = useMemo(() => dateKey(new Date()), []);
   const selectedKey = parsed.date ? dateKey(parsed.date) : "";
-  // The dialog whose focus trap owns the panel. The panel itself always lands on
-  // document.body (see the portal below), because an in-dialog panel is clipped
-  // by the card's overflow — and `overflow: visible` is not an option, since
-  // two of the three hosts are the dialog's own scroll container.
-  const hostElement = resolvePanelHost(panelHost);
-  const hosted = hostElement !== null;
-
-  // The panel lives outside the dialog subtree, so the trap would treat focus in
-  // it as an escape and yank it straight back to the dialog. Registering it
-  // makes the trap's scope "this dialog plus the popups it owns" instead of
-  // "this dialog's descendants", which is what the panel has always been.
-  useEffect(() => {
-    const panel = panelRef.current;
-    if (!open || !hosted || !hostElement || !panel) return undefined;
-    return registerDialogPortal(hostElement, panel);
-  }, [open, hosted, hostElement]);
-
-  // Floating-UI owns placement in both cases: flip picks the side with room,
-  // shift keeps the panel inside the viewport, and autoUpdate repositions across
-  // scrolling, resizing, and view changes. `fixed` is correct for the body
-  // portal: the panel has no transformed ancestor, so its containing block is
-  // the viewport, and shift's default `clippingAncestors` boundary then resolves
-  // to the viewport too — not to the dialog card the panel is logically owned by.
-  useEffect(() => {
-    if (!open) return undefined;
-    const trigger = triggerRef.current;
-    const panel = panelRef.current;
-    if (!trigger || !panel) return undefined;
-    const update = () => {
-      void computePosition(trigger, panel, {
-        strategy: "fixed",
-        placement: "bottom-start",
-        middleware: [
-          offset(6),
-          flip(),
-          // Cap the panel at the space the viewport actually offers: shift only
-          // moves the cross axis, so on a short window (the desktop minimum is
-          // 520px and the datetime panel is ~360px tall) neither flip side fits
-          // and the nav row ended up off-viewport, unreachable. size() clamps
-          // the height; the CSS-side overflow-y makes the rest scrollable.
-          size({
-            padding: 8,
-            apply({ availableHeight, elements }) {
-              elements.floating.style.maxHeight = `${Math.max(0, availableHeight)}px`;
-            },
-          }),
-          shift({ padding: 8 }),
-        ],
-      }).then(({ x, y }) => {
-        panel.style.left = `${x}px`;
-        panel.style.top = `${y}px`;
-      });
-    };
-    update();
-    return autoUpdate(trigger, panel, update);
-  }, [open]);
+  // The panel always lands on document.body (see the portal below), because an
+  // in-dialog panel is clipped by the card's overflow — and `overflow: visible`
+  // is not an option, since two of the three hosts are the dialog's own scroll
+  // container. The hook also registers the panel with the host dialog's focus
+  // trap and keeps its fixed placement in step with scrolling and resizing.
+  useFloatingPanel({ open, triggerRef, panelRef, panelHost });
 
   useEffect(() => {
     if (!open) return undefined;
@@ -236,7 +167,9 @@ export default function DatePicker({
     if (!open) return undefined;
     const claimEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || panelClosing) return;
-      if (panelRef.current?.querySelector(".themed-select-menu:not(.closing)")) return;
+      // The select's menu is portaled to body as well, so it is not a descendant
+      // of the panel any more: ask the trigger (which stays inside) instead.
+      if (panelRef.current && hasOpenSelectMenuWithin(panelRef.current)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       beginPanelClose();
