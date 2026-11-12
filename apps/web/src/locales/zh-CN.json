@@ -2800,7 +2800,7 @@
     "data.demo": "演示模式不导出或恢复实际数据。",
     "data.password": "备份口令（至少 12 个字符）",
     "data.repeatPassword": "再次输入口令（用于导出）",
-    "data.export": "下载加密备份",
+    "data.export": "导出加密备份",
     "data.exported": "已生成加密备份，请保存文件与口令。",
     "data.restoreTitle": "从备份恢复",
     "data.file": "选择 .namibak 备份文件",

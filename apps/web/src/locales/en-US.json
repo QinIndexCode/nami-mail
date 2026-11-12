@@ -2800,7 +2800,7 @@
     "data.demo": "Demo mode does not export or restore real data.",
     "data.password": "Backup password (at least 12 characters)",
     "data.repeatPassword": "Repeat password (for export)",
-    "data.export": "Download encrypted backup",
+    "data.export": "Export encrypted backup",
     "data.exported": "Encrypted backup generated. Keep the file and password safe.",
     "data.restoreTitle": "Restore a backup",
     "data.file": "Select a .namibak backup",
