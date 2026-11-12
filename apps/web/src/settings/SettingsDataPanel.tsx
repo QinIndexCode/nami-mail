@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ArchiveRestore, ChevronRight, CircleAlert, CircleHelp, Download, Info, KeyRound, Users, X } from "lucide-react";
+import { ChevronRight, CircleAlert, CircleHelp, Download, Info, KeyRound, Upload, Users, X } from "lucide-react";
 import { ownObjectUrl, ResourceScope } from "../attachments/document";
 import ThemedSelect from "../ThemedSelect";
 import { request } from "../api";
@@ -28,6 +28,9 @@ type DataDialogProps = {
   titleId: string;
   title: string;
   icon: ReactNode;
+  /** Supplementary copy that only matters when asked for; the same hover-only
+   *  question-mark pattern the rest of the settings surfaces use. */
+  hint?: string;
   dialogRef: RefObject<HTMLElement | null>;
   busy: boolean;
   closeLabel: string;
@@ -36,7 +39,7 @@ type DataDialogProps = {
   children: ReactNode;
 };
 
-function DataDialog({ titleId, title, icon, dialogRef, busy, closeLabel, onClose, footer, children }: DataDialogProps) {
+function DataDialog({ titleId, title, icon, hint, dialogRef, busy, closeLabel, onClose, footer, children }: DataDialogProps) {
   return createPortal(
     <div
       className="modal-backdrop confirmation-backdrop settings-data-dialog-backdrop"
@@ -54,6 +57,9 @@ function DataDialog({ titleId, title, icon, dialogRef, busy, closeLabel, onClose
         <div className="settings-model-head settings-data-dialog-head">
           <span className="settings-data-icon" style={iconSize("18px")} aria-hidden="true">{icon}</span>
           <h3 className="settings-model-title" id={titleId}>{title}</h3>
+          {hint ? <span className="field-help-icon settings-data-dialog-help" data-tooltip={hint} aria-label={hint} tabIndex={0}>
+            <span className="settings-data-icon" style={iconSize("14px")} aria-hidden="true"><CircleHelp /></span>
+          </span> : null}
           <button className="icon-button settings-model-close-btn" type="button" aria-label={closeLabel} disabled={busy} onClick={onClose}>
             <X size={16} aria-hidden="true" />
           </button>
@@ -199,7 +205,7 @@ export default function SettingsDataPanel({ demoMode = false, onOverlayOpenChang
       disabled={busy}
       onClick={() => setDialog("restore")}
     >
-      <span className="settings-data-icon" aria-hidden="true"><ArchiveRestore /></span>
+      <span className="settings-data-icon" aria-hidden="true"><Upload /></span>
       <span className="settings-data-entry-label">{t("data.restoreRow")}</span>
       <span className="settings-data-entry-value">{t("data.restoreNone")}</span>
       <ChevronRight className="settings-data-entry-chevron" size={14} aria-hidden="true" />
@@ -236,6 +242,7 @@ export default function SettingsDataPanel({ demoMode = false, onOverlayOpenChang
       titleId="data-export-title"
       title={t("data.exportTitle")}
       icon={<Download />}
+      hint={t("data.scope")}
       dialogRef={dialogRef}
       busy={busy}
       closeLabel={t("common.close")}
@@ -251,19 +258,22 @@ export default function SettingsDataPanel({ demoMode = false, onOverlayOpenChang
         })}>{t("data.export")}</button>
       </>}
     >
-      <DataNote>{t("data.scope")}</DataNote>
+      <DataNote tone="warning">{t("data.credentialsWarning")}</DataNote>
+      <DataNote tone="warning">{t("data.passwordLossWarning")}</DataNote>
       {demoMode && <DataNote>{t("data.demo")}</DataNote>}
       <label className="translation-setting-field"><span><strong>{t("data.password")}</strong></span>
         <input type="password" autoComplete="new-password" value={password} disabled={busy || demoMode} data-dialog-initial-focus onChange={(event) => setPassword(event.target.value)} /></label>
       <label className="translation-setting-field"><span><strong>{t("data.repeatPassword")}</strong></span>
         <input type="password" autoComplete="new-password" value={repeat} disabled={busy || demoMode} onChange={(event) => setRepeat(event.target.value)} /></label>
+      <p className="settings-data-dialog-hint">{t("data.passwordHint")}</p>
+      <p className="settings-data-dialog-hint">{t("data.limit")}</p>
       {feedback}
     </DataDialog>}
 
     {dialog === "restore" && <DataDialog
       titleId="data-restore-title"
       title={t("data.restoreTitle")}
-      icon={<ArchiveRestore />}
+      icon={<Upload />}
       dialogRef={dialogRef}
       busy={busy}
       closeLabel={t("common.close")}
