@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CalendarDays, Check, FileDown, LoaderCircle, MapPin, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, FileUp, LoaderCircle, MapPin, X } from "lucide-react";
 import { parseIcs, type ParsedIcsEvent } from "@nami/agent-contracts";
 import { api } from "../api";
 import { useI18n } from "../i18n";
@@ -151,7 +151,7 @@ export default function CalendarImportModal({
         <div className="calendar-import-body">
           {!fileContent ? (
             <div className="calendar-import-upload-zone" onClick={() => fileInputRef.current?.click()}>
-              <FileDown size={32} className="calendar-import-upload-icon" />
+              <FileUp size={32} className="calendar-import-upload-icon" />
               <p className="calendar-import-upload-text">{t("calendar.importSelectFile")}</p>
               <button type="button" className="secondary-button calendar-import-pick-btn">
                 {t("calendar.importChooseFile")}

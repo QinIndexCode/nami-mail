@@ -629,10 +629,10 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                   </button>
                   <div className="calendar-toolbar-end">
                     <button className="secondary-button calendar-tool-btn" type="button" onClick={() => setImportModalOpen(true)} title={t("calendar.importIcs")}>
-                      <Download size={13} /><span>{t("calendar.import")}</span>
+                      <Upload size={13} /><span>{t("calendar.import")}</span>
                     </button>
                     <button className="secondary-button calendar-tool-btn" type="button" onClick={() => void handleExportIcs()} title={t("calendar.exportIcs")}>
-                      <Upload size={13} /><span>{t("calendar.export")}</span>
+                      <Download size={13} /><span>{t("calendar.export")}</span>
                     </button>
                     <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("list")}>
                       <List size={14} />{t("calendar.eventsList")}
@@ -720,10 +720,10 @@ export default function CalendarDialog({ demoMode = false, onClose, fallbackFocu
                   <Plus size={14} />{t("calendar.newEvent")}
                 </button>
                 <button className="secondary-button calendar-tool-btn" type="button" onClick={() => setImportModalOpen(true)} title={t("calendar.importIcs")}>
-                  <Download size={13} /><span>{t("calendar.import")}</span>
+                  <Upload size={13} /><span>{t("calendar.import")}</span>
                 </button>
                 <button className="secondary-button calendar-tool-btn" type="button" onClick={() => void handleExportIcs()} title={t("calendar.exportIcs")}>
-                  <Upload size={13} /><span>{t("calendar.export")}</span>
+                  <Download size={13} /><span>{t("calendar.export")}</span>
                 </button>
                 <strong className="calendar-list-title">{t("calendar.eventsList")}</strong>
                 <button className="secondary-button calendar-view-switch" type="button" onClick={() => setView("month")}>

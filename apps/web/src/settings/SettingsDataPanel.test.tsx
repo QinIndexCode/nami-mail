@@ -54,4 +54,19 @@ describe("Data and privacy controls", () => {
     await act(async () => { container.querySelector<HTMLButtonElement>("#data-backup-restore")!.click(); });
     expect(document.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
   });
+  it("keeps decision-relevant copy standing and folds the backup inventory into the header hint", async () => {
+    await act(async () => { container.querySelector<HTMLButtonElement>("#data-backup-export")!.click(); });
+    const exportDialog = document.querySelector(".settings-data-dialog")!;
+    const warnings = Array.from(exportDialog.querySelectorAll(".settings-data-note.is-warning")).map((node) => node.textContent ?? "").join("");
+    expect(warnings).toContain("凭据");
+    expect(warnings).toContain("永久无法打开");
+    const hint = exportDialog.querySelector<HTMLElement>(".settings-data-dialog-head [data-tooltip]")!;
+    expect(hint.getAttribute("data-tooltip")).toContain("未下载的收件附件");
+    expect(exportDialog.textContent).toContain("3 GiB");
+    await act(async () => { button("取消").click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("#data-backup-restore")!.click(); });
+    const restoreDialog = document.querySelector(".settings-data-dialog")!;
+    expect(restoreDialog.querySelector(".settings-data-note.is-warning")!.textContent).toContain("当前数据保留");
+    expect(restoreDialog.querySelector(".settings-data-dialog-head [data-tooltip]")).toBeNull();
+  });
 });
