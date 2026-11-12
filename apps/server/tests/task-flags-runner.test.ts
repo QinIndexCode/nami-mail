@@ -633,12 +633,21 @@ describe("task flags runner: what a failed push leaves where the user can read i
     expect(row.error_code).toBe("connection_failed");
     expect(row.error_message).toBe("与邮件服务器的连接在完成前中断。请检查网络、VPN/代理和防火墙设置后重试。");
 
-    // The whole row, not just the two columns this test names: "no transport text
+    // Every readable column, not just the two this test names: "no transport text
     // is persisted" is the rule, so a third column that started carrying the
-    // message would have to break this rather than pass unobserved.
-    const persisted = JSON.stringify(db.prepare("SELECT * FROM tasks WHERE id = ?").get(taskId));
+    // message would have to break this rather than pass unobserved. The sealed
+    // payload is excluded from the token scan and matched against the whole
+    // sentence instead: its base64url ciphertext contains "BYE" by chance about
+    // once in a thousand runs, so a three-letter probe there proves nothing
+    // either way.
+    const { payload_ciphertext: sealed, ...readable } = db
+      .prepare("SELECT * FROM tasks WHERE id = ?")
+      .get(taskId) as TaskRow;
+    expect(sealed).toMatch(/^nami-v1\./);
+    const persisted = JSON.stringify(readable);
     expect(persisted).not.toContain("BYE");
     expect(persisted).not.toContain("demo@example.com");
+    expect(sealed).not.toContain(RAW_SOCKET_TEXT);
 
     // And the projection the route actually serves -- the same string the poller
     // toasts, through the reader that would drop the error if it were null.
