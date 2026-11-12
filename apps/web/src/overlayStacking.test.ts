@@ -378,8 +378,6 @@ describe("overlay containing blocks", () => {
     // ellipsise every option. The value has to be a bare `max-content`:
     // Chromium's CSS parser discards the whole declaration for
     // `min(max-content, 90vw)`.
-    // ellipsised. Note the value has to be a bare `max-content`: Chromium's
-    // CSS parser discards the whole declaration for `min(max-content, 90vw)`.
     expect(effectiveValue(".themed-select-menu", "width"), "the select menu must keep its content width").toBe("max-content");
     for (const narrow of [".filter-rule-row-editor .filter-rule-value-select", ".filter-rule-row-editor .filter-rule-kind-select"]) {
       expect(effectiveValue(narrow, "width"), `${narrow} must stay narrow so this guard means something`).toBeTruthy();
