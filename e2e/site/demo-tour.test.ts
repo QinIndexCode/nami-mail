@@ -55,9 +55,12 @@ async function walkStepAnchors(page: Page, view: "mail" | "agent") {
     await expect(stage).not.toHaveAttribute("data-tour-error", /.+/);
     const anchor = frame.locator(`[data-tour-target="${step.target}"]`).first();
     await expect(anchor).toBeVisible();
-    const box = await anchor.boundingBox();
-    expect(box?.width ?? 0).toBeGreaterThan(0);
-    expect(box?.height ?? 0).toBeGreaterThan(0);
+    // Visibility can land one frame before layout settles on slower runners, so
+    // poll the box instead of reading a single snapshot.
+    await expect.poll(() => anchor.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return Math.min(rect.width, rect.height);
+    })).toBeGreaterThan(0);
     if ("interactive" in step && step.interactive) await expect(anchor).toBeEnabled();
     await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-visible", "true");
     const next = STEP_ANCHORS[view][STEP_ANCHORS[view].indexOf(step) + 1];
