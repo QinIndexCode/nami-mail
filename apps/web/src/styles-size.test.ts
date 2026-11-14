@@ -190,7 +190,17 @@ describe("styles.css size ratchet", () => {
   // .date-picker-time-segments 的宽度覆盖；注释同步收缩），日期面板改用
   // --floating-panel-max-height 承接高度预算。净 -8 行，阈值随实测收紧到
   // 18_711（实测 +12 行缓冲）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_711;
+  // 2026-11-14 有记录的一次上调（18_711 → 18_761）：修复「撰写邮件弹窗最大化后
+  // 右上角按钮与窗口按钮重叠」。窗口控件带（.window-bar）此前只是几处硬编码的
+  // 144/66/42，没有任何表面能查询它；现于 tokens/variables.css 定义
+  // --window-chrome-top/right/left（浏览器为 0），由 base/layout.css 在桌面端发布
+  // 真实值，window-bar 尺寸、mail-shell 行高、macOS 前导槽位改为消费它们；撰写
+  // 弹窗最大化的 header 按左右安全区缩进，overlays/modals.css 另加一条统一规则：
+  // 所有挂在 modal-backdrop 上的居中卡片按 100dvh − 48px − chrome-top 封顶，于是设置
+  // 弹窗等同类表面一并被覆盖，而不是逐个补。实测聚合 18_751 行（净 +52，其中约
+  // 一半是说明为什么这是约定而非补丁的注释），阈值取实测 +10 行缓冲。
+  // 下轮 CSS 瘦身时应优先收回：上述三段说明可压缩进设计系统文档。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_761;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

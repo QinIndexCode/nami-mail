@@ -20,6 +20,19 @@ position:fixed;
 inset:0;
 overflow-y:auto
 }
+/* A centered dialog is capped against the viewport, so on a short window a tall
+   one could slide up under the shell's window buttons. Cap the whole class
+   against the chrome-safe viewport instead: subtract the band from the 48px
+   gutter these cards already keep. Centering splits the leftover, so at the cap
+   the top edge lands 57px down (gutter 24 + half the band) — below the buttons,
+   which end at 49px — while a card that already fits keeps its exact position.
+   Every surface hanging off a modal backdrop inherits this; only a deliberately
+   full-bleed one has to opt out (the maximized compose, which insets its own
+   header instead). */
+.desktop-app .modal-backdrop>:not(.compose-card.is-maximized)
+{
+max-height:calc(100dvh - 48px - var(--window-chrome-top))
+}
 .modal-card
 {
 border:1px solid var(--line-strong);

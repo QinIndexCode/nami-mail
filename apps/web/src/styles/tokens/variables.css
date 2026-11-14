@@ -54,6 +54,14 @@ font-synthesis:none;
 --radius-compact-md:min(var(--radius-md),14px);
 --radius-pill:999px;
 --corner-shape:squircle;
+/* Window chrome safe area: the strip the desktop shell's own title bar and
+   window buttons occupy over the page (top-right buttons on Windows/Linux,
+   top-left traffic lights on macOS). The shell publishes the real numbers in
+   base/layout.css next to the window-bar they describe; browser builds have no
+   chrome, so the zeros here make every consumer a no-op there. */
+--window-chrome-top:0px;
+--window-chrome-right:0px;
+--window-chrome-left:0px;
 /* Prose measure for plain-text mail only. The reading column itself is fluid —
    it fills the reader pane the way Gmail does — because capping it reflows
    provider-authored HTML: a 600px-wide newsletter table squeezed into a narrower
