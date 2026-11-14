@@ -1,7 +1,7 @@
 .compose-backdrop
 {
 place-items:center;
-transition:padding .28s cubic-bezier(.2,.8,.2,1)
+transition:padding var(--compose-maximize-motion)
 }
 .compose-backdrop.is-maximized
 {
@@ -18,7 +18,7 @@ width:min(720px,100% - 24px);
 height:min(640px,calc(100dvh - 48px));
 max-height:calc(100dvh - 48px);
 animation:.26s cubic-bezier(.2,.8,.2,1) both compose-in;
-transition:width .28s cubic-bezier(.2,.8,.2,1),height .28s cubic-bezier(.2,.8,.2,1),max-height .28s cubic-bezier(.2,.8,.2,1),border-radius .28s cubic-bezier(.2,.8,.2,1),border-color .28s cubic-bezier(.2,.8,.2,1);
+transition:width var(--compose-maximize-motion),height var(--compose-maximize-motion),max-height var(--compose-maximize-motion),border-radius var(--compose-maximize-motion),border-color var(--compose-maximize-motion);
 display:flex;
 position:relative;
 overflow:hidden
@@ -41,6 +41,25 @@ max-height:100%
 {
 padding-right:calc(var(--window-chrome-right) + 20px);
 padding-left:calc(var(--window-chrome-left) + 20px)
+}
+/* The header inset is part of the maximize choreography, not a separate step:
+   it rides the same token as the card box and backdrop gutter, so the action
+   cluster keeps a constant relation to the expanding surface instead of
+   reaching its safe inset in the first frame. Leaving full-bleed always
+   animates — the cluster is still left of the window buttons while it is in
+   their band. Entering is only animated from 944px up: it starts at W/2 + 339
+   and the buttons begin at W - 131, so below that the path would cross them
+   and the instant reflow is kept instead. */
+.compose-card>.compose-header
+{
+transition:padding-right var(--compose-maximize-motion),padding-left var(--compose-maximize-motion)
+}
+@media (width<=943px)
+{
+.compose-card.is-maximized>.compose-header
+{
+transition:none
+}
 }
 .compose-card.closing
 {

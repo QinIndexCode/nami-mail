@@ -200,7 +200,24 @@ describe("styles.css size ratchet", () => {
   // 弹窗等同类表面一并被覆盖，而不是逐个补。实测聚合 18_751 行（净 +52，其中约
   // 一半是说明为什么这是约定而非补丁的注释），阈值取实测 +10 行缓冲。
   // 下轮 CSS 瘦身时应优先收回：上述三段说明可压缩进设计系统文档。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_761;
+  // 2026-11-14 同日第二次上调（18_761 → 18_786）：撰写邮件「小窗 → 沉浸」切换时
+  // 右上角动作组没有过渡。根因不是缺一条 transition——卡片 width/height、遮罩
+  // padding 都已在 .28s 的同一曲线上动，只有 header 的左右安全区缩进是瞬跳，
+  // 于是动作组在首帧就到达最终内缩、再随卡片增长被推回右边。现把这条曲线提成
+  // --compose-maximize-motion（tokens +6 行含说明），卡片/遮罩/header 三处共用；
+  // header 缩进在 ≥944px 双向上过渡，<944px 只保留「退出沉浸」方向的过渡——该方向
+  // 动作组横向越过窗口按钮时已落到按钮下方，而进入方向的起点本就在按钮横向范围内，
+  // 插值会从按钮上方滑过，故保持原有即时重排。净 +25 行，实测 18_776，阈值取
+  // 实测 +10 行缓冲。下轮 CSS 瘦身时应优先收回这些说明。
+  // 2026-11-14 同日第三次上调（18_786 → 18_809）：窗口控件与卡片内按钮读不出层级差。
+  // 三件事：① .window-control-close 的 danger hover 早被 features/mail.css 的
+  // .icon-button:hover（同为 (0,3,0)、后引入）整条压掉，改由 .window-bar 祖先提权并
+  // 只作用于窗口栏（撰写卡片的关闭键保持中性灰）；② .desktop-app .window-controls
+  // 增加静止态托盘（--chrome-tray = --text 4%，低于 --hover 的 4.3%/5.5%，避免吞掉
+  // hover 反馈）+ --radius-compact 圆角，仅绘制、不动几何；③ 同一关闭键的
+  // :focus-visible 只改 outline-color 为 --danger，保留全局 2px/2px 几何。净 +21 行，
+  // 实测 18_797，阈值取实测 +12 行缓冲。下轮 CSS 瘦身时应优先收回这些说明。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_809;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
