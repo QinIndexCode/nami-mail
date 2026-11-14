@@ -10,7 +10,9 @@ async function loadSite(page: Page): Promise<void> {
 
 async function readyTour(page: Page, view: "mail" | "agent") {
   const stage = page.locator(".demo-stage").filter({ has: page.locator(`iframe[data-demo="${view}"]`) });
-  await stage.scrollIntoViewIfNeeded();
+  // Land on the section like the nav link does, so the sticky header does not
+  // cover the tour toolbar (a real click there would otherwise be obstructed).
+  await page.evaluate((id) => document.getElementById(id)!.scrollIntoView({ block: "start", behavior: "instant" }), view === "mail" ? "demo" : "agent");
   await expect(stage).toHaveAttribute("data-state", "ready");
   const frame = frameFor(page, view);
   await expect(frame.locator(view === "mail" ? ".message-item" : ".agent-workspace").first()).toBeVisible();
@@ -44,10 +46,12 @@ test("mail tour searches and reads the real sample message, uses close-up, finis
   await expect(stage).toHaveAttribute("data-tour-step", "search");
   await expect(frame.locator("#mail-search")).toHaveValue("lin@example.com");
   await page.clock.runFor(800);
-  expect(Number(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThan(1);
+  expect(Number(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThanOrEqual(1.18);
   const pointer = stage.locator(".demo-tour-pointer");
   await expect(pointer).toHaveAttribute("data-visible", "true");
-  await expect(stage.locator(".demo-tour-focus")).toHaveCount(0);
+  await expect(stage.locator(".demo-tour-focus")).toHaveCount(1);
+  await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-visible", "true");
+  await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-dim", "true");
   expect(await pointer.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
   await expect.poll(() => stage.evaluate((element) => {
     const frame = getComputedStyle(element.querySelector(".demo-frame")!).transform;
@@ -62,7 +66,7 @@ test("mail tour searches and reads the real sample message, uses close-up, finis
   expect(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale").trim())).toBe("1");
   await closeup.click();
   await expect(closeup).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => stage.evaluate((element) => Number(getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThan(1);
+  await expect.poll(() => stage.evaluate((element) => Number(getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThanOrEqual(1.18);
 
   await page.clock.runFor(1600);
   await page.clock.runFor(650);
@@ -178,3 +182,68 @@ test("a narrow viewport disables close-up and keeps tour controls within the pag
   await expect(stage).toHaveAttribute("data-tour-step", "overview");
   await expect(stage.locator(".demo-tour-pointer")).toHaveAttribute("data-visible", "false");
 });
+
+test("entering the demo keeps toolbar, stage, and figcaption in one desktop viewport", async ({ page }) => {
+  await page.clock.install();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
+    await page.setViewportSize(viewport);
+    await loadSite(page);
+    const { stage } = await readyTour(page, "mail");
+    await page.evaluate(() => document.getElementById("demo")!.scrollIntoView({ block: "start", behavior: "instant" }));
+    await page.clock.runFor(1100);
+    await expect(stage).toHaveAttribute("data-tour-state", "playing");
+    // The overview frames the whole list without dimming it.
+    await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-dim", "false");
+    // The narration caption is gone; the stage starts right under the toolbar.
+    await expect(page.locator(".demo-tour-caption")).toHaveCount(0);
+    const box = await stage.evaluate((element) => {
+      const figure = element.closest("figure")!;
+      const rect = (selector: string) => figure.querySelector(selector)!.getBoundingClientRect();
+      const bar = rect(".demo-toolbar");
+      const stageRect = rect(".demo-stage");
+      const figcaption = rect("figcaption");
+      return {
+        innerHeight,
+        barTop: bar.top,
+        barBottom: bar.bottom,
+        stageTop: stageRect.top,
+        stageHeight: stageRect.height,
+        stageBottom: stageRect.bottom,
+        figcaptionBottom: figcaption.bottom,
+      };
+    });
+    expect(box.barTop).toBeGreaterThanOrEqual(0);
+    expect(box.stageTop).toBeGreaterThanOrEqual(box.barBottom - 1);
+    expect(box.stageHeight).toBeGreaterThan(300);
+    expect(box.stageBottom).toBeLessThanOrEqual(box.innerHeight);
+    expect(box.figcaptionBottom).toBeLessThanOrEqual(box.innerHeight - 8);
+  }
+});
+
+test("wheel input scrolls the page naturally instead of snapping a section height", async ({ page }) => {
+  await loadSite(page);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  const before = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(720, 450);
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => window.scrollY);
+  expect(after - before).toBeGreaterThan(0);
+  expect(after - before).toBeLessThan(400);
+});
+
+test("scrolling inside the demo keeps the tour playing", async ({ page }) => {
+  await loadSite(page);
+  const { stage, frame } = await readyTour(page, "mail");
+  await expect(stage).toHaveAttribute("data-tour-state", "playing");
+  await expect(stage).toHaveAttribute("data-tour-step", "overview");
+  // The old site forwarded this gesture to the outer page, which snapped the
+  // scroll position down a section and paused the tour as an interaction.
+  await frame.locator(".message-list").evaluate((element) => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(400);
+  await expect(stage).toHaveAttribute("data-tour-state", "playing");
+  expect(await stage.evaluate((element) => element.dataset.tourPause ?? null)).toBeNull();
+});
+

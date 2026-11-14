@@ -7,14 +7,14 @@ const VISIBLE_FRACTION = 0.5;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const STEPS = {
   mail: [
-    { id: "overview", hold: 1800, zh: "两个邮箱里的来信，放在一起看。", en: "See mail from both accounts in one inbox." },
-    { id: "search", hold: 2400, zh: "按发件人查找，不用来回切换邮箱。", en: "Find a sender without switching accounts." },
-    { id: "read", hold: 3400, zh: "打开来信，直接阅读正文。", en: "Open the message and read it in place." },
+    { id: "overview", hold: 1800 },
+    { id: "search", hold: 2400 },
+    { id: "read", hold: 3400 },
   ],
   agent: [
-    { id: "answer", hold: 2800, zh: "先看整理后的要点。", en: "Start with the answer and its key points." },
-    { id: "citations", hold: 2200, zh: "展开来源，看看回答引用了哪些邮件。", en: "Expand the sources behind the answer." },
-    { id: "source", hold: 3600, zh: "打开引用，核对原邮件。", en: "Open a source and check the original message." },
+    { id: "answer", hold: 2800 },
+    { id: "citations", hold: 2200 },
+    { id: "source", hold: 3600 },
   ],
 };
 
@@ -62,9 +62,9 @@ class DemoTour {
     this.figure = this.stage.closest("figure");
     this.toggle = this.figure.querySelector("[data-demo-tour-toggle]");
     this.closeup = this.figure.querySelector("[data-demo-closeup]");
-    this.caption = this.figure.querySelector(".demo-tour-caption");
     this.pointer = this.stage.querySelector(".demo-tour-pointer");
     this.cursor = this.pointer.querySelector(".demo-tour-cursor");
+    this.focus = this.stage.querySelector(".demo-tour-focus");
     this.steps = STEPS[frame.dataset.demo];
     this.motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     this.ready = false;
@@ -73,6 +73,7 @@ class DemoTour {
     this.finished = false;
     this.userRequested = false;
     this.closeupEnabled = true;
+    this.focusEnabled = false;
     this.index = 0;
     this.run = 0;
     this.visible = false;
@@ -127,8 +128,10 @@ class DemoTour {
         this.pause("interaction", event.type === "pointerdown");
       };
       const releaseCamera = () => window.requestAnimationFrame(() => this.resetCamera());
-      const events = ["pointerdown", "keydown", "input", "wheel"];
-      events.forEach((name) => doc.addEventListener(name, pauseInput, { capture: true, passive: name === "wheel" }));
+      // Scrolling the page or the demo no longer counts as taking over: only a
+      // deliberate click, key press, or text entry stops the tour.
+      const events = ["pointerdown", "keydown", "input"];
+      events.forEach((name) => doc.addEventListener(name, pauseInput, { capture: true }));
       doc.addEventListener("pointerup", releaseCamera, true);
       doc.addEventListener("pointercancel", releaseCamera, true);
       this.removeInputListeners = () => {
@@ -162,6 +165,8 @@ class DemoTour {
     window.clearTimeout(this.timer);
     window.clearTimeout(this.cameraTimer);
     window.clearTimeout(this.clickTimer);
+    window.clearTimeout(this.focusRetry);
+    this.focusAttempts = 0;
     this.run += 1;
     this.playing = false;
     this.pointer.dataset.visible = "false";
@@ -268,13 +273,22 @@ class DemoTour {
       return;
     }
     const step = this.steps[this.index];
+    // The ring fades out while the camera travels, then fades back in on the
+    // freshly measured target (see the 350ms re-measure below).
+    this.focusEnabled = true;
+    this.focusDim = step.id !== "overview";
+    this.setFocus(null);
     let target;
+    let cameraTarget;
     if (this.frame.dataset.demo === "mail") {
       if (this.index === 0) {
         doc.querySelector(".reader-back")?.click();
         setSearch(doc, "");
         const firstRow = await this.find('.message-item[data-message-id="m1"]', run);
+        // The cursor lands on the first row, but the close-up frames the whole
+        // list so the overview keeps both accounts in context.
         target = firstRow || doc.querySelector(".message-list");
+        cameraTarget = doc.querySelector(".message-list") || target;
       } else if (step.id === "search") {
         const search = doc.querySelector(".search-toggle");
         if (search?.getAttribute("aria-expanded") !== "true" && !await this.clickTarget(search, run)) return;
@@ -315,7 +329,7 @@ class DemoTour {
     }
     if (!this.playing || this.run !== run) return;
     if (!target) { this.pause("unavailable"); return; }
-    this.target = target;
+    this.target = cameraTarget || target;
     this.pointCursor(target, true);
     this.stage.dataset.tourStep = step.id;
     this.updateCamera();
@@ -346,28 +360,90 @@ class DemoTour {
     this.stage.style.setProperty("--demo-tour-scale", "1");
     this.stage.style.setProperty("--demo-tour-x", "0px");
     this.stage.style.setProperty("--demo-tour-y", "0px");
+    this.setFocus(null);
     this.updateCursor();
+  }
+
+  // The ring and the dim live inside a layer that shares the camera transform,
+  // so the outline is set in unscaled stage coordinates.
+  setFocus(target) {
+    if (!this.focus) return;
+    if (!target?.isConnected) {
+      this.focus.dataset.visible = "false";
+      return;
+    }
+    const r = target.getBoundingClientRect();
+    if (!r.width || !r.height) {
+      this.focus.dataset.visible = "false";
+      return;
+    }
+    this.focus.style.left = `${r.left}px`;
+    this.focus.style.top = `${r.top}px`;
+    this.focus.style.width = `${r.width}px`;
+    this.focus.style.height = `${r.height}px`;
+    this.focus.dataset.dim = String(this.focusDim !== false);
+    this.focus.dataset.visible = "true";
+  }
+
+  // React re-renders can replace the node captured at step start. Re-resolve
+  // the same semantic target so the ring stays on screen while it is connected.
+  resolveTarget() {
+    const doc = this.frame.contentDocument;
+    if (!doc) return null;
+    if (this.frame.dataset.demo === "mail") {
+      if (this.index === 0) return doc.querySelector(".message-list");
+      if (this.steps[this.index].id === "search") return doc.querySelector('.message-item[data-message-id="m1"]');
+      return doc.querySelector(".mail-reader .mail-title");
+    }
+    const step = this.steps[this.index].id;
+    if (step === "answer") {
+      const messages = doc.querySelectorAll(".agent-message.assistant");
+      return messages[messages.length - 1] || doc.querySelector(".agent-workspace");
+    }
+    if (step === "citations") {
+      return doc.querySelector(".agent-citations-sidebar.expanded .agent-citation-card") || doc.querySelector(".agent-citations-sidebar.expanded .agent-citations-panel");
+    }
+    return doc.querySelector(".demo-source-card");
   }
 
   updateCamera() {
     const width = this.stage.clientWidth;
-    if (!this.playing || !this.closeupEnabled || this.motion.matches || width < 760 || !this.target?.isConnected) {
+    if (!this.playing || !this.closeupEnabled || this.motion.matches || width < 760) {
       this.resetCamera();
       return;
     }
+    // A disconnected or unmeasured target keeps the current framing instead of
+    // snapping back to 1.0 between steps.
+    if (!this.target?.isConnected) this.target = this.resolveTarget();
+    if (!this.target?.isConnected) {
+      this.setFocus(null);
+      // A re-render can briefly remove the target. Retry for a moment so the
+      // ring comes back instead of staying hidden for the rest of the step.
+      if (this.playing && (this.focusAttempts ?? 0) < 12) {
+        this.focusAttempts = (this.focusAttempts ?? 0) + 1;
+        window.clearTimeout(this.focusRetry);
+        this.focusRetry = window.setTimeout(() => {
+          if (this.playing) this.updateCamera();
+        }, 140);
+      }
+      return;
+    }
+    this.focusAttempts = 0;
     const r = this.target.getBoundingClientRect();
-    if (!r.width || !r.height) { this.resetCamera(); return; }
+    if (!r.width || !r.height) {
+      this.setFocus(null);
+      return;
+    }
     const height = this.stage.clientHeight;
-    // Keep zoom subtle, crisp, and comfortable (1.04 - 1.07x) so desktop UI remains clean and un-blurred
-    const scale = clamp(Math.min(width / (r.width + 180), height / (r.height + 180)), 1.04, 1.07);
-    // Pan gently toward active target without throwing sidebar off-screen
-    const idealX = (width / 2 - (r.left + r.width / 2) * scale) * 0.18;
-    const x = clamp(idealX, -36, 0);
-    const idealY = (height / 2 - (r.top + r.height / 2) * scale) * 0.2;
-    const y = clamp(idealY, -24, 0);
+    // 1.18 - 1.28x with the target centered; offsets are clamped so no blank
+    // edge can appear around the frame.
+    const scale = clamp(Math.min(width / (r.width + 140), height / (r.height + 140)), 1.18, 1.28);
+    const x = clamp(width / 2 - (r.left + r.width / 2) * scale, width - width * scale, 0);
+    const y = clamp(height / 2 - (r.top + r.height / 2) * scale, height - height * scale, 0);
     this.stage.style.setProperty("--demo-tour-scale", String(scale));
     this.stage.style.setProperty("--demo-tour-x", `${x}px`);
     this.stage.style.setProperty("--demo-tour-y", `${y}px`);
+    this.setFocus(this.focusEnabled ? this.target : null);
     this.updateCursor();
   }
 
@@ -375,26 +451,12 @@ class DemoTour {
     const en = document.documentElement.dataset.lang === "en";
     const pending = !this.userStopped && !this.finished && (!this.motion.matches || this.userRequested);
     const playing = this.playing || pending;
-    this.toggle.hidden = this.closeup.hidden = this.caption.hidden = !this.ready;
+    this.toggle.hidden = this.closeup.hidden = !this.ready;
     this.toggle.textContent = playing ? (en ? "Pause tour" : "暂停演示") : (this.finished ? (en ? "Replay tour" : "重播演示") : (en ? "Play tour" : "播放演示"));
     this.toggle.setAttribute("aria-pressed", String(this.playing));
     this.closeup.textContent = en ? "Close-up" : "特写";
     this.closeup.disabled = this.motion.matches || this.stage.clientWidth < 760;
     this.closeup.setAttribute("aria-pressed", String(this.closeupEnabled && !this.closeup.disabled));
-    const counter = this.caption.querySelector(".demo-tour-step");
-    counter.textContent = this.playing ? `${String(this.index + 1).padStart(2, "0")} / ${String(this.steps.length).padStart(2, "0")}` : "";
-    const step = this.steps[Math.min(this.index, this.steps.length - 1)];
-    const nextText = this.playing ? step[en ? "en" : "zh"] : this.stage.dataset.tourPause === "dialog" ? (en ? "Close the dialog, then play the tour." : "关闭当前弹窗后，可以继续演示。") : (en ? "Click or type in the demo to try it yourself." : "点击或输入，就可以自己试试。");
-    const label = this.caption.querySelector(".demo-tour-label");
-    if (label && label.textContent !== nextText) {
-      label.textContent = nextText;
-      if (!this.motion.matches && typeof label.animate === "function") {
-        label.animate([
-          { opacity: 0.35, transform: "translateY(2px)" },
-          { opacity: 1, transform: "translateY(0)" }
-        ], { duration: 240, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
-      }
-    }
   }
 }
 

@@ -290,7 +290,7 @@ test("standalone demo adds safe defaults before loading the client and makes no 
 });
 
 for (const width of [1440, 1000]) {
-  test(`${width}px homepage keeps complete account rows above the demo footer`, async ({ page }) => {
+  test(`${width}px homepage keeps account rows reachable above the demo footer`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const { mail } = await loadBothDemos(page);
     if (width === 1000) {
@@ -302,21 +302,46 @@ for (const width of [1440, 1000]) {
     const accounts = mail.locator(".account-list");
     await expect(accounts.locator(".account-tree-main")).toHaveCount(2);
 
-    const layout = await mail.locator(".sidebar").evaluate((sidebar) => {
-      const content = sidebar.querySelector(".sidebar-content")!.getBoundingClientRect();
-      const footer = sidebar.querySelector(".sidebar-footer")!.getBoundingClientRect();
-      const rows = Array.from(sidebar.querySelectorAll(".account-list > button, .account-tree-main"))
+    const sidebar = mail.locator(".sidebar");
+    const layout = await sidebar.evaluate((element) => {
+      const content = element.querySelector(".sidebar-content")!;
+      const contentRect = content.getBoundingClientRect();
+      const footer = element.querySelector(".sidebar-footer")!.getBoundingClientRect();
+      const rows = Array.from(element.querySelectorAll(".account-list > button, .account-tree-main"))
         .map((row) => { const rect = row.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom, height: rect.height }; });
-      return { width: sidebar.getBoundingClientRect().width, content, footer, rows };
+      return {
+        width: element.getBoundingClientRect().width,
+        contentBottom: contentRect.bottom,
+        footerTop: footer.top,
+        scrollable: content.scrollHeight > content.clientHeight,
+        rows,
+      };
     });
     expect(layout.width).toBe(width === 1440 ? 238 : 220);
     expect(layout.rows).toHaveLength(3);
     for (const row of layout.rows) {
       expect(row.height).toBeGreaterThanOrEqual(48);
-      expect(row.top).toBeGreaterThanOrEqual(layout.content.top);
-      expect(row.bottom).toBeLessThanOrEqual(layout.content.bottom + 1);
     }
-    expect(layout.content.bottom).toBeLessThanOrEqual(layout.footer.top + 1);
+    expect(layout.contentBottom).toBeLessThanOrEqual(layout.footerTop + 1);
+    // The demo figure now fits the viewport, so the sidebar is shorter than the
+    // account tree. Rows must stay full-height and be reachable by scrolling
+    // the sidebar instead of being squeezed or hidden under the footer.
+    const footerBefore = await sidebar.locator(".sidebar-footer").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    });
+    const lastRow = sidebar.locator(".account-list > button, .account-tree-main").last();
+    if (layout.scrollable) {
+      await lastRow.scrollIntoViewIfNeeded();
+      const contentBox = await sidebar.locator(".sidebar-content").boundingBox();
+      const rowBox = await lastRow.boundingBox();
+      expect(rowBox!.y).toBeGreaterThanOrEqual(contentBox!.y - 1);
+      expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(contentBox!.y + contentBox!.height + 1);
+    }
+    expect(await sidebar.locator(".sidebar-footer").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    })).toEqual(footerBefore);
   });
 }
 
