@@ -48,6 +48,10 @@ test("the required PR check includes the same Linux install and site build as Pa
     // to run first or a forgotten version bump would merge unnoticed.
     "node scripts/sync-site-version.mjs --check",
     "node scripts/build-site.mjs",
+    // The site specs run against that exact build, so the demo tour's
+    // data-tour-target contract is checked in CI rather than only in the app.
+    "npx playwright install --with-deps chromium",
+    "npx playwright test --config playwright.site.config.ts",
   ]);
   assert.deepEqual(
     pages.jobs.deploy.steps.map((step) => step.run).filter(Boolean),
