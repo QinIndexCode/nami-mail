@@ -96,6 +96,65 @@ test("discovers a release without downloading until the user accepts it", async 
   updater.dispose();
 });
 
+/**
+ * The cache sweep is deliberately not awaited by the check, so a test cannot
+ * assert on it synchronously. Polling also proves the assertion is reached
+ * *after* the sweep finished rather than passing before it started.
+ */
+async function eventually(check: () => Promise<void>, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await check();
+      return;
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
+test("sweeps a version directory no record refers to after a check", async (t) => {
+  const { updater, profile } = await createUpdater(t);
+  const updates = path.join(profile, "updates");
+  // The 0.4.3 directory from the audit: installed without the bundled helper,
+  // so no install-result / pending-install record ever named it again.
+  await fs.mkdir(path.join(updates, "0.4.3"), { recursive: true });
+  await fs.writeFile(path.join(updates, "0.4.3", "old.zip"), "fixture", "utf8");
+  // The offered version's verified cache has to survive, or every launch
+  // would re-download it.
+  await fs.mkdir(path.join(updates, targetVersion), { recursive: true });
+  await fs.writeFile(path.join(updates, targetVersion, assetNames.archiveName), archiveBytes);
+
+  const snapshot = await updater.checkForUpdates();
+  assert.equal(snapshot.phase, "ready");
+  await eventually(() => assert.rejects(fs.access(path.join(updates, "0.4.3"))));
+  await fs.access(path.join(updates, targetVersion, assetNames.archiveName));
+  updater.dispose();
+});
+
+test("keeps the version a pending install record refers to", async (t) => {
+  const { updater, profile } = await createUpdater(t);
+  const updates = path.join(profile, "updates");
+  await fs.mkdir(path.join(updates, "0.4.3"), { recursive: true });
+  // An unreferenced sibling doubles as the completion signal: once it is gone
+  // the sweep has run, so the survival of 0.4.3 is a real assertion.
+  await fs.mkdir(path.join(updates, "0.3.0"), { recursive: true });
+  await fs.writeFile(path.join(updates, "pending-install.json"), JSON.stringify({
+    schemaVersion: 1,
+    fromVersion: "1.2.2",
+    toVersion: "0.4.3",
+    startedAt: new Date().toISOString(),
+  }), "utf8");
+
+  // The helper may still be installing into that directory; collecting it now
+  // would break the install in flight.
+  await updater.checkForUpdates();
+  await eventually(() => assert.rejects(fs.access(path.join(updates, "0.3.0"))));
+  await fs.access(path.join(updates, "0.4.3"));
+  updater.dispose();
+});
+
 test("reports a persisted helper installation failure using typed result data", async (t) => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), "nami-desktop-updater-install-result-"));
   t.after(() => fs.rm(profile, { recursive: true, force: true }));

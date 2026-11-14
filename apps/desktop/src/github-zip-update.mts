@@ -528,3 +528,52 @@ export async function removeCachedGitHubZipUpdate(cacheDirectory: string, update
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return;
   await fs.rm(updateDirectory, { recursive: true, force: true });
 }
+
+/**
+ * Removes version directories nothing on this machine refers to any more.
+ *
+ * Every cleanup above is scoped to one version it already knows about (the one
+ * that just failed, the one the user skipped, the one an unapplied install
+ * named). A directory whose install never went through the bundled helper —
+ * dropped there by an older, manual update, or left behind by a build that
+ * predates those cleanup paths — is therefore never collected and keeps its
+ * whole download forever.
+ *
+ * Only directories whose name is exactly `x.y.z` are candidates. Anything else
+ * in that directory is left untouched by name alone — the sibling records
+ * (`install-result.json`, `pending-install.json`), leaf files, and any
+ * directory with another name. There is no extension allowlist to maintain:
+ * partial downloads live inside a version directory (`<version>/*.part`) and
+ * are collected with it. The caller owns the keep set — this function knows
+ * nothing about which version is being offered, installed, or judged, so it
+ * cannot invent one. A directory still held open by a running helper is left
+ * alone rather than forced; the next launch retries it.
+ */
+export async function sweepUpdateVersionCaches(
+  cacheDirectory: string,
+  keepVersions: Iterable<string>,
+): Promise<string[]> {
+  if (!path.isAbsolute(cacheDirectory)) return [];
+  const keep = new Set(keepVersions);
+  let entries;
+  try {
+    entries = await fs.readdir(cacheDirectory, { withFileTypes: true });
+  } catch {
+    // A missing cache directory means there is nothing to collect.
+    return [];
+  }
+  const removed: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !stableVersionPattern.test(entry.name) || keep.has(entry.name)) continue;
+    const updateDirectory = path.join(cacheDirectory, entry.name);
+    const relative = path.relative(cacheDirectory, updateDirectory);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    try {
+      await fs.rm(updateDirectory, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+      removed.push(entry.name);
+    } catch {
+      // Windows keeps the installer's files locked until its helper exits.
+    }
+  }
+  return removed;
+}

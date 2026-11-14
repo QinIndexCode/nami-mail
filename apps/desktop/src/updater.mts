@@ -6,6 +6,7 @@ import {
   hasVerifiedCachedUpdate,
   loadGitHubUpdateSource,
   removeCachedGitHubZipUpdate,
+  sweepUpdateVersionCaches,
   type GitHubZipUpdate,
 } from "./github-zip-update.mjs";
 import {
@@ -88,6 +89,7 @@ export class DesktopUpdater {
   private readonly installResults: UpdateInstallResultStore;
   private readonly pendingInstall: PendingUpdateInstallStore;
   private readonly cacheDirectory: string;
+  private cacheSwept = false;
   private update: GitHubZipUpdate | undefined;
   private updateTrust: { kind: "authenticode"; signer: TrustedWindowsSigner } | { kind: "ed25519"; trust: Ed25519UpdateTrust } | undefined;
 
@@ -133,6 +135,50 @@ export class DesktopUpdater {
 
   private clearCachedVersion(version: string): Promise<boolean> {
     return (this.options.removeCachedVersion ?? removeUpdateVersionCache)(this.cacheDirectory, version);
+  }
+
+  /**
+   * Collects version directories no record points at any more, once per launch.
+   *
+   * Runs after a check has resolved the offered version, not on the startup
+   * path: at startup nothing yet knows which cached archive is still the
+   * current offer, so sweeping there would delete a downloaded, verified
+   * "ready" update and force a re-download on every launch. A check that fails
+   * (offline) skips the sweep and a later one collects it.
+   *
+   * Not awaited by the check: the result changes no snapshot, every failure is
+   * logged and swallowed rather than surfaced, and a slow disk must not delay
+   * the transition the user is waiting for.
+   */
+  private sweepUpdateCache(): void {
+    if (this.cacheSwept) return;
+    this.cacheSwept = true;
+    // Captured here, not inside the task: a check resolving in between must not
+    // make the sweep forget the version it was told to keep.
+    const offeredVersion = this.update?.version;
+    void (async () => {
+      try {
+        const keep = new Set<string>([this.options.currentVersion]);
+        if (offeredVersion) keep.add(offeredVersion);
+        const installFailure = await this.installResults.readFailure();
+        if (installFailure) keep.add(installFailure.version);
+        const pendingInstall = await this.pendingInstall.read();
+        if (pendingInstall) {
+          keep.add(pendingInstall.fromVersion);
+          keep.add(pendingInstall.toVersion);
+        }
+        const removed = await sweepUpdateVersionCaches(this.cacheDirectory, keep);
+        if (removed.length > 0) {
+          console.debug(`[updater] removed unreferenced update version directories: ${removed.join(", ")}`);
+        }
+      } catch (error) {
+        // Best-effort housekeeping that must never surface, but it is also the
+        // only way to notice it stopped working: `debug` is dropped in
+        // packaged builds, so a failed sweep would otherwise leave nothing
+        // behind to diagnose.
+        console.warn(`[updater] could not collect unreferenced update caches: ${String(error)}`);
+      }
+    })();
   }
 
   private async publishInstallResult(installFailure: UpdateInstallFailure): Promise<DesktopUpdateSnapshot> {
@@ -412,6 +458,7 @@ export class DesktopUpdater {
         });
         if (!update) {
           this.update = undefined;
+          this.sweepUpdateCache();
           this.transition("up-to-date", "upToDate", {
             targetVersion: this.options.currentVersion,
             checkedAt: new Date(this.now()).toISOString(),
@@ -421,6 +468,7 @@ export class DesktopUpdater {
           });
         } else {
           this.update = update;
+          this.sweepUpdateCache();
           const policy = resolveUpdatePromptPolicy(this.preferences.get(), update.version, this.now());
           const cached = policy.suppression !== "skipped" && await hasVerifiedCachedUpdate(this.cacheDirectory, update);
           if (policy.suppression === "skipped") await removeCachedGitHubZipUpdate(this.cacheDirectory, update);

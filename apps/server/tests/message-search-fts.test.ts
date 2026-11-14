@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/app.js";
 import { openDatabase, type DatabaseHandle } from "../src/db.js";
-import { deleteMessageFts, ftsIndexedMessageCount, indexMessageFts, rebuildMessageFtsIndex } from "../src/message-search.js";
+import { deleteMessageFts, ftsIndexedMessageCount, indexMessageFts, messageFtsDrift, rebuildMessageFtsIndex } from "../src/message-search.js";
 import { messagePayloadForRow, protectedMessageColumns, type MessageStorageRow } from "../src/message-storage.js";
 
 const MASTER_KEY = Buffer.alloc(32, 19);
+// The rebuild route only exists when a token is configured (see app.ts), so
+// every test that calls it authenticates like the desktop host does.
+const MAINTENANCE_TOKEN = "maintenance-test-token";
 
 function insertAccount(db: DatabaseHandle, id = "account-1"): void {
   db.prepare(`
@@ -146,6 +149,35 @@ describe("message FTS search", () => {
       fromAddress: "s@example.com",
       textBody: "body",
     });
+    // Decoys: the wildcard characters must be matched literally, so neither of
+    // these may answer a query that literally contains "%" or "_".
+    insertIndexedMessage(db, "pct-decoy", "account-1", "INBOX", 3, {
+      subject: "Project 100X done",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    insertIndexedMessage(db, "under-decoy", "account-1", "INBOX", 4, {
+      subject: "codeXbranch merge",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    // A literal backslash is also an escape character for LIKE. Leaving it out
+    // of the "needs ESCAPE" test meant `%\%%`-style patterns matched the wrong
+    // rows (17 vs 8 in the review's measurement), so it is pinned here.
+    insertIndexedMessage(db, "slash", "account-1", "INBOX", 5, {
+      subject: "path C:\\temp\\notes",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    insertIndexedMessage(db, "slash-decoy", "account-1", "INBOX", 6, {
+      subject: "path C:/temp/notes",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
 
     const percentHit = await app.inject({ method: "GET", url: "/api/messages?q=100%25" });
     expect(percentHit.statusCode).toBe(200);
@@ -157,12 +189,23 @@ describe("message FTS search", () => {
     expect(underscoreHit.json().total).toBe(1);
     expect(underscoreHit.json().items[0].id).toBe("under");
 
+    const slashHit = await app.inject({ method: "GET", url: "/api/messages?q=C%3A%5Ctemp" });
+    expect(slashHit.statusCode).toBe(200);
+    expect(slashHit.json().total).toBe(1);
+    expect(slashHit.json().items[0].id).toBe("slash");
+
     // A bare percent must not behave as "match anything": it only hits the
     // message that actually contains a literal "%".
     const percentAlone = await app.inject({ method: "GET", url: "/api/messages?q=%25" });
     expect(percentAlone.statusCode).toBe(200);
     expect(percentAlone.json().total).toBe(1);
     expect(percentAlone.json().items[0].id).toBe("pct");
+
+    // A lone backslash likewise matches only the row carrying one.
+    const slashAlone = await app.inject({ method: "GET", url: "/api/messages?q=%5C" });
+    expect(slashAlone.statusCode).toBe(200);
+    expect(slashAlone.json().total).toBe(1);
+    expect(slashAlone.json().items[0].id).toBe("slash");
   });
 
   it("combines the FTS predicate with account and folder filters", async () => {
@@ -286,6 +329,119 @@ describe("message FTS search", () => {
     expect(kept.statusCode).toBe(200);
     expect(kept.json().total).toBe(1);
     expect(kept.json().items[0].id).toBe("keep");
+  });
+
+  it("tells a missing index row apart from a duplicated one", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    app = await buildApp({ db, masterKey: MASTER_KEY });
+    insertIndexedMessage(db, "kept", "account-1", "INBOX", 1, {
+      subject: "Kept message",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    insertIndexedMessage(db, "dropped", "account-1", "INBOX", 2, {
+      subject: "Dropped message",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+
+    expect(messageFtsDrift(db)).toBeUndefined();
+
+    // A second index row for an id that already has one: three rows for two
+    // messages. `indexed` still equals `messages`, so only the raw row count
+    // can see this, and it must not be reported as a missing message.
+    db.prepare(`
+      INSERT INTO messages_fts (message_id, subject, from_name, from_address, "to", "cc", "attachment", body)
+      VALUES ('kept', 'duplicate row', 'S', 's@example.com', '', '', '', 'body')
+    `).run();
+    expect(messageFtsDrift(db)).toEqual({ messages: 2, indexed: 2, rows: 3 });
+
+    // The shape of the failure the check exists for: the message row is there
+    // but its index row is not, so the message silently stops matching.
+    db.prepare("DELETE FROM messages_fts WHERE subject = 'duplicate row'").run();
+    deleteMessageFts(db, "dropped");
+    expect(messageFtsDrift(db)).toEqual({ messages: 2, indexed: 1, rows: 1 });
+  });
+
+  it("rebuilds the index only when the maintenance route is called", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    app = await buildApp({ db, masterKey: MASTER_KEY }, { localApiAccessToken: MAINTENANCE_TOKEN });
+    insertIndexedMessage(db, "kept", "account-1", "INBOX", 1, {
+      subject: "Kept message",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    insertIndexedMessage(db, "dropped", "account-1", "INBOX", 2, {
+      subject: "Dropped message",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+    deleteMessageFts(db, "dropped");
+
+    // Nothing on the boot path repairs drift, so the index is still short
+    // after building the app: the repair is the explicit call below.
+    expect(messageFtsDrift(db)).toEqual({ messages: 2, indexed: 1, rows: 1 });
+
+    const rebuilt = await app.inject({
+      method: "POST",
+      url: "/api/maintenance/message-search/rebuild",
+      headers: { "x-nami-api-token": MAINTENANCE_TOKEN },
+    });
+    expect(rebuilt.statusCode).toBe(200);
+    expect(rebuilt.json()).toEqual({
+      ok: true,
+      indexed: 2,
+      skipped: [],
+      before: { messages: 2, indexed: 1, rows: 1 },
+      after: null,
+    });
+    expect(messageFtsDrift(db)).toBeUndefined();
+
+    const found = await app.inject({
+      method: "GET",
+      url: "/api/messages?q=Dropped",
+      headers: { "x-nami-api-token": MAINTENANCE_TOKEN },
+    });
+    expect(found.statusCode).toBe(200);
+    expect(found.json().items.map((item: { id: string }) => item.id)).toEqual(["dropped"]);
+  });
+
+  it("does not expose the rebuild route when no local API token is configured", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    app = await buildApp({ db, masterKey: MASTER_KEY });
+
+    // Token-less is browser development, where a page in the same browser could
+    // otherwise POST to loopback and block the event loop for the length of a
+    // rebuild. The route is absent rather than merely guarded.
+    const response = await app.inject({ method: "POST", url: "/api/maintenance/message-search/rebuild" });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("answers 409 instead of queueing a second rebuild", async () => {
+    db = openDatabase(":memory:");
+    insertAccount(db);
+    app = await buildApp({ db, masterKey: MASTER_KEY }, { localApiAccessToken: MAINTENANCE_TOKEN });
+    insertIndexedMessage(db, "kept", "account-1", "INBOX", 1, {
+      subject: "Kept message",
+      fromName: "S",
+      fromAddress: "s@example.com",
+      textBody: "body",
+    });
+
+    const requests = [0, 1].map(() => app.inject({
+      method: "POST",
+      url: "/api/maintenance/message-search/rebuild",
+      headers: { "x-nami-api-token": MAINTENANCE_TOKEN },
+    }));
+    const statuses = (await Promise.all(requests)).map((response) => response.statusCode).sort();
+    expect(statuses).toEqual([200, 409]);
   });
 
   it("re-indexes updated payload text so old content stops matching", async () => {

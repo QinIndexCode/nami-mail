@@ -14,6 +14,7 @@ import {
   githubZipUpdateAssetNames,
   hasVerifiedCachedUpdate,
   parseGitHubUpdateSource,
+  sweepUpdateVersionCaches,
 } from "../src/github-zip-update.mts";
 import { canonicalUpdateManifestPayload, parseEd25519UpdateTrust, verifyEd25519UpdateManifest } from "../src/update-trust.mts";
 
@@ -471,4 +472,35 @@ test("rejects an oversized GitHub release metadata body", async () => {
     }),
     (error: unknown) => error instanceof GitHubZipUpdateError && error.code === "GITHUB_RELEASE_INVALID",
   );
+});
+
+test("removes only unreferenced version directories and leaves everything else alone", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-github-update-sweep-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const makeVersion = async (name: string) => {
+    await fs.mkdir(path.join(directory, name), { recursive: true });
+    await fs.writeFile(path.join(directory, name, assetNames.archiveName), archiveBytes);
+  };
+  // The shape this exists for: a version installed without the bundled helper
+  // left its whole download behind and nothing ever referenced it again.
+  await makeVersion("0.4.3");
+  await makeVersion("0.5.0");
+  await makeVersion("0.6.0");
+  // A real partial download lives inside its version directory
+  // (`<version>/<archive>.part`), so it is collected with that directory.
+  await fs.writeFile(path.join(directory, "0.6.0", `${assetNames.archiveName}.part`), "partial", "utf8");
+  await fs.writeFile(path.join(directory, "install-result.json"), "{}", "utf8");
+  await fs.writeFile(path.join(directory, "pending-install.json"), "{}", "utf8");
+  await fs.mkdir(path.join(directory, "not-a-version"), { recursive: true });
+  // The rule is the *name*, not an extension allowlist: a leaf file with any
+  // name at the cache root is never a candidate.
+  await fs.writeFile(path.join(directory, "0.7.0.zip.part"), "partial", "utf8");
+  const rootPartPath = path.join(directory, "0.7.0.zip.part");
+
+  const removed = await sweepUpdateVersionCaches(directory, ["0.5.0"]);
+  assert.deepEqual(removed.sort(), ["0.4.3", "0.6.0"]);
+
+  const remaining = (await fs.readdir(directory)).sort();
+  assert.deepEqual(remaining, ["0.5.0", "0.7.0.zip.part", "install-result.json", "not-a-version", "pending-install.json"]);
+  assert.equal((await fs.readFile(rootPartPath, "utf8")), "partial");
 });

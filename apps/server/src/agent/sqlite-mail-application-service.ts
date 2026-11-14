@@ -21,7 +21,7 @@ import {
 import { syncAccount } from "../sync.js";
 import { moveActionBlockedError } from "../message-storage.js";
 import { moveRefusalMessage } from "../move-refusals.js";
-import { ftsLikeEscape, MESSAGE_FTS_CROSS_JOIN, MESSAGE_FTS_TABLE } from "../message-search.js";
+import { ftsLikeEscape, ftsLikeEscapeSuffix, ftsLikePattern, MESSAGE_FTS_CROSS_JOIN, MESSAGE_FTS_TABLE } from "../message-search.js";
 import type { MessageFlagsPatch } from "../message-flags.js";
 import {
   FLAGGED_PREDICATE_SQL,
@@ -346,8 +346,9 @@ export class SqliteMailApplicationService implements MailApplicationService {
       // CROSS JOIN below keeps this single-pass (a correlated EXISTS re-scans
       // the index per message). This assumes the FTS row always exists for a
       // message row — the same invariant the user search relies on.
-      const pattern = `%${ftsLikeEscape(senderQuery)}%`;
-      where.push(`(fts.from_address LIKE ? ESCAPE '\\' OR fts.from_name LIKE ? ESCAPE '\\')`);
+      const { pattern, escape } = ftsLikePattern(senderQuery);
+      const suffix = ftsLikeEscapeSuffix(escape);
+      where.push(`(fts.from_address LIKE ?${suffix} OR fts.from_name LIKE ?${suffix})`);
       params.push(pattern, pattern);
     }
 

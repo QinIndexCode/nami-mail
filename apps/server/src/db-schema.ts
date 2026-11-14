@@ -147,7 +147,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_account_mailbox ON messages(account_id, mailbox, sent_at DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_address);
 
 -- Local outbound files are intentionally kept outside of the database. The
 -- rows below are the capability records that bind an opaque token to an

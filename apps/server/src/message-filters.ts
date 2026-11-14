@@ -1,4 +1,4 @@
-import { ftsLikeEscape, MESSAGE_FTS_CROSS_JOIN } from "./message-search.js";
+import { ftsLikeEscapeSuffix, ftsLikePattern, MESSAGE_FTS_CROSS_JOIN } from "./message-search.js";
 import {
   EITHER_FLAGGED_PREDICATE_SQL,
   EITHER_UNSEEN_PREDICATE_SQL,
@@ -252,11 +252,14 @@ export function buildMessageListSql(query: MessageListFilterQuery, options: Mess
     params.push(query.before);
   }
   if (search) {
-    const pattern = `%${ftsLikeEscape(search)}%`;
-    const ftsMatch = `(fts.subject LIKE ? ESCAPE '\\'
-      OR fts.from_name LIKE ? ESCAPE '\\'
-      OR fts.from_address LIKE ? ESCAPE '\\'
-      OR fts.body LIKE ? ESCAPE '\\')`;
+    // Three-state pattern; see ftsLikePattern. A 3+ character query without
+    // wildcards must not bind ESCAPE, or the trigram index is never consulted.
+    const { pattern, escape } = ftsLikePattern(search);
+    const suffix = ftsLikeEscapeSuffix(escape);
+    const ftsMatch = `(fts.subject LIKE ?${suffix}
+      OR fts.from_name LIKE ?${suffix}
+      OR fts.from_address LIKE ?${suffix}
+      OR fts.body LIKE ?${suffix})`;
     const ftsParams = [pattern, pattern, pattern, pattern];
     const where = filters.length ? `${ftsMatch} AND (${filters.join(" AND ")})` : ftsMatch;
     return {
