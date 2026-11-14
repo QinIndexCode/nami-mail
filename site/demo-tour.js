@@ -7,15 +7,33 @@ const VISIBLE_FRACTION = 0.5;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const STEPS = {
   mail: [
-    { id: "overview", hold: 1800 },
-    { id: "search", hold: 2400 },
-    { id: "read", hold: 3400 },
+    { id: "overview", hold: 1800, anchor: "mailList" },
+    { id: "search", hold: 2400, anchor: "mailRow" },
+    { id: "read", hold: 3400, anchor: "readerTitle" },
   ],
   agent: [
-    { id: "answer", hold: 2800 },
-    { id: "citations", hold: 2200 },
-    { id: "source", hold: 3600 },
+    { id: "answer", hold: 2800, anchor: "agentAnswer" },
+    { id: "citations", hold: 2200, anchor: "citationCard" },
+    { id: "source", hold: 3600, anchor: "sourceCard" },
   ],
+};
+
+/* The only DOM contract this tour is allowed to know. apps/web renders these
+ * attributes explicitly for the demo, so renaming a class or restructuring a
+ * component cannot silently remove a step: `fail()` below turns a missing
+ * anchor into a visible error state and a console message the site e2e checks. */
+const ANCHORS = {
+  mailList: '[data-tour-target="mail-list"]',
+  mailRow: '[data-tour-target="mail-row"]',
+  mailSearch: '[data-tour-target="mail-search"]',
+  mailSearchToggle: '[data-tour-action="mail-search-toggle"]',
+  readerBack: '[data-tour-action="reader-back"]',
+  readerTitle: '[data-tour-target="reader-title"]',
+  agentAnswer: '[data-tour-target="agent-answer"]',
+  citationsToggle: '[data-tour-action="citations-toggle"]',
+  citationCard: '[data-tour-target="citation-card"]',
+  sourceCard: '[data-tour-target="source-card"]',
+  sourceClose: '[data-tour-action="source-close"]',
 };
 
 function visibleFraction(stage) {
@@ -28,7 +46,7 @@ function visibleFraction(stage) {
 // React's controlled input tracks its own value setter. Use the native setter
 // and a normal input event so the existing onChange/search debounce owns it.
 function setSearch(doc, value) {
-  const input = doc.querySelector("#mail-search");
+  const input = doc.querySelector(ANCHORS.mailSearch);
   if (!input || input.value === value) return;
   const win = doc.defaultView;
   Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value").set.call(input, value);
@@ -36,7 +54,7 @@ function setSearch(doc, value) {
 }
 
 async function simulateTyping(doc, targetText, run, tour) {
-  const input = doc.querySelector("#mail-search");
+  const input = doc.querySelector(ANCHORS.mailSearch);
   if (!input) return;
   input.focus({ preventScroll: true });
 
@@ -90,6 +108,7 @@ class DemoTour {
         this.index = 0;
         this.target = this.cursorTarget = null;
         delete this.stage.dataset.tourStep;
+        delete this.stage.dataset.tourError;
         this.resetCamera();
         this.play();
       }
@@ -144,6 +163,7 @@ class DemoTour {
       this.userRequested = false;
       this.userStopped = this.motion.matches;
       this.stage.dataset.tourState = this.motion.matches ? "paused" : "waiting";
+      delete this.stage.dataset.tourError;
       if (this.visible && !this.motion.matches) this.play(INTRO_MS);
     } else {
       this.stage.dataset.tourState = "waiting";
@@ -189,6 +209,7 @@ class DemoTour {
     this.playing = this.visible;
     this.stage.dataset.tourState = this.visible ? "playing" : "waiting";
     delete this.stage.dataset.tourPause;
+    delete this.stage.dataset.tourError;
     this.render();
     if (!this.visible) return;
     const run = this.run;
@@ -205,6 +226,35 @@ class DemoTour {
     return null;
   }
 
+  // Assistant answers accumulate, so the newest one is the last rendered match.
+  async findLast(selector, run) {
+    for (let tries = 0; tries < 30 && this.playing && this.run === run; tries += 1) {
+      const elements = this.frame.contentDocument.querySelectorAll(selector);
+      for (let i = elements.length - 1; i >= 0; i -= 1) {
+        const rect = elements[i].getBoundingClientRect();
+        if (rect.width && rect.height) return elements[i];
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 80));
+    }
+    return null;
+  }
+
+  /* A missing anchor is a broken contract, not a step to skip. Stop the tour,
+   * expose `data-tour-state="error"` + `data-tour-error` on the stage, and log
+   * loudly so the site e2e (and anyone with a console open) sees it. */
+  fail(step, anchorKey) {
+    const message = `[demo-tour] ${this.frame.dataset.demo}/${step}: missing ${ANCHORS[anchorKey]}`;
+    console.error(message);
+    this.stop();
+    this.userStopped = true;
+    this.resetCamera();
+    this.stage.dataset.tourState = "error";
+    this.stage.dataset.tourError = anchorKey;
+    delete this.stage.dataset.tourPause;
+    this.stage.dispatchEvent(new CustomEvent("demo-tour-error", { bubbles: true, detail: { demo: this.frame.dataset.demo, step, anchor: anchorKey } }));
+    this.render();
+  }
+
   pointCursor(target, text = false) {
     this.cursorTarget = target;
     this.cursorOnText = text;
@@ -218,19 +268,19 @@ class DemoTour {
     const el = this.cursorTarget;
     const r = el.getBoundingClientRect();
     let x, y;
-    if (el.matches?.(".message-item") || el.closest?.(".message-item")) {
+    if (el.matches?.(ANCHORS.mailRow) || el.closest?.(ANCHORS.mailRow)) {
       // Land naturally on message sender/subject instead of far-right whitespace
       x = r.left + Math.min(108, r.width * 0.28);
       y = r.top + r.height / 2;
-    } else if (el.matches?.("#mail-search") || el.matches?.("input")) {
+    } else if (el.matches?.(ANCHORS.mailSearch) || el.matches?.("input")) {
       // Land inside search input where text is typed
       x = r.left + Math.min(42, r.width * 0.2);
       y = r.top + r.height / 2;
-    } else if (el.matches?.(".agent-citation-card") || el.closest?.(".agent-citation-card")) {
+    } else if (el.matches?.(ANCHORS.citationCard) || el.closest?.(ANCHORS.citationCard)) {
       // Land on citation card title
       x = r.left + Math.min(64, r.width * 0.35);
       y = r.top + r.height / 2;
-    } else if (el.matches?.(".demo-source-card") || el.closest?.(".demo-source-card")) {
+    } else if (el.matches?.(ANCHORS.sourceCard) || el.closest?.(ANCHORS.sourceCard)) {
       // Land on source title
       x = r.left + Math.min(48, r.width * 0.25);
       y = r.top + 36;
@@ -246,9 +296,12 @@ class DemoTour {
     this.cursor.style.setProperty("--demo-cursor-y", `${clamp(y, 8, this.stage.clientHeight - 36)}px`);
   }
 
-  async clickTarget(element, run) {
+  async clickTarget(element, run, anchorKey) {
     if (!this.playing || this.run !== run) return false;
-    if (!element?.isConnected) { this.pause("unavailable"); return false; }
+    if (!element?.isConnected) {
+      this.fail(this.steps[this.index]?.id ?? "unknown", anchorKey);
+      return false;
+    }
     this.pointCursor(element);
     if (!this.motion.matches && this.stage.clientWidth >= 760) {
       await new Promise((resolve) => window.setTimeout(resolve, 650));
@@ -264,15 +317,14 @@ class DemoTour {
   async showStep(run) {
     if (!this.playing || this.run !== run) return;
     const doc = this.frame.contentDocument;
+    const step = this.steps[this.index];
     // Replaying may return from a source we opened. Other dialogs belong to
     // the visitor: never close a compose/settings/consent dialog for a tour.
-    const sourceClose = doc.querySelector(".demo-source-card .icon-button");
-    if (this.index === 0 && sourceClose) sourceClose.click();
-    if (doc.querySelector('[role="dialog"]:not(.demo-source-card):not(.agent-workspace), [role="alertdialog"]')) {
+    if (this.index === 0) doc.querySelector(ANCHORS.sourceClose)?.click();
+    if (doc.querySelector('[role="dialog"]:not([data-tour-target="source-card"]):not(.agent-workspace), [role="alertdialog"]')) {
       this.pause("dialog");
       return;
     }
-    const step = this.steps[this.index];
     // The ring fades out while the camera travels, then fades back in on the
     // freshly measured target (see the 350ms re-measure below).
     this.focusEnabled = true;
@@ -282,53 +334,53 @@ class DemoTour {
     let cameraTarget;
     if (this.frame.dataset.demo === "mail") {
       if (this.index === 0) {
-        doc.querySelector(".reader-back")?.click();
+        doc.querySelector(ANCHORS.readerBack)?.click();
         setSearch(doc, "");
-        const firstRow = await this.find('.message-item[data-message-id="m1"]', run);
+        const list = doc.querySelector(ANCHORS.mailList);
+        if (!list) { this.fail(step.id, "mailList"); return; }
+        const firstRow = await this.find(ANCHORS.mailRow, run);
         // The cursor lands on the first row, but the close-up frames the whole
         // list so the overview keeps both accounts in context.
-        target = firstRow || doc.querySelector(".message-list");
-        cameraTarget = doc.querySelector(".message-list") || target;
+        cameraTarget = list;
+        target = firstRow || list;
       } else if (step.id === "search") {
-        const search = doc.querySelector(".search-toggle");
-        if (search?.getAttribute("aria-expanded") !== "true" && !await this.clickTarget(search, run)) return;
+        const search = doc.querySelector(ANCHORS.mailSearchToggle);
+        if (!search) { this.fail(step.id, "mailSearchToggle"); return; }
+        if (search.getAttribute("aria-expanded") !== "true" && !await this.clickTarget(search, run, "mailSearchToggle")) return;
         if (!this.playing || this.run !== run) return;
-        const searchInput = doc.querySelector("#mail-search");
-        if (searchInput) {
-          this.pointCursor(searchInput);
-          await simulateTyping(doc, "lin@example.com", run, this);
-        } else {
-          setSearch(doc, "lin@example.com");
-        }
-        target = await this.find('.message-item[data-message-id="m1"]', run);
+        const searchInput = doc.querySelector(ANCHORS.mailSearch);
+        if (!searchInput) { this.fail(step.id, "mailSearch"); return; }
+        this.pointCursor(searchInput);
+        await simulateTyping(doc, "lin@example.com", run, this);
+        target = await this.find(ANCHORS.mailRow, run);
       } else {
-        target = doc.querySelector(".mail-reader .mail-title");
+        target = doc.querySelector(ANCHORS.readerTitle);
         if (!target) {
-          const row = await this.find('.message-item[data-message-id="m1"]', run);
+          const row = await this.find(ANCHORS.mailRow, run);
           if (!this.playing || this.run !== run) return;
-          if (!row) { this.pause("unavailable"); return; }
-          if (!await this.clickTarget(row, run)) return;
-          target = await this.find(".mail-reader .mail-title", run);
+          if (!row) { this.fail(step.id, "readerTitle"); return; }
+          if (!await this.clickTarget(row, run, "mailRow")) return;
+          target = await this.find(ANCHORS.readerTitle, run);
         }
       }
     } else if (step.id === "answer") {
-      const panel = doc.querySelector(".agent-citations-sidebar");
-      if (panel?.classList.contains("expanded")) panel.querySelector(".agent-citations-toggle")?.click();
-      const messages = doc.querySelectorAll(".agent-message.assistant");
-      target = messages[messages.length - 1] || doc.querySelector(".agent-workspace");
+      const toggle = doc.querySelector(ANCHORS.citationsToggle);
+      if (toggle?.getAttribute("aria-expanded") === "true") toggle.click();
+      target = await this.findLast(ANCHORS.agentAnswer, run);
     } else if (step.id === "citations") {
-      const panel = doc.querySelector(".agent-citations-sidebar");
-      if (!panel?.classList.contains("expanded") && !await this.clickTarget(panel?.querySelector(".agent-citations-toggle"), run)) return;
-      target = await this.find(".agent-citations-sidebar.expanded .agent-citation-card", run) || await this.find(".agent-citations-sidebar.expanded .agent-citations-panel", run);
+      const toggle = doc.querySelector(ANCHORS.citationsToggle);
+      if (!toggle) { this.fail(step.id, "citationsToggle"); return; }
+      if (toggle.getAttribute("aria-expanded") !== "true" && !await this.clickTarget(toggle, run, "citationsToggle")) return;
+      target = await this.find(ANCHORS.citationCard, run);
     } else {
-      const citation = await this.find(".agent-citations-sidebar.expanded .agent-citation-card", run);
+      const citation = await this.find(ANCHORS.citationCard, run);
       if (!this.playing || this.run !== run) return;
-      if (!citation) { this.pause("unavailable"); return; }
-      if (!await this.clickTarget(citation, run)) return;
-      target = await this.find(".demo-source-card", run);
+      if (!citation) { this.fail(step.id, "citationCard"); return; }
+      if (!await this.clickTarget(citation, run, "citationCard")) return;
+      target = await this.find(ANCHORS.sourceCard, run);
     }
     if (!this.playing || this.run !== run) return;
-    if (!target) { this.pause("unavailable"); return; }
+    if (!target) { this.fail(step.id, step.anchor); return; }
     this.target = cameraTarget || target;
     this.pointCursor(target, true);
     this.stage.dataset.tourStep = step.id;
@@ -350,7 +402,7 @@ class DemoTour {
   finish() {
     this.stop();
     this.finished = true;
-    this.frame.contentDocument.querySelector(".demo-source-card .icon-button")?.click();
+    this.frame.contentDocument.querySelector(ANCHORS.sourceClose)?.click();
     this.stage.dataset.tourState = "complete";
     this.resetCamera();
     this.render();
@@ -390,20 +442,18 @@ class DemoTour {
   resolveTarget() {
     const doc = this.frame.contentDocument;
     if (!doc) return null;
+    const step = this.steps[this.index]?.id;
     if (this.frame.dataset.demo === "mail") {
-      if (this.index === 0) return doc.querySelector(".message-list");
-      if (this.steps[this.index].id === "search") return doc.querySelector('.message-item[data-message-id="m1"]');
-      return doc.querySelector(".mail-reader .mail-title");
+      if (step === "overview") return doc.querySelector(ANCHORS.mailList);
+      if (step === "search") return doc.querySelector(ANCHORS.mailRow);
+      return doc.querySelector(ANCHORS.readerTitle);
     }
-    const step = this.steps[this.index].id;
     if (step === "answer") {
-      const messages = doc.querySelectorAll(".agent-message.assistant");
-      return messages[messages.length - 1] || doc.querySelector(".agent-workspace");
+      const answers = doc.querySelectorAll(ANCHORS.agentAnswer);
+      return answers[answers.length - 1] || null;
     }
-    if (step === "citations") {
-      return doc.querySelector(".agent-citations-sidebar.expanded .agent-citation-card") || doc.querySelector(".agent-citations-sidebar.expanded .agent-citations-panel");
-    }
-    return doc.querySelector(".demo-source-card");
+    if (step === "citations") return doc.querySelector(ANCHORS.citationCard);
+    return doc.querySelector(ANCHORS.sourceCard);
   }
 
   updateCamera() {

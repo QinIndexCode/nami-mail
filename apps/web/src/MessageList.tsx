@@ -182,7 +182,7 @@ export const MessageListRow = memo(function MessageListRow(props: MessageListRow
   const subjectLabel = message.subject.trim() ? message.subject : t("mail.message.noSubject");
   return (
     <div className="message-list-row" role="listitem" style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualStart}px)` }}>
-      <button tabIndex={tabbable ? 0 : -1} data-index={index} data-message-id={message.id} ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
+      <button tabIndex={tabbable ? 0 : -1} data-index={index} data-message-id={message.id} data-tour-target="mail-row" ref={buttonRefCallback} className={className} aria-pressed={selectionMode ? multiSelected : undefined} aria-haspopup="menu" onContextMenu={(event) => { event.preventDefault(); if (!selectionMode) onOpenContextMenu(message, event.clientX, event.clientY); }} onClick={(event) => onRowClick(message, index, event)}>
         <span className="visually-hidden">{selectionMode ? t("mail.selection.selectMessageAria", { subject: subjectLabel }) : t("mail.messageAria", { readState: message.seen ? t("mail.read") : t("mail.unread"), starred: message.flagged ? t("mail.messageStarred") : "", attachments: rowHasAttachments ? t("mail.messageHasAttachments") : "" })}</span>
         {selectionMode && <span className={`selection-checkbox ${multiSelected ? "checked" : ""}`} aria-hidden="true" />}
         <SenderAvatar name={rowPerson.name} address={rowPerson.address} tone={accountTone(rowPerson.address)} gravatarEnabled={gravatarEnabled} bimiEnabled={bimiEnabled} />
@@ -530,7 +530,7 @@ function MessageList(props: MessageListProps): React.JSX.Element {
 
   return (
     <>
-      <div className="message-list" ref={messageListRef} onKeyDown={handleListKeyDown} onFocus={handleRowFocus} onScroll={() => { if (contextMenu) closeContextMenu(false); }} aria-busy={loading || undefined}>
+      <div className="message-list" ref={messageListRef} data-tour-target="mail-list" onKeyDown={handleListKeyDown} onFocus={handleRowFocus} onScroll={() => { if (contextMenu) closeContextMenu(false); }} aria-busy={loading || undefined}>
       {showError && fatalError && <div className="center-state error-state"><X size={24} /><h3>{fatalError.title}</h3><p>{fatalError.message} {fatalError.guidance}</p><button className="secondary-button" onClick={onReconnect}>{t("mail.reconnect")}</button></div>}
       {showFirstAccount && (
         <div className="center-state empty-state"><div className="empty-orb"><Mail size={28} /></div><h3>{t("mail.empty.firstAccountTitle")}</h3><p>{t("mail.empty.firstAccountDescription")}</p><button className="primary-button" onClick={onAddAccount}><Plus size={17} />{t("account.add")}</button></div>

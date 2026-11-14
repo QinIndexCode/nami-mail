@@ -49,9 +49,9 @@ export function isoFromDatetimeLocal(value: string): string | undefined {
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
-export function IconButton({ label, children, onClick, className = "", disabled = false, expanded, buttonRef }: { label: string; children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; expanded?: boolean; buttonRef?: RefObject<HTMLButtonElement | null> }) {
+export function IconButton({ label, children, onClick, className = "", disabled = false, expanded, buttonRef, tourAction }: { label: string; children: ReactNode; onClick?: () => void; className?: string; disabled?: boolean; expanded?: boolean; buttonRef?: RefObject<HTMLButtonElement | null>; tourAction?: string }) {
   return (
-    <button ref={buttonRef} className={`icon-button ${className}`} type="button" aria-label={label} aria-expanded={expanded} data-tooltip={label} onClick={onClick} disabled={disabled}>
+    <button ref={buttonRef} className={`icon-button ${className}`} type="button" aria-label={label} aria-expanded={expanded} data-tour-action={tourAction} data-tooltip={label} onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );

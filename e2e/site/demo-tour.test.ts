@@ -8,6 +8,19 @@ async function loadSite(page: Page): Promise<void> {
   await page.goto("/");
 }
 
+const STEP_ANCHORS = {
+  mail: [
+    { step: "overview", target: "mail-list" },
+    { step: "search", target: "mail-row", interactive: true },
+    { step: "read", target: "reader-title" },
+  ],
+  agent: [
+    { step: "answer", target: "agent-answer" },
+    { step: "citations", target: "citation-card", interactive: true },
+    { step: "source", target: "source-card" },
+  ],
+} as const;
+
 async function readyTour(page: Page, view: "mail" | "agent") {
   const stage = page.locator(".demo-stage").filter({ has: page.locator(`iframe[data-demo="${view}"]`) });
   // Land on the section like the nav link does, so the sticky header does not
@@ -15,8 +28,45 @@ async function readyTour(page: Page, view: "mail" | "agent") {
   await page.evaluate((id) => document.getElementById(id)!.scrollIntoView({ block: "start", behavior: "instant" }), view === "mail" ? "demo" : "agent");
   await expect(stage).toHaveAttribute("data-state", "ready");
   const frame = frameFor(page, view);
-  await expect(frame.locator(view === "mail" ? ".message-item" : ".agent-workspace").first()).toBeVisible();
+  await expect(frame.locator(view === "mail" ? '[data-tour-target="mail-row"]' : '[data-tour-target="agent-answer"]').first()).toBeVisible();
   return { stage, frame, toolbar: stage.locator("xpath=ancestor::figure") };
+}
+
+/** Walk one demo and require every step's contract anchor to be present. */
+async function walkStepAnchors(page: Page, view: "mail" | "agent") {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("[demo-tour]")) errors.push(message.text());
+  });
+  const { stage, frame } = await readyTour(page, view);
+  // The tour needs its fake clock ticked forward, and the step only advances
+  // after in-frame clicks/typing have settled, so poll in 100ms slices rather
+  // than guessing fixed hold durations.
+  const advanceUntil = async (check: () => Promise<boolean>) => {
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      if (await check()) return;
+      await page.clock.runFor(100);
+    }
+    throw new Error(`${view} tour did not reach the expected step (${await stage.getAttribute("data-tour-step")}, ${await stage.getAttribute("data-tour-error")})`);
+  };
+  await advanceUntil(async () => (await stage.getAttribute("data-tour-step")) === STEP_ANCHORS[view][0].step);
+  for (const step of STEP_ANCHORS[view]) {
+    await expect(stage).toHaveAttribute("data-tour-step", step.step);
+    await expect(stage).not.toHaveAttribute("data-tour-error", /.+/);
+    const anchor = frame.locator(`[data-tour-target="${step.target}"]`).first();
+    await expect(anchor).toBeVisible();
+    const box = await anchor.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThan(0);
+    expect(box?.height ?? 0).toBeGreaterThan(0);
+    if ("interactive" in step && step.interactive) await expect(anchor).toBeEnabled();
+    await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-visible", "true");
+    const next = STEP_ANCHORS[view][STEP_ANCHORS[view].indexOf(step) + 1];
+    await advanceUntil(async () => (await stage.getAttribute("data-tour-state")) === "error"
+      || (next ? (await stage.getAttribute("data-tour-step")) === next.step : (await stage.getAttribute("data-tour-state")) === "complete"));
+    await expect(stage).not.toHaveAttribute("data-tour-error", /.+/);
+  }
+  await expect(stage).toHaveAttribute("data-tour-state", "complete");
+  expect(errors).toEqual([]);
 }
 
 test("mail tour searches and reads the real sample message, uses close-up, finishes once, and makes no API requests", async ({ page }) => {
@@ -122,6 +172,18 @@ test("agent tour opens citations and the original source while staying in the as
   await page.clock.runFor(3600);
   await expect(stage).toHaveAttribute("data-tour-state", "complete");
   await expect(frame.locator(".demo-source-card")).toHaveCount(0);
+});
+
+test("every mail step resolves its data-tour-target anchor", async ({ page }) => {
+  await page.clock.install();
+  await loadSite(page);
+  await walkStepAnchors(page, "mail");
+});
+
+test("every agent step resolves its data-tour-target anchor", async ({ page }) => {
+  await page.clock.install();
+  await loadSite(page);
+  await walkStepAnchors(page, "agent");
 });
 
 test("leaving the visible stage pauses the tour and returning resumes it", async ({ page }) => {
