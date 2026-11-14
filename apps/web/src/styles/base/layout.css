@@ -428,13 +428,29 @@ display:flex;
    dialog, while the window-bar background beneath dims with the scrim. */
 z-index:95;
 border-left:1px solid var(--line);
-padding-left:12px
+padding-left:12px;
+/* The tray is the static half of the "window, not card" signal — hover only
+   fires once the pointer has already committed. It paints the group's own box,
+   which is why it is rounded: a square block would end 12px short of the window
+   edge and read as a stray slab. Paint-only, so the buttons do not move. */
+background:var(--chrome-tray);
+border-radius:var(--radius-compact)
 }
-.window-control-close:hover:not(:disabled)
+/* `.icon-button:hover` lives in features/mail.css, imported after this file, so
+   this needs more weight than its (0,3,0) — hence the `.window-bar` ancestor. It
+   stays scoped there: the compose card's own close button is neutral grey,
+   because red means exactly one thing, closing the whole app. */
+.window-bar .window-control-close:hover:not(:disabled)
 {
 border-color:color-mix(in srgb, var(--danger) 30%, transparent);
 background:color-mix(in srgb, var(--danger) 13%, transparent);
 color:var(--danger)
+}
+/* The same one-thing rule for the keyboard: the ring keeps its global 2px/2px
+   geometry and only takes the danger colour on the window's close button. */
+.window-bar .window-control-close:focus-visible
+{
+outline-color:var(--danger)
 }
 .local-pill
 {
