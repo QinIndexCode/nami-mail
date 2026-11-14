@@ -32,6 +32,16 @@ height:100%;
 max-width:100%;
 max-height:100%
 }
+/* A maximized compose is deliberately edge-to-edge, so its header shares the
+   window's top band with the shell's own chrome. Keep the surface full-bleed
+   and move only the header's content: the title clears the macOS traffic
+   lights, the actions clear the Windows/Linux window buttons, and whichever
+   side has no chrome contributes 0, so one rule covers both platforms. */
+.compose-card.is-maximized>.compose-header
+{
+padding-right:calc(var(--window-chrome-right) + 20px);
+padding-left:calc(var(--window-chrome-left) + 20px)
+}
 .compose-card.closing
 {
 pointer-events:none;

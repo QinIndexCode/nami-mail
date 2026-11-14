@@ -201,6 +201,24 @@ padding:0 12px;
 display:grid;
 -webkit-app-region:drag
 }
+/* The window bar below is the chrome band, so its footprint is published as the
+   safe-area tokens every surface must keep clear of: the header row reserves it
+   as a grid track, dialogs cap their height against it, and a surface that goes
+   full-bleed insets its own controls by it. Defined once here, consumed through
+   the tokens instead of restating 144/66 at each call site. */
+.desktop-app
+{
+--window-chrome-top:66px;
+--window-chrome-right:144px
+}
+/* macOS draws the native traffic lights at the top-left and reserves a leading
+   slot for them, so nothing is drawn at the right edge. */
+.desktop-app[data-platform=darwin]
+{
+--window-chrome-top:42px;
+--window-chrome-right:0px;
+--window-chrome-left:78px
+}
 /* In the desktop shell the window bar no longer occupies its own 42px row:
    the sidebar, the column header and the rail move up to the window's top
    edge. The window controls render directly inside this fixed overlay at the
@@ -217,8 +235,8 @@ right:0;
    context: the panel background paints below modal scrims (so it dims in the
    non-background mode like the rest of the chrome), while the sibling window
    controls layer above every scrim and stay usable. */
-width:144px;
-height:66px;
+width:var(--window-chrome-right);
+height:var(--window-chrome-top);
 background:color-mix(in srgb, var(--panel-solid) var(--bg-panel-opacity), transparent);
 position:absolute;
 display:flex;
@@ -245,11 +263,11 @@ background:transparent
 .desktop-app .mail-shell
 {
 height:100%;
-grid-template-rows:66px minmax(0,1fr)
+grid-template-rows:var(--window-chrome-top) minmax(0,1fr)
 }
 .desktop-app .mail-shell.has-agent-open
 {
-grid-template-rows:66px minmax(0,1fr)
+grid-template-rows:var(--window-chrome-top) minmax(0,1fr)
 }
 .desktop-app .sidebar
 {
@@ -327,10 +345,13 @@ margin-right:88px
 }
 /* macOS keeps the native traffic lights in the same row as the sidebar
    brand, so the shell keeps its single row and the rail starts at the
-   window's top edge as usual. */
+   window's top edge as usual. The bar draws nothing at the right edge, so it
+   keeps its historical leading 144px drag patch instead of the (zero)
+   chrome-right width. */
 .desktop-app[data-platform=darwin] .window-bar
 {
-height:42px;
+width:144px;
+height:var(--window-chrome-top);
 position:static
 }
 .desktop-app[data-platform=darwin] .window-actions
@@ -341,7 +362,7 @@ position:static
 }
 .desktop-app[data-platform=darwin] .mail-shell
 {
-height:calc(100% - 42px);
+height:calc(100% - var(--window-chrome-top));
 grid-template-rows:none
 }
 .desktop-app[data-platform=darwin] .sidebar,.desktop-app[data-platform=darwin] .message-column,.desktop-app[data-platform=darwin] .mail-workspace,.desktop-app[data-platform=darwin] .icon-rail,.desktop-app[data-platform=darwin] .mail-shell.has-agent-open .agent-workspace,.desktop-app[data-platform=darwin] .mail-shell.has-agent-open .agent-workspace-loading
@@ -388,7 +409,7 @@ display:flex;
 {
 grid-column:1;
 justify-self:start;
-width:78px
+width:var(--window-chrome-left)
 }
 .window-controls
 {
