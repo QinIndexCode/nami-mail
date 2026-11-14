@@ -62,6 +62,36 @@ export function ftsLikeEscape(value: string): string {
 }
 
 /**
+ * Builds the LIKE pattern for one literal substring search, in one of three
+ * states. Each state is pinned by a measurement on this machine's real mailbox
+ * (3 421 messages, SQLite 3.53.4); the previous always-ESCAPE spelling was the
+ * slowest of the three.
+ *
+ * - Wildcard (or the escape character) present: escape it and bind ESCAPE,
+ *   otherwise `%` and `_` keep their LIKE meaning and `\` is misread.
+ * - No wildcard, 3+ characters: a bare `%value%` with **no** ESCAPE, so the
+ *   trigram tokenizer answers it from the index (`INDEX 0:L*`). Binding ESCAPE
+ *   disables that optimization outright: measured 172ms -> 7.6ms for a
+ *   seven-character ASCII query.
+ * - No wildcard, below the trigram floor (1-2 characters): a bare pattern but
+ *   with ESCAPE. Without it the planner splits the four OR-ed columns into
+ *   four independent full scans (`MULTI-INDEX OR`); measured 238ms -> 921ms
+ *   for a two-character Chinese query (245ms -> 723ms for one character).
+ *
+ * The character count is code points, not UTF-16 units: the trigram floor is
+ * three Unicode characters, which a surrogate pair must count as one.
+ */
+export function ftsLikePattern(value: string): { pattern: string; escape: boolean } {
+  if (/[\\%_]/.test(value)) return { pattern: `%${ftsLikeEscape(value)}%`, escape: true };
+  return { pattern: `%${value}%`, escape: [...value].length < 3 };
+}
+
+/** The ` ESCAPE '\'` suffix a LIKE needs when `ftsLikePattern` asks for one. */
+export function ftsLikeEscapeSuffix(escape: boolean): string {
+  return escape ? " ESCAPE '\\'" : "";
+}
+
+/**
  * The one FTS-driven FROM clause. The match is the narrow side, so it must
  * drive: CROSS JOIN pins that order. Left alone, SQLite can walk `messages`
  * (in sort order) and re-run the entire FTS scan once per candidate, costing
@@ -107,8 +137,66 @@ export function deleteMessageFts(db: DatabaseHandle, messageId: string): void {
   deleteStatement(db).run(messageId);
 }
 
+/**
+ * Raw index row count, for assertions about what a rebuild wrote. Not the
+ * drift comparison — that one needs distinct ids (see `messageFtsDrift`).
+ */
 export function ftsIndexedMessageCount(db: DatabaseHandle): number {
   return Number((db.prepare(`SELECT COUNT(*) AS count FROM ${MESSAGE_FTS_TABLE}`).get() as { count: number }).count);
+}
+
+/**
+ * The two numbers a drift report is made of. `indexed` is what the index can
+ * answer for; `rows` is how many index rows there are, so `rows > indexed`
+ * means some message is indexed more than once and `indexed < messages` means
+ * at least one message is not indexed at all.
+ */
+export type MessageFtsDrift = {
+  messages: number;
+  indexed: number;
+  rows: number;
+};
+
+/**
+ * Compares the index with the message table. Every write path is supposed to
+ * keep them equal inside the same transaction, so a gap means one of them
+ * skipped `indexMessageFts` — those messages are then invisible to search with
+ * nothing in the logs to say so.
+ *
+ * Two ways the counts can disagree, reported separately because they fail
+ * differently:
+ * - `indexed < messages`: messages with no index row, invisible to search.
+ * - `rows > indexed`: one message indexed more than once, which duplicates it
+ *   in every result list (measured: inserting a second row for `m1` turns
+ *   `[m1, m2]` into `[m1, m1, m2]`). A raw row count happens to *catch* this
+ *   case by accident; comparing distinct ids is what keeps it from being
+ *   confused with a genuine gap.
+ *
+ * Only counts, so an index row whose text predates the message's current
+ * payload has a matching count and passes: stale content is not detectable
+ * here. Cost is not negligible either — `COUNT(DISTINCT message_id)` measured
+ * at ~2.6ms over 3,499 rows and ~37.5ms over 20,000, growing linearly with the
+ * mailbox — which is why the caller runs it 30s after boot rather than inside
+ * `buildApp`.
+ *
+ * Orphan rows whose `message_id` is NULL are excluded from `rows` (COUNT of a
+ * column skips NULLs) and therefore never reported: they cannot join a message,
+ * so they can only inflate a count, never answer a search. Cleaning them up is
+ * the rebuild's job, not this check's.
+ *
+ * Rows whose payload cannot be decrypted are skipped by the rebuild, so a
+ * damaged mailbox can keep a gap that no rebuild closes. The caller reports
+ * that gap — the point of the check is to stop divergence from being silent,
+ * not to promise parity the payloads cannot provide.
+ */
+export function messageFtsDrift(db: DatabaseHandle): MessageFtsDrift | undefined {
+  const messages = Number((db.prepare("SELECT COUNT(*) AS count FROM messages").get() as { count: number }).count);
+  const counts = db.prepare(
+    `SELECT COUNT(DISTINCT message_id) AS indexed, COUNT(message_id) AS rows FROM ${MESSAGE_FTS_TABLE}`,
+  ).get() as { indexed: number; rows: number };
+  const indexed = Number(counts.indexed);
+  const rows = Number(counts.rows);
+  return messages === indexed && rows === indexed ? undefined : { messages, indexed, rows };
 }
 
 /**

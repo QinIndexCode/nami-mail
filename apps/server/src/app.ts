@@ -23,6 +23,7 @@ import { registerBackupRoutes } from "./routes/backup.js";
 import { registerImagePolicyRoutes } from "./routes/image-policy.js";
 import { registerPortableBackupRoutes } from "./routes/portable-backup.js";
 import { registerTaskRecoveryRoutes } from "./routes/task-recovery.js";
+import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerOutboundAttachmentRoutes } from "./routes/outbound-attachments.js";
 import { registerBatchJobRoutes } from "./routes/batch-jobs.js";
@@ -53,7 +54,7 @@ import {
   migrateMessageStorage,
   ensureAttachmentMetadata,
 } from "./message-storage.js";
-import { ensureMessageFtsIndex } from "./message-search.js";
+import { ensureMessageFtsIndex, messageFtsDrift } from "./message-search.js";
 import { backfillRedactMessageSnippets } from "./sync.js";
 import { mailboxBadges } from "./folder-counts.js";
 import {
@@ -652,6 +653,11 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
   registerImagePolicyRoutes(app, context);
   registerPortableBackupRoutes(app, context);
 
+  // Token-less means browser development, where any page the developer has open
+  // can POST to loopback. A rebuild blocks the event loop for ~37s, so the
+  // route is not registered at all there (404) instead of relying on the
+  // host-header check to keep it safe.
+  if (localApiAccessToken) registerMaintenanceRoutes(app, context);
   registerBatchJobRoutes(app, { context, scheduler });
   // The task layer's own read surface: `/api/tasks/:id` answers about a `tasks`
   // row. It sits beside `registerBatchJobRoutes` rather than replacing it because
@@ -702,5 +708,54 @@ export async function buildApp(context: RuntimeContext, options: BuildAppOptions
     return reply.code(404).send({ ok: false, message: "页面不存在。" });
   });
 
+  scheduleMessageFtsDriftCheck(context);
+
   return app;
+}
+
+/**
+ * How long the boot path is left alone before the search index is compared
+ * with the message table: long enough for the first sync to finish, since
+ * counting does not contend with it but reporting a half-synced mailbox would
+ * be noise.
+ */
+const messageFtsDriftCheckDelayMs = 30_000;
+
+/**
+ * Compares the search index with the message table once per launch and warns.
+ *
+ * It deliberately does not repair. A rebuild is one synchronous transaction,
+ * measured at 13.0s (DELETE FROM messages_fts) + 24.4s (re-insert) on a
+ * 3,499-message mailbox: the event loop stops for the whole ~37s, the `-wal`
+ * peaks at 195MB, and `page_count` grows by ~98MB permanently. Worse, a
+ * mailbox with permanently undecryptable payloads can never reach parity —
+ * those rows are skipped — so an unattended repair would rerun on every
+ * launch. That failure shape is exactly a log line plus a manual decision, so
+ * the only repair entry point is POST /api/maintenance/message-search/rebuild.
+ *
+ * The check is also off the synchronous boot path: `COUNT(DISTINCT message_id)`
+ * over the FTS table measured ~2.6ms at 3,499 rows and ~37.5ms at 20,000,
+ * growing linearly with the mailbox.
+ */
+function scheduleMessageFtsDriftCheck(context: RuntimeContext): void {
+  const timer = setTimeout(() => {
+    try {
+      const drift = messageFtsDrift(context.db);
+      if (!drift) return;
+      // Both directions are named: a gap is messages search cannot see, while
+      // extra rows are one message duplicated in every result list. Neither is
+      // repaired here — see the comment above.
+      const missing = drift.messages - drift.indexed;
+      const duplicated = drift.rows - drift.indexed;
+      serverLog.warn(
+        drift,
+        `Search index does not match the message table (${missing} message(s) with no index row, ${duplicated} duplicate index row(s)); POST /api/maintenance/message-search/rebuild if this persists`,
+      );
+    } catch (error) {
+      // The database can already be closed (a test or a shutdown during the
+      // window); the check must never surface as an unhandled rejection.
+      serverLog.warn({}, "Search index drift check failed", error);
+    }
+  }, messageFtsDriftCheckDelayMs);
+  timer.unref();
 }
