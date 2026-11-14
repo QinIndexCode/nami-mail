@@ -25,7 +25,11 @@ import { openDatabase, SCHEMA_VERSION, type DatabaseHandle } from "../src/db.js"
  */
 
 const LIST_INDEXES = ["idx_messages_account_sort_key", "idx_messages_account_effective_mailbox"] as const;
-const EVERY_OPEN_DROP = "DROP INDEX IF EXISTS idx_messages_from";
+// No longer created anywhere: `idx_messages_from` was dropped from the fresh
+// DDL because the Agent sender filter reads the FTS mirror, not this index.
+// The DROP stays as the only way an existing file ever loses it, so every
+// launch still runs this statement -- on a current file it is a no-op.
+const LEGACY_INDEX_DROP = "DROP INDEX IF EXISTS idx_messages_from";
 
 /** Keyed columns of an index, in order, with 1 for DESC. */
 function indexKeys(db: DatabaseHandle, name: string): Array<[string, number]> {
@@ -75,15 +79,15 @@ describe("the DDL every launch runs", () => {
     try {
       // The load-bearing assertion of G14: already current, so nothing here may
       // drop either index. Asserting the two NAMES rather than "no DROP INDEX at
-      // all" is deliberate -- the statement below is a real DROP that this build
-      // runs on purpose on every open.
+      // all" is deliberate -- the statement below is a real legacy cleanup that
+      // this build still runs on every open (and that a fresh file never needs).
       expect(rebuildsOf(second.ddl)).toEqual([]);
-      expect(second.ddl).toContain(EVERY_OPEN_DROP);
+      expect(second.ddl).toContain(LEGACY_INDEX_DROP);
       // ...and it is the only destructive statement in a steady-state launch.
       // A `DROP TABLE` reaching a current file is the shape of the failure this
       // whole gate is about, and it would show up here rather than as a slow
       // launch nobody attributes to startup DDL.
-      expect(second.ddl.filter((sql) => /DROP\b/i.test(sql))).toEqual([EVERY_OPEN_DROP]);
+      expect(second.ddl.filter((sql) => /DROP\b/i.test(sql))).toEqual([LEGACY_INDEX_DROP]);
 
       // Two launches later the list is identical, statement for statement: a
       // step that only ran on the first launch would make these differ.

@@ -189,6 +189,26 @@ describe("SqliteMailApplicationService sender filter over the FTS index", () => 
       db.close();
     }
   });
+
+  it("treats wildcards and backslashes in a sender filter literally", async () => {
+    const { db, masterKey, service } = setup();
+    try {
+      insertEncryptedMessage(db, masterKey, { id: "msg-pct", uid: 1, fromName: "100% Club", fromAddress: "pct@example.test", subject: "One" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-pct-decoy", uid: 2, fromName: "100X Club", fromAddress: "pct2@example.test", subject: "Two" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-slash", uid: 3, fromName: "ACME\\Ops", fromAddress: "ops@example.test", subject: "Three" });
+      insertEncryptedMessage(db, masterKey, { id: "msg-slash-decoy", uid: 4, fromName: "ACME/Ops", fromAddress: "ops2@example.test", subject: "Four" });
+
+      // The sender filter shares the list search's three-state pattern: a
+      // wildcard or a literal backslash forces ESCAPE, and only then.
+      const percent = await service.listMessages(context(), listQuery("100%"));
+      expect(percent.items.map((message) => message.id)).toEqual(["msg-pct"]);
+      const slash = await service.listMessages(context(), listQuery("acme\\ops"));
+      expect(slash.items.map((message) => message.id)).toEqual(["msg-slash"]);
+    } finally {
+      masterKey.fill(0);
+      db.close();
+    }
+  });
 });
 
 describe("SqliteMailApplicationService search over the FTS index", () => {
