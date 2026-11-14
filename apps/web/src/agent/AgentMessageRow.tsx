@@ -55,6 +55,7 @@ export const AgentMessageRow = memo(function AgentMessageRowInner({
   return (
     <article
       data-message-id={message.id}
+      data-tour-target={message.role === "assistant" ? "agent-answer" : undefined}
       className={`agent-message ${message.role} ${message.state === "streaming" ? "streaming" : ""}${message.interrupted ? " interrupted" : ""}`}
       ref={message.role === "user" ? userMessageRef : undefined}
     >

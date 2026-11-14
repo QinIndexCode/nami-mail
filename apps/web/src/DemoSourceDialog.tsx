@@ -24,10 +24,10 @@ export default function DemoSourceDialog({ message, onClose }: { message: Messag
   }, [onClose]);
 
   return <div className="modal-backdrop" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section ref={dialogRef} className="modal-card demo-source-card" role="dialog" aria-modal="true" aria-labelledby="demo-source-title" tabIndex={-1} style={{ width: "min(680px, 100%)" }}>
+    <section ref={dialogRef} className="modal-card demo-source-card" data-tour-target="source-card" role="dialog" aria-modal="true" aria-labelledby="demo-source-title" tabIndex={-1} style={{ width: "min(680px, 100%)" }}>
       <header style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: 16 }}>
         <div className="modal-card-header"><p className="eyebrow">{t("agent.citations.title")}</p><h3 id="demo-source-title">{message.subject || t("agent.reference.noSubject")}</h3></div>
-        <IconButton label={t("common.close")} onClick={onClose}><X size={18} /></IconButton>
+        <IconButton label={t("common.close")} tourAction="source-close" onClick={onClose}><X size={18} /></IconButton>
       </header>
       <div className="mail-people">
         {/* The one call site that hard-codes the network sources off instead of reading

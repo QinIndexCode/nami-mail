@@ -19,7 +19,7 @@ jobs:
   site:
     name: site (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -42,6 +42,12 @@ jobs:
       # and the release references the repair cannot rewrite, before that runs.
       - run: node scripts/sync-site-version.mjs --check
       - run: node scripts/build-site.mjs
+      # The site specs run against the freshly built static site. They are the
+      # only guard that notices when the demo tour's data-tour-target contract
+      # drifts out of apps/web, because that failure is invisible in the app's
+      # own e2e suite.
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test --config playwright.site.config.ts
 
   validate:
     name: validate

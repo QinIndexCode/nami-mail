@@ -2277,7 +2277,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
       </section>
       {latestCitations.length > 0 && (
         <div className={`agent-citations-sidebar ${citationsExpanded ? "expanded" : ""}`}>
-          <button type="button" className="agent-citations-toggle" onClick={() => setCitationsExpanded((v) => !v)} aria-label={t("agent.citations.title")}>
+          <button type="button" className="agent-citations-toggle" data-tour-action="citations-toggle" aria-expanded={citationsExpanded} onClick={() => setCitationsExpanded((v) => !v)} aria-label={t("agent.citations.title")}>
             <FolderSearch size={15} />
             <span className="agent-citations-count">{latestCitations.length}</span>
           </button>
@@ -2287,7 +2287,7 @@ export default function AgentWorkspace({ accounts, currentMessage, initialPrompt
               <button type="button" onClick={() => setCitationsExpanded(false)} aria-label={t("agent.citations.close")}><X size={13} /></button>
             </div>
             {latestCitations.map((citation) => (
-              <button key={citation.id} type="button" className="agent-citation-card" onClick={() => onOpenMessage(citation.messageId)}>
+              <button key={citation.id} type="button" className="agent-citation-card" data-tour-target="citation-card" onClick={() => onOpenMessage(citation.messageId)}>
                 <FolderSearch size={14} />
                 <span>
                   <strong>{sourceLabel(citation)}</strong>
