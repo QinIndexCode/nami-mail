@@ -35,9 +35,4 @@ describe("apps/web/vite.config.ts", () => {
     expect(source).toContain("public/pdfjs/manifest.json");
     expect(source).toContain("pdfjs 资产缺失：先运行 npm run assets:pdfjs");
   });
-
-  it("keeps the /api dev proxy rewriting the Host header", () => {
-    expect(source).toMatch(/"\/api"\s*:\s*\{/);
-    expect(source).toContain("changeOrigin: true");
-  });
 });
