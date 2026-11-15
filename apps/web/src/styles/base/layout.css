@@ -447,6 +447,30 @@ padding:6px;
 background:var(--chrome-tray);
 border-radius:var(--radius-pill)
 }
+/* Only the two end buttons meet the tray's pill cap, so only their outward
+   corners take that cap's curvature: the cap is a 22px arc, the buttons sit 6px
+   inside it, and 22 − 6 = 16px is the radius that makes the hover block
+   concentric with it (6px of tray all the way round, exactly like the straight
+   sides). The radius alone is not enough: these buttons are squircles
+   (superellipse(2), 13.76px), and a 16px squircle bulges into the gap — measured
+   2.75px of tray left at the 45° apex instead of 6px — so the two outward
+   corners are plain superellipse(1) like the tray's own arc, while the inward
+   corners keep --corner-shape. Measured at the apex after the change: 6.00px on
+   all four end corners, and the focus ring clears the tray by 1.85–2.09px
+   instead of poking 2.05–2.41px outside it. The middle button and every other
+   .icon-button keep the untouched squircle. */
+.window-controls .window-control:nth-child(1)
+{
+border-top-left-radius:16px;
+border-bottom-left-radius:16px;
+corner-shape:superellipse(1) var(--corner-shape) var(--corner-shape) superellipse(1)
+}
+.window-controls .window-control:nth-child(3)
+{
+border-top-right-radius:16px;
+border-bottom-right-radius:16px;
+corner-shape:var(--corner-shape) superellipse(1) superellipse(1) var(--corner-shape)
+}
 /* `.icon-button:hover` lives in features/mail.css, imported after this file, so
    this needs more weight than its (0,3,0) — hence the `.window-bar` ancestor. It
    stays scoped there: the compose card's own close button is neutral grey,
