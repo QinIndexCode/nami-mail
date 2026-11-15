@@ -217,7 +217,14 @@ describe("styles.css size ratchet", () => {
   // hover 反馈）+ --radius-compact 圆角，仅绘制、不动几何；③ 同一关闭键的
   // :focus-visible 只改 outline-color 为 --danger，保留全局 2px/2px 几何。净 +21 行，
   // 实测 18_797，阈值取实测 +12 行缓冲。下轮 CSS 瘦身时应优先收回这些说明。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_809;
+  // 2026-11-15 有记录的一次上调（18_809 → 18_818）：最小化按钮 hover 时环的左侧没有被
+  // 托盘包住。根因不是缺一条左边框，而是托盘首尾内缩不对称：border-left 1px + padding-left
+  // 12px 与 padding-right 0 让首键距左端 13px、末键距右端 0，且托盘与按钮同为 32px 高、
+  // 按钮半径 13.76 大于托盘 10px 圆角，环的上下边与四角都贴着/渗出托盘轮廓。改为四边各
+  // 6px 内缩 + --radius-pill 端头（22px 帽），并去掉 1px 分隔线与 border 盒，托盘组
+  // 133 → 132 正好填满窗口栏内容盒。净 +11 行（几乎全是说明为什么对首尾都成立的注释），
+  // 实测 18_808，阈值 18_818。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_818;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

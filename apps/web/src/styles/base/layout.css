@@ -427,14 +427,25 @@ display:flex;
    scrims (update-prompt / toast are 90) so they stay reachable over any
    dialog, while the window-bar background beneath dims with the scrim. */
 z-index:95;
-border-left:1px solid var(--line);
-padding-left:12px;
+/* One inset on all four sides. The group used to reserve 13px on the leading
+   side (1px divider + 12px padding) and 0 on the trailing side, so the close
+   hover ring sat on the tray's right edge and read as framed while the minimize
+   ring floated 13px inside the left end next to the tray's own outline. The
+   divider went with that border box: a 1px left edge is clipped into an arc by
+   the end radius below, and the tray tint separates the cluster anyway. With
+   6px around 32px buttons the group is 132px wide — exactly the bar's content
+   box — so it also stops hanging 1px past the bar's left edge. */
+padding:6px;
 /* The tray is the static half of the "window, not card" signal — hover only
-   fires once the pointer has already committed. It paints the group's own box,
-   which is why it is rounded: a square block would end 12px short of the window
-   edge and read as a stray slab. Paint-only, so the buttons do not move. */
+   fires once the pointer has already committed. It paints the group's own box:
+   a square block would end 12px short of the window edge and read as a stray
+   slab, so it keeps a rounded end. The pill cap (22px on the 44px tray) is
+   larger than the ring's corner radius plus the offset between both arcs, so
+   the first, middle and last hover rings stay inside the painted tray instead
+   of poking past its corners, and the focus ring (2px outline + 2px offset)
+   still clears the cap — 2px at the sides, ~1px on the diagonal. */
 background:var(--chrome-tray);
-border-radius:var(--radius-compact)
+border-radius:var(--radius-pill)
 }
 /* `.icon-button:hover` lives in features/mail.css, imported after this file, so
    this needs more weight than its (0,3,0) — hence the `.window-bar` ancestor. It
