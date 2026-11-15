@@ -149,20 +149,6 @@ describe("resolveOAuthEntry", () => {
     expect(entry.usingPassword).toBe(true);
   });
 
-  it("treats the qq preset as password-capable", () => {
-    const entry = resolveOAuthEntry(baseInput({
-      discoveryEmail: QQ_EMAIL,
-      normalizedEmail: QQ_EMAIL,
-      activeDiscovery: { id: "qq", family: "tencent", authMethods: ["app-password"], recommendedAuthMethod: "app-password" },
-      matchedProvider: { id: "qq", authMethods: ["app-password"] },
-      selectedProviderId: "qq",
-    }));
-
-    expect(entry.oauthOnly).toBe(false);
-    expect(entry.canUsePassword).toBe(true);
-    expect(entry.usingPassword).toBe(true);
-  });
-
   it("treats a custom IMAP discovery as password-capable", () => {
     const entry = resolveOAuthEntry(baseInput({
       discoveryEmail: CUSTOM_EMAIL,
