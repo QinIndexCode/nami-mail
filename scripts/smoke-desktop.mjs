@@ -404,9 +404,14 @@ try {
   }
   const headerControlsGap = renderer.desktopWindowBarLayout?.headerActionsGapToControls;
   if (headerControlsGap != null) {
+    // 18.33 rather than 17.33: the tray used to hang 1px past the window bar's
+    // content box (1px divider + 12px padding on a 133px group), so this gap was
+    // measured against that protruding edge. The group now fills the 132px
+    // content box exactly with a symmetric 6px inset, and the header keeps its
+    // one-icon gap to the tray's true left edge.
     assert.ok(
-      Math.abs(headerControlsGap - 17.33) < 1,
-      `The header must sit one icon gap away from the window control overlay (got ${headerControlsGap}px, expected ~17.33px).`,
+      Math.abs(headerControlsGap - 18.33) < 1,
+      `The header must sit one icon gap away from the window control overlay (got ${headerControlsGap}px, expected ~18.33px).`,
     );
   }
   assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
