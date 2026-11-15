@@ -118,11 +118,11 @@ async function describeDesktopProcess(progressPath, processHandle, outputCapture
   return details.join("; ");
 }
 
-async function writeDesktopSmokeDiagnostic(error, progressPath, processHandle, outputCapture) {
+async function describeSmokeFailure(error, progressPath, processHandle, outputCapture) {
   const progress = await readSmokeProgress(progressPath);
   const { stdoutTail, stderrTail, launchError } = outputCapture?.snapshot() ?? {};
   const message = redactSmokeDiagnosticText(error instanceof Error ? error.message : String(error));
-  const diagnostic = {
+  return {
     checkedAt: new Date().toISOString(),
     error: message.slice(0, 8_000),
     lastStage: progress?.stage ?? "unavailable",
@@ -136,8 +136,27 @@ async function writeDesktopSmokeDiagnostic(error, progressPath, processHandle, o
     ...(stderrTail ? { stderrTail: redactSmokeDiagnosticText(stderrTail) } : {}),
     ...(stdoutTail ? { stdoutTail: redactSmokeDiagnosticText(stdoutTail) } : {}),
   };
+}
+
+async function writeDesktopSmokeDiagnostic(error, progressPath, processHandle, outputCapture) {
+  const diagnostic = await describeSmokeFailure(error, progressPath, processHandle, outputCapture);
   await fs.mkdir(path.dirname(diagnosticReportPath), { recursive: true });
   await fs.writeFile(diagnosticReportPath, `${JSON.stringify(diagnostic, null, 2)}\n`, "utf8");
+}
+
+/**
+ * The success report is written before the assertions run, but a timeout, an
+ * exit, or a failure that happens before the result arrives never gets there.
+ * Persist whatever was observed together with the stage timeline in that case
+ * too: the window-load ceiling is only meaningful with the per-stage
+ * breakdown, so the next red build can tell a stuck stage apart from a
+ * one-off stall. The threshold itself stays untouched.
+ */
+async function writeDesktopSmokeFailureReport(error, progressPath, processHandle, outputCapture) {
+  const failure = await describeSmokeFailure(error, progressPath, processHandle, outputCapture);
+  const failedReport = { ...(desktopSmokeReport ?? {}), ...failure };
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(reportPath, `${JSON.stringify(failedReport, null, 2)}\n`, "utf8");
 }
 
 async function fetchRenderer(url) {
@@ -156,13 +175,17 @@ async function waitForResult(resultPath, progressPath, processHandle, outputCapt
     if (launchError) {
       throw new Error(`Electron could not start before writing its smoke result. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`);
     }
-    if (processHandle.exitCode !== null) {
-      throw new Error(`Electron exited before writing its smoke result. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`);
-    }
+    // Read the result before the exit code: the app writes it (a startup error
+    // included) and then exits, so an exit that lands in the same 200ms poll
+    // must not replace the real cause with "exited before writing".
+    const exited = processHandle.exitCode !== null;
     try {
       return JSON.parse(await fs.readFile(resultPath, "utf8"));
     } catch {
       // Electron needs a short moment to create the renderer and inspect its DOM.
+    }
+    if (exited) {
+      throw new Error(`Electron exited before writing its smoke result. ${await describeDesktopProcess(progressPath, processHandle, outputCapture)}`);
     }
     await delay(smokeResultPollIntervalMs);
   }
@@ -272,6 +295,7 @@ let secondDesktopProcess;
 const desktopProcessIds = new Set();
 let primaryFailure;
 let desktopOutputCapture;
+let desktopSmokeReport;
 const resultPath = path.join(temporaryUserData, "smoke-result.json");
 const progressPath = path.join(temporaryUserData, "smoke-progress.json");
 
@@ -295,14 +319,14 @@ try {
 
   const renderer = await waitForResult(resultPath, progressPath, desktopProcess, desktopOutputCapture);
   rememberDesktopProcess(desktopProcess, desktopProcessIds);
-  const report = {
+  desktopSmokeReport = {
     checkedAt: new Date().toISOString(),
     ...renderer,
     isolatedDataDirectory: false,
     contentSecurityPolicy: false,
   };
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
-  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  await fs.writeFile(reportPath, `${JSON.stringify(desktopSmokeReport, null, 2)}\n`, "utf8");
   assert.equal(renderer.error, undefined, renderer.error ?? "Electron startup failed.");
   const rendererUrl = new URL(renderer.rendererUrl);
   assert.deepEqual(
@@ -337,7 +361,7 @@ try {
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.activationCount, 1, "The primary app must receive exactly one second-instance activation.");
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.restored, true, "A second launch must restore the existing Nami Mail window.");
   assert.equal(rendererAfterSingleInstance.desktopSingleInstance?.serviceUrl, primaryServiceUrl, "A second launch must reuse the primary local service.");
-  report.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
+  desktopSmokeReport.desktopSingleInstance = rendererAfterSingleInstance.desktopSingleInstance;
   assert.equal(renderer.desktopWindowBar, true, "The desktop renderer must draw the app-owned window bar.");
   assert.equal(renderer.desktopWindowBarBlend?.isTransparent, true, "The window bar must be fully transparent so it blends into the surface and never draws an opaque strip.");
   assert.equal(renderer.desktopWindowBarBlend?.hasBottomSeparator, false, "The window bar must not be framed as a standalone strip by a bottom border.");
@@ -582,7 +606,7 @@ const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   assert.equal(cacheProtection?.localApiPolicyInstalled, true, "Desktop must install the exact-origin local API no-store policy.");
   assert.equal(cacheProtection?.responseNoStoreObserved, true, "Desktop local API responses must be observed with Cache-Control: no-store.");
   assert.match(cacheProtection?.responseCacheControl ?? "", /(?:^|,)\s*no-store\s*(?:,|$)/i);
-  report.desktopOAuthConfiguration = {
+  desktopSmokeReport.desktopOAuthConfiguration = {
     googleAvailable: localApiSmoke.googleAvailable,
     microsoftAvailable: localApiSmoke.microsoftAvailable,
     googleRedirectUri: localApiSmoke.googleRedirectUri,
@@ -603,7 +627,7 @@ const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
   assert.equal(localApiSmoke.microsoftRedirectUri, `http://localhost:${runtimePort}/api/oauth/microsoft/callback`);
   const rendererResponse = await fetchRenderer(renderer.rendererUrl);
   assert.match(rendererResponse.headers.get("content-security-policy") ?? "", /default-src 'self'/);
-  report.contentSecurityPolicy = true;
+  desktopSmokeReport.contentSecurityPolicy = true;
   await fs.access(path.join(temporaryUserData, "data", "nami-mail.db"));
   await fs.access(path.join(temporaryUserData, "data", "master.key.dpapi"));
   await assert.rejects(
@@ -612,18 +636,22 @@ const contextChip = renderer.desktopDeepDiagnostic?.agent?.agentContextChip;
     "Desktop startup must not leave a plaintext master key in userData.",
   );
 
-  report.isolatedDataDirectory = true;
-  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  desktopSmokeReport.isolatedDataDirectory = true;
+  await fs.writeFile(reportPath, `${JSON.stringify(desktopSmokeReport, null, 2)}\n`, "utf8");
   const exitedGracefully = await waitForDesktopProcessExit(desktopProcess, gracefulExitTimeoutMs);
   assert.equal(exitedGracefully, true, "Electron must finish its own bounded shutdown without smoke cleanup terminating it.");
-  report.gracefulExit = true;
-  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  console.log(JSON.stringify(report));
+  desktopSmokeReport.gracefulExit = true;
+  await fs.writeFile(reportPath, `${JSON.stringify(desktopSmokeReport, null, 2)}\n`, "utf8");
+  console.log(JSON.stringify(desktopSmokeReport));
 } catch (error) {
   primaryFailure = error;
   await writeDesktopSmokeDiagnostic(error, progressPath, desktopProcess, desktopOutputCapture).catch((diagnosticError) => {
     const message = diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError);
     process.stderr.write(`Desktop smoke could not write its diagnostic: ${message}\n`);
+  });
+  await writeDesktopSmokeFailureReport(error, progressPath, desktopProcess, desktopOutputCapture).catch((reportError) => {
+    const message = reportError instanceof Error ? reportError.message : String(reportError);
+    process.stderr.write(`Desktop smoke could not write its failure report: ${message}\n`);
   });
   throw error;
 } finally {

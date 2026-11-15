@@ -1508,6 +1508,23 @@ function localServiceStartupEffects(dataDirectory: string): Pick<ServiceStartupP
   };
 }
 
+/** The single boot failure path: service errors and rejections escaping boot() both land here. */
+async function reportDesktopStartupFailure(error: unknown): Promise<void> {
+  desktopAgentBrokerRecoveryGate = "closed";
+  const locale = currentNativeLocale();
+  const message = error instanceof Error ? error.message : nativeText(locale, "startupFailureMessage");
+  console.error("Nami Mail startup failed", error);
+  await writeDesktopSmokeProgress("startup-failed");
+  await writeSmokeResult({ error: error instanceof Error ? error.message : "Local service startup failed." }).catch(() => undefined);
+  await closeDesktopAgentBroker().catch(() => undefined);
+  await localServer?.close().catch(() => undefined);
+  localServer = undefined;
+  stopLocalServerProcess();
+  clearLocalApiAccessToken();
+  dialog.showErrorBox(nativeText(locale, "startupFailureTitle"), message);
+  app.exit(1);
+}
+
 async function boot(): Promise<void> {
   desktopAgentBrokerRecoveryGate = "accepting";
   desktopDiagnostics.initialize(app.getPath("userData"));
@@ -1880,21 +1897,7 @@ async function boot(): Promise<void> {
       timer.unref();
     }
   } catch (error) {
-    desktopAgentBrokerRecoveryGate = "closed";
-    const locale = currentNativeLocale();
-    console.error("Nami Mail startup failed", error);
-    await writeDesktopSmokeProgress("startup-failed");
-    await writeSmokeResult({ error: error instanceof Error ? error.message : "Local service startup failed." }).catch(() => undefined);
-    await closeDesktopAgentBroker().catch(() => undefined);
-    await localServer?.close().catch(() => undefined);
-    localServer = undefined;
-    stopLocalServerProcess();
-    clearLocalApiAccessToken();
-    dialog.showErrorBox(
-      nativeText(locale, "startupFailureTitle"),
-      error instanceof Error ? error.message : nativeText(locale, "startupFailureMessage"),
-    );
-    app.exit(1);
+    await reportDesktopStartupFailure(error);
   }
 }
 
@@ -2120,5 +2123,6 @@ if (desktopCliArguments !== undefined) {
     powerMonitor.removeListener("resume", checkForUpdatesAfterExternalTrigger);
     desktopUpdater?.dispose();
   });
-  desktopBootPromise = boot();
+  // boot() is not awaited; an unhandled rejection here would stall at "electron-ready".
+  desktopBootPromise = boot().catch((error) => reportDesktopStartupFailure(error));
 }

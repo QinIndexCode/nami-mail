@@ -1,6 +1,5 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import net from "node:net";
 import path from "node:path";
 import {
   createAgentError,
@@ -14,6 +13,7 @@ import {
   type CallerContext,
   type ExternalPairingSummary,
 } from "@nami/agent-contracts";
+import { brokerPipeTimeoutMs, requestPipe } from "./broker-pipe.mjs";
 import {
   createHostIdentityProof,
   signBrokerRequest,
@@ -34,10 +34,9 @@ import {
   isValidBrokerEndpointPath,
   type SupportedBrokerTransport,
 } from "./ipc-transport.mjs";
-import { WindowsSidDaclPipeRelay, expectedPipePath, maximumMessageLength } from "./secure-pipe-relay.mjs";
+import { WindowsSidDaclPipeRelay, expectedPipePath } from "./secure-pipe-relay.mjs";
 
 const discoveryVersion = 1;
-const brokerTimeoutMs = 30_000;
 const brokerLivenessTimeoutMs = 2_000;
 const brokerLivenessAttemptTimeoutMs = 500;
 const brokerLivenessRetryDelayMs = 50;
@@ -93,6 +92,21 @@ export type DesktopBrokerClientOptions = {
   safeStorage: DesktopSafeStorage;
   profile: string;
   entryPoint: "cli" | "mcp";
+};
+
+/**
+ * One liveness exchange, so a failing assertion can tell "the budget ran out"
+ * apart from "the relay exited and never came back" instead of guessing.
+ */
+export type BrokerLivenessAttempt = {
+  /** 1-based exchange number within one probe. */
+  attempt: number;
+  /** Budget handed to this exchange. */
+  timeoutMs: number;
+  elapsedMs: number;
+  outcome: "reachable" | "invalid-response" | "error";
+  /** Broker error code and message for an `error` outcome. */
+  error?: string;
 };
 
 type BrokerCommandPayload = {
@@ -202,6 +216,16 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function describeLivenessError(error: unknown): string {
+  if (error && typeof error === "object") {
+    const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
+    const message = "message" in error && typeof error.message === "string" ? error.message : undefined;
+    if (code && message) return `${code}: ${message}`;
+    if (message) return message;
+  }
+  return String(error);
+}
+
 /**
  * Verifies that discovery identifies a currently reachable Broker that can
  * prove the expected host identity. The probe is deliberately unsigned and
@@ -211,13 +235,16 @@ function delay(milliseconds: number): Promise<void> {
 export async function probeDesktopBrokerLiveness(
   userDataPath: string,
   timeoutMs = brokerLivenessTimeoutMs,
+  onAttempt?: (attempt: BrokerLivenessAttempt) => void,
 ): Promise<boolean> {
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > brokerTimeoutMs) return false;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > brokerPipeTimeoutMs) return false;
   const discovery = await readDesktopBrokerDiscovery(userDataPath);
   if (!discovery) return false;
 
   const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
   while (Date.now() < deadline) {
+    attempt += 1;
     const requestId = `probe-${randomBytes(18).toString("base64url")}`;
     const requestCounter = "1";
     const probe = {
@@ -231,15 +258,31 @@ export async function probeDesktopBrokerLiveness(
       payload: { entryPoint: "cli", command: "status", arguments: {} },
       signature: randomBytes(64).toString("base64url"),
     };
+    // host.start() resolves only after the relay reports `ready`, so the pipe
+    // already exists when this probe begins: the first exchange gets the
+    // remaining budget (minus one retry slot), not the 500ms per-attempt
+    // ceiling. With 40 busy processes a live first exchange measured up to
+    // 575ms, and the ceiling cut it off into the relay's ENOENT rebuild window.
+    //
+    // One retry slot is held back: CI showed the first exchange staying silent
+    // for the whole 2s budget, and with no time left the probe had zero retries
+    // where the old loop recovered on the next attempt. 1450ms is still 2.5x
+    // the slowest live exchange measured, so a slow Broker is never cut off.
+    // Connection errors still reject immediately, so a Broker that is truly
+    // down is reported at the same speed as before.
+    const remaining = deadline - Date.now();
+    const attemptTimeoutMs = attempt === 1
+      ? Math.max(100, remaining - brokerLivenessAttemptTimeoutMs - brokerLivenessRetryDelayMs)
+      : Math.max(100, Math.min(brokerLivenessAttemptTimeoutMs, remaining));
+    const attemptStartedAt = Date.now();
     try {
-      const remaining = deadline - Date.now();
       const rawResponse = await requestPipe(
         discovery.path,
         JSON.stringify(probe),
-        Math.max(100, Math.min(brokerLivenessAttemptTimeoutMs, remaining)),
+        attemptTimeoutMs,
       );
       const response = JSON.parse(rawResponse) as unknown;
-      return verifyBrokerResponse(response, {
+      const reachable = verifyBrokerResponse(response, {
         pairing: {
           hostId: discovery.hostId,
           hostPublicKeyPem: discovery.hostPublicKeyPem,
@@ -248,10 +291,24 @@ export async function probeDesktopBrokerLiveness(
         requestCounter,
         bootId: discovery.bootId,
       }).ok;
-    } catch {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      await delay(Math.min(brokerLivenessRetryDelayMs, remaining));
+      onAttempt?.({
+        attempt,
+        timeoutMs: attemptTimeoutMs,
+        elapsedMs: Date.now() - attemptStartedAt,
+        outcome: reachable ? "reachable" : "invalid-response",
+      });
+      return reachable;
+    } catch (error) {
+      onAttempt?.({
+        attempt,
+        timeoutMs: attemptTimeoutMs,
+        elapsedMs: Date.now() - attemptStartedAt,
+        outcome: "error",
+        error: describeLivenessError(error),
+      });
+      const remainingAfterAttempt = deadline - Date.now();
+      if (remainingAfterAttempt <= 0) break;
+      await delay(Math.min(brokerLivenessRetryDelayMs, remainingAfterAttempt));
     }
   }
   return false;
@@ -380,87 +437,6 @@ function requestIdentity(value: unknown): { requestId: string; counter: string }
   if (!isPlainObject(value) || typeof value.requestId !== "string" || typeof value.counter !== "string") return undefined;
   if (!requestIdPattern.test(value.requestId) || !/^(0|[1-9]\d{0,18})$/.test(value.counter)) return undefined;
   return { requestId: value.requestId, counter: value.counter };
-}
-
-async function requestPipe(pathname: string, request: string, timeoutMs = brokerTimeoutMs): Promise<string> {
-  if (
-    !isValidBrokerEndpointPath(pathname)
-    || request.length > maximumMessageLength
-    || !Number.isInteger(timeoutMs)
-    || timeoutMs < 100
-    || timeoutMs > brokerTimeoutMs
-  ) {
-    throw agentDesktopError("BROKER_SECURITY_UNAVAILABLE", "The NamiMail Agent pipe endpoint is invalid.");
-  }
-  return new Promise<string>((resolve, reject) => {
-    let settled = false;
-    let received = "";
-    const socket = net.createConnection(pathname);
-    const finishFailure = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      socket.removeAllListeners();
-      socket.destroy();
-      callback();
-    };
-    const finishSuccess = (line: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      socket.removeAllListeners();
-      let closeTimeout: NodeJS.Timeout | undefined;
-      const complete = () => {
-        if (!closeTimeout) return;
-        clearTimeout(closeTimeout);
-        closeTimeout = undefined;
-        socket.destroy();
-        resolve(line);
-      };
-      socket.once("close", complete);
-      socket.once("error", complete);
-      closeTimeout = setTimeout(complete, 250);
-      closeTimeout.unref?.();
-      try {
-        // Electron's named-pipe client can leave a relay instance occupied
-        // after an abrupt destroy. Complete the response exchange first so
-        // PowerShell can recreate its single-instance SID-DACL pipe.
-        socket.end();
-      } catch {
-        complete();
-      }
-    };
-    const timeout = setTimeout(() => finishFailure(() => reject(agentDesktopError(
-      "HOST_UNAVAILABLE",
-      "NamiMail Agent host did not respond in time.",
-      true,
-      "Open Nami Mail and try again.",
-    ))), timeoutMs);
-    timeout.unref?.();
-    socket.once("connect", () => {
-      socket.write(`${request}\n`);
-    });
-    socket.on("data", (chunk: Buffer) => {
-      received += chunk.toString("utf8");
-      if (received.length > maximumMessageLength) {
-        finishFailure(() => reject(agentDesktopError("BROKER_AUTHENTICATION_FAILED", "The NamiMail Agent response is too large.")));
-        return;
-      }
-      const lineEnd = received.indexOf("\n");
-      if (lineEnd === -1) return;
-      const line = received.slice(0, lineEnd).replace(/\r$/, "");
-      finishSuccess(line);
-    });
-    socket.once("error", () => finishFailure(() => reject(agentDesktopError(
-      "HOST_UNAVAILABLE",
-      "NamiMail Agent host is not available.",
-      true,
-      "Open Nami Mail or run namimail service start.",
-    ))));
-    socket.once("end", () => {
-      if (!settled) finishFailure(() => reject(agentDesktopError("HOST_UNAVAILABLE", "NamiMail Agent host closed the local pipe.", true)));
-    });
-  });
 }
 
 /** The in-process authenticated Broker host. Its pipe transport never opens mail data. */
