@@ -224,7 +224,13 @@ describe("styles.css size ratchet", () => {
   // 6px 内缩 + --radius-pill 端头（22px 帽），并去掉 1px 分隔线与 border 盒，托盘组
   // 133 → 132 正好填满窗口栏内容盒。净 +11 行（几乎全是说明为什么对首尾都成立的注释），
   // 实测 18_808，阈值 18_818。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_818;
+  // 2026-11-15 同日第二次上调（18_818 → 18_844）：托盘端头为 22px 胶囊弧，首尾两个按钮
+  // hover 时靠外的两个角与之不贴合（45° 顶点处只剩 2.25px 托盘底色，两侧是 6px），
+  // focus 环角更是外探 2.25–2.41px。两条规则只给 nth-child(1) 的左上/左下与
+  // nth-child(3) 的右上/右下换 16px 半径（22 − 6 = 16 才同心）并把这两个角改回
+  // superellipse(1)（squircle 的 16px 仍会鼓出 3.25px）。净 +24 行（12 行注释 + 两条
+  // 各 6 行的单侧角规则），实测 18_832，阈值取实测 +12 行缓冲。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_844;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {
