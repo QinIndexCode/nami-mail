@@ -105,4 +105,17 @@ jobs:
       # Desktop smoke reuses the build step above, so only verify the Electron
       # ABI and then launch the bundled app under its own smoke harness.
       - run: npm run verify:electron-sqlite && node scripts/smoke-desktop.mjs
+      # Keep the stage breakdown when the desktop smoke fails: the window-load
+      # ceiling is only diagnosable with the per-stage timeline, and a rerun that
+      # goes green cannot tell a stuck stage apart from a one-off runner stall.
+      - name: Upload desktop smoke diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-smoke-diagnostics
+          path: |
+            output/desktop-smoke.json
+            output/desktop-smoke-diagnostic.json
+          if-no-files-found: ignore
+          retention-days: 7
       - run: npm audit --omit=dev --audit-level=high

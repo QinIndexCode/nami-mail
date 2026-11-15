@@ -20,7 +20,7 @@ import {
   type BrokerHostIdentity,
   type DesktopSafeStorage,
 } from "../src/agent/broker-state.mts";
-import { DesktopAgentBrokerHost, probeDesktopBrokerLiveness } from "../src/agent/desktop-broker.mts";
+import { DesktopAgentBrokerHost, probeDesktopBrokerLiveness, type BrokerLivenessAttempt } from "../src/agent/desktop-broker.mts";
 
 const safeStorage: DesktopSafeStorage = {
   isEncryptionAvailable: () => true,
@@ -493,8 +493,19 @@ test("desktop Broker liveness requires a signed response from the discovered hos
       },
     });
     const discovery = await host.start();
+    const livenessAttempts: BrokerLivenessAttempt[] = [];
     try {
-      assert.equal(await probeDesktopBrokerLiveness(directory), true);
+      // `undefined` keeps the probe's default budget; the attempt log is only
+      // there so a failure names the exchange that timed out or was refused.
+      assert.equal(
+        await probeDesktopBrokerLiveness(
+          directory,
+          undefined,
+          (attempt) => livenessAttempts.push(attempt),
+        ),
+        true,
+        `The liveness probe must receive a signed response from the discovered host: ${JSON.stringify(livenessAttempts)}`,
+      );
     } finally {
       await host.close();
     }
