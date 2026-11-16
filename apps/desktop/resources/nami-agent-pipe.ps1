@@ -10,6 +10,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $MaximumMessageLength = 1048576
 $Utf8 = [System.Text.UTF8Encoding]::new($false)
+# Two instances keep the name registered while the serving instance is being
+# replaced: the pre-built one is still listening across Dispose and the
+# rebuild, so a client that arrives in that window connects instead of hitting
+# ENOENT on a name that does not exist. Capacity is therefore one exchange plus
+# one waiting client; a third client is refused by the OS while both are busy.
+$MaximumInstances = 2
+# Opening the second instance is itself an access check against the existing
+# pipe DACL (FILE_CREATE_PIPE_INSTANCE). ReadWrite alone is not enough: the
+# second New-SecurePipe fails with "Access to the path is denied".
+$PipeAccessRights = [System.IO.Pipes.PipeAccessRights]::ReadWrite -bor [System.IO.Pipes.PipeAccessRights]::CreateNewInstance
 # Stage timings are reported with `ready` so a starved start shows which part
 # of the relay lost the CPU instead of appearing as an unexplained timeout.
 $Clock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -30,10 +40,9 @@ function New-SidRestrictedPipeSecurity {
   foreach ($rule in @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
     [void]$security.RemoveAccessRuleAll($rule)
   }
-  $rights = [System.IO.Pipes.PipeAccessRights]::ReadWrite
   $accessRule = [System.IO.Pipes.PipeAccessRule]::new(
     $ownerSid,
-    $rights,
+    $PipeAccessRights,
     [System.Security.AccessControl.AccessControlType]::Allow
   )
   [void]$security.AddAccessRule($accessRule)
@@ -45,13 +54,46 @@ function New-SecurePipe {
   return [System.IO.Pipes.NamedPipeServerStream]::new(
     $PipeName,
     [System.IO.Pipes.PipeDirection]::InOut,
-    1,
+    $MaximumInstances,
     [System.IO.Pipes.PipeTransmissionMode]::Byte,
     [System.IO.Pipes.PipeOptions]::Asynchronous,
     $MaximumMessageLength,
     $MaximumMessageLength,
     $Security
   )
+}
+
+function Get-PipeSddl {
+  param([System.IO.Pipes.NamedPipeServerStream]$Pipe)
+  $sections = [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Access
+  return $Pipe.GetAccessControl().GetSecurityDescriptorSddlForm($sections)
+}
+
+# The OS applies the descriptor of the first instance to every later instance of
+# the same name, and nothing in the constructor makes that visible. Reading it
+# back is the only way to prove the pre-built instance is not weaker than the
+# one already serving, so a mismatch is treated as a security failure instead of
+# being assumed away.
+function New-VerifiedSecurePipe {
+  param(
+    [System.IO.Pipes.PipeSecurity]$Security,
+    [string]$ExpectedSddl
+  )
+  $instance = New-SecurePipe -Security $Security
+  if ([string]::IsNullOrEmpty($ExpectedSddl)) {
+    return $instance
+  }
+  try {
+    $actualSddl = Get-PipeSddl -Pipe $instance
+  } catch {
+    try { $instance.Dispose() } catch { }
+    throw [System.Security.SecurityException]::new("The Agent pipe security descriptor could not be read: $($_.Exception.Message)")
+  }
+  if ($actualSddl -ne $ExpectedSddl) {
+    try { $instance.Dispose() } catch { }
+    throw [System.Security.SecurityException]::new('The Agent pipe security descriptor changed between instances.')
+  }
+  return $instance
 }
 
 function Test-SidRestrictedPipeSecurity {
@@ -66,7 +108,7 @@ function Test-SidRestrictedPipeSecurity {
   $rule = $rules[0]
   return $rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow `
     -and $rule.IdentityReference.Value -eq $ExpectedOwnerSid `
-    -and (($rule.PipeAccessRights -band [System.IO.Pipes.PipeAccessRights]::ReadWrite) -eq [System.IO.Pipes.PipeAccessRights]::ReadWrite)
+    -and (($rule.PipeAccessRights -band $PipeAccessRights) -eq $PipeAccessRights)
 }
 
 function Read-ParentResponse {
@@ -105,7 +147,20 @@ if (-not (Test-SidRestrictedPipeSecurity -Security $pipeSecurity.Security -Expec
 $daclMilliseconds = $Clock.ElapsedMilliseconds
 
 $pipePath = "\\.\pipe\$PipeName"
-$pipe = New-SecurePipe -Security $pipeSecurity.Security
+$pipe = New-VerifiedSecurePipe -Security $pipeSecurity.Security -ExpectedSddl $null
+# Every later instance is compared against this descriptor, so the value comes
+# from the first pipe itself rather than from the object that was passed in.
+$expectedSddl = Get-PipeSddl -Pipe $pipe
+$spare = $null
+$preBuildFailureReported = $false
+try {
+  $spare = New-VerifiedSecurePipe -Security $pipeSecurity.Security -ExpectedSddl $expectedSddl
+} catch {
+  # Availability first: a relay that cannot pre-build still serves from one
+  # instance, and the reason is reported once instead of being swallowed.
+  [Console]::Error.WriteLine("NamiMail Agent pipe pre-build failure: $($_.Exception.Message)")
+  $preBuildFailureReported = $true
+}
 $pipeMilliseconds = $Clock.ElapsedMilliseconds - $daclMilliseconds
 
 Write-ParentMessage @{
@@ -124,7 +179,34 @@ Write-ParentMessage @{
   }
 }
 
+function Test-PreBuildFailureIsSecurityRelevant {
+  param($ErrorRecord)
+  return $ErrorRecord.Exception -is [System.Security.SecurityException] `
+    -or $ErrorRecord.Exception.InnerException -is [System.Security.SecurityException]
+}
+
 while ($true) {
+  # Keep one instance listening while the other serves. If the pre-built one is
+  # missing, try again before accepting: doing it here never leaves the name
+  # unregistered, because the serving instance still exists.
+  if ($null -eq $spare) {
+    try {
+      $spare = New-VerifiedSecurePipe -Security $pipeSecurity.Security -ExpectedSddl $expectedSddl
+      $preBuildFailureReported = $false
+    } catch {
+      if (Test-PreBuildFailureIsSecurityRelevant -ErrorRecord $_) {
+        # An instance whose descriptor differs from the verified one must never
+        # serve traffic, and without a replacement the current instance cannot
+        # be released safely, so stop rather than continue unverified.
+        [Console]::Error.WriteLine("NamiMail Agent pipe stopped: $($_.Exception.Message)")
+        break
+      }
+      if (-not $preBuildFailureReported) {
+        [Console]::Error.WriteLine("NamiMail Agent pipe pre-build failure: $($_.Exception.Message)")
+        $preBuildFailureReported = $true
+      }
+    }
+  }
   $reader = $null
   $writer = $null
   try {
@@ -134,28 +216,28 @@ while ($true) {
     $writer.AutoFlush = $true
     $request = Read-PipeRequest -Reader $reader
     if ($request.TimedOut) {
+      # A client that connects and never sends holds one instance for at most
+      # this long (RequestReadTimeoutMilliseconds); the other instance stays
+      # connectable meanwhile, so a silent client cannot take the relay down.
       $writer.WriteLine('{"type":"response","error":"request-timeout"}')
-      continue
-    }
-    $payload = $request.Payload
-    if ($null -eq $payload -or $payload.Length -gt $MaximumMessageLength) {
+    } elseif ($null -eq $request.Payload -or $request.Payload.Length -gt $MaximumMessageLength) {
       $writer.WriteLine('{"type":"response","error":"invalid-request"}')
-      continue
+    } else {
+      $connectionId = [Guid]::NewGuid().ToString('N')
+      Write-ParentMessage @{ type = 'request'; connectionId = $connectionId; payload = $request.Payload }
+      $responsePayload = Read-ParentResponse -ConnectionId $connectionId
+      if ($null -eq $responsePayload) {
+        $writer.WriteLine('{"type":"response","error":"broker-unavailable"}')
+      } else {
+        $writer.WriteLine($responsePayload)
+      }
     }
-    $connectionId = [Guid]::NewGuid().ToString('N')
-    Write-ParentMessage @{ type = 'request'; connectionId = $connectionId; payload = $payload }
-    $responsePayload = Read-ParentResponse -ConnectionId $connectionId
-    if ($null -eq $responsePayload) {
-      $writer.WriteLine('{"type":"response","error":"broker-unavailable"}')
-      continue
-    }
-    $writer.WriteLine($responsePayload)
   } catch {
     [Console]::Error.WriteLine("NamiMail Agent pipe failure: $($_.Exception.Message)")
   } finally {
-    # A client can close immediately after reading a response. Releasing one
-    # side of the stream must not prevent the single-instance pipe from being
-    # recreated for the next local Agent request.
+    # A client can close immediately after reading a response. The pre-built
+    # instance is already registered, so releasing this one cannot make the name
+    # disappear: the next iteration adopts it and builds the replacement.
     if ($null -ne $writer) {
       try { $writer.Dispose() } catch {
         if ($_.Exception -isnot [System.IO.IOException]) { [Console]::Error.WriteLine("NamiMail Agent writer shutdown: $($_.Exception.Message)") }
@@ -171,12 +253,15 @@ while ($true) {
         if ($_.Exception -isnot [System.IO.IOException]) { [Console]::Error.WriteLine("NamiMail Agent pipe shutdown: $($_.Exception.Message)") }
       }
     }
-    $pipe = $null
+    $pipe = $spare
+    $spare = $null
   }
-  try {
-    $pipe = New-SecurePipe -Security $pipeSecurity.Security
-  } catch {
-    [Console]::Error.WriteLine("NamiMail Agent pipe restart failure: $($_.Exception.Message)")
-    break
+  if ($null -eq $pipe) {
+    try {
+      $pipe = New-VerifiedSecurePipe -Security $pipeSecurity.Security -ExpectedSddl $expectedSddl
+    } catch {
+      [Console]::Error.WriteLine("NamiMail Agent pipe restart failure: $($_.Exception.Message)")
+      break
+    }
   }
 }

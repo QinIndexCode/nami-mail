@@ -235,3 +235,144 @@ test("A failed relay start leaves no relay process or pipe, and host.close() is 
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return predicate();
+}
+
+test("A client that arrives while an exchange is in flight connects and is served next", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  let signalInFlight!: () => void;
+  const inFlightStarted = new Promise<void>((resolve) => { signalInFlight = resolve; });
+  let releaseInFlight!: () => void;
+  const inFlightReleased = new Promise<void>((resolve) => { releaseInFlight = resolve; });
+  const relay = new WindowsSidDaclPipeRelay({
+    scriptPath,
+    pipeName: `nami-mail-relay-inflight-test-${randomBytes(12).toString("hex")}`,
+    onRequest: async (payload) => {
+      if (payload === "in-flight") {
+        signalInFlight();
+        await inFlightReleased;
+      }
+      return JSON.stringify({ accepted: payload });
+    },
+  });
+  try {
+    const endpoint = await relay.start();
+    const inFlight = requestPipe(endpoint.path, "in-flight");
+    await inFlightStarted;
+    // No retry helper here: this connection has to succeed while the first
+    // exchange is still running, which is only possible because the second
+    // instance is built before the first one is released.
+    const queued = await connectWithoutWriting(endpoint.path);
+    queued.write("queued-while-busy\n");
+    releaseInFlight();
+    const [inFlightResponse, queuedResponse] = await Promise.all([inFlight, readPipeLine(queued)]);
+    assert.deepEqual(JSON.parse(inFlightResponse), { accepted: "in-flight" });
+    assert.deepEqual(JSON.parse(queuedResponse), { accepted: "queued-while-busy" });
+
+    const after = await requestPipe(endpoint.path, "after-queued-exchange");
+    assert.deepEqual(JSON.parse(after), { accepted: "after-queued-exchange" });
+  } finally {
+    await relay.close();
+  }
+});
+
+test("Stalled clients cannot hold both instances: each is reclaimed within the read timeout", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const relay = new WindowsSidDaclPipeRelay({
+    scriptPath,
+    pipeName: `nami-mail-relay-two-stalls-test-${randomBytes(12).toString("hex")}`,
+    requestReadTimeoutMs: 300,
+    onRequest: async (payload) => JSON.stringify({ accepted: payload }),
+  });
+  try {
+    const endpoint = await relay.start();
+    const stalled = await Promise.all([
+      connectWithoutWriting(endpoint.path),
+      connectWithoutWriting(endpoint.path),
+    ]);
+    const replies = await Promise.all(stalled.map((socket) => readPipeLine(socket)));
+    for (const reply of replies) {
+      assert.deepEqual(JSON.parse(reply), { type: "response", error: "request-timeout" });
+    }
+
+    const response = await requestPipe(endpoint.path, "after-two-stalled-clients");
+    assert.deepEqual(JSON.parse(response), { accepted: "after-two-stalled-clients" });
+  } finally {
+    await relay.close();
+  }
+});
+
+test("Every rebuilt instance carries the first instance's security descriptor", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const stderrLines: string[] = [];
+  const relay = new WindowsSidDaclPipeRelay({
+    scriptPath,
+    pipeName: `nami-mail-relay-dacl-test-${randomBytes(12).toString("hex")}`,
+    onStderr: (line) => { stderrLines.push(line); },
+    onRequest: async (payload) => JSON.stringify({ accepted: payload }),
+  });
+  try {
+    const endpoint = await relay.start();
+    // Each exchange builds a fresh instance, so six rounds compare six
+    // descriptors against the one that was verified at startup.
+    for (let index = 0; index < 6; index += 1) {
+      const response = await requestPipe(endpoint.path, `dacl-round-${index}`);
+      assert.deepEqual(JSON.parse(response), { accepted: `dacl-round-${index}` });
+    }
+    assert.deepEqual(stderrLines.filter((line) => /security descriptor/i.test(line)), []);
+    assert.equal(relay.isLive(), true);
+  } finally {
+    await relay.close();
+  }
+});
+
+test("A pre-built instance with a different descriptor stops the relay instead of serving it", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-relay-dacl-mismatch-"));
+  const pipeName = `nami-mail-relay-dacl-mismatch-test-${randomBytes(12).toString("hex")}`;
+  try {
+    const original = await fs.readFile(scriptPath, "utf8");
+    const tampered = original.replace(
+      "$expectedSddl = Get-PipeSddl -Pipe $pipe",
+      "$expectedSddl = 'O:BAG:BAD:(A;;GA;;;SY)'",
+    );
+    assert.notEqual(tampered, original, "The tampered copy must change the reference descriptor.");
+    const tamperedScript = path.join(directory, "nami-agent-pipe-mismatch.ps1");
+    await fs.writeFile(tamperedScript, tampered, "utf8");
+
+    const stderrLines: string[] = [];
+    const relay = new WindowsSidDaclPipeRelay({
+      scriptPath: tamperedScript,
+      pipeName,
+      onStderr: (line) => { stderrLines.push(line); },
+      onRequest: async () => "{}",
+    });
+    const endpoint = await relay.start();
+    assert.equal(endpoint.pipeName, pipeName);
+    assert.equal(
+      await waitFor(() => stderrLines.some((line) => /security descriptor changed between instances/.test(line))),
+      true,
+      `expected a descriptor mismatch report, saw ${JSON.stringify(stderrLines)}`,
+    );
+    assert.equal(
+      await waitFor(() => !relay.isLive()),
+      true,
+      "the relay must stop instead of serving an instance it could not verify",
+    );
+    assert.equal(await expectMissingPipe(`\\\\.\\pipe\\${pipeName}`), "ENOENT");
+    await relay.close();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
