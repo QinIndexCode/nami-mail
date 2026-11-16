@@ -484,6 +484,7 @@ test("desktop Broker liveness requires a signed response from the discovered hos
   skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
 }, async () => {
   await withTemporaryDirectory(async (directory) => {
+    const relayDiagnostics: string[] = [];
     const host = new DesktopAgentBrokerHost({
       userDataPath: directory,
       safeStorage,
@@ -491,12 +492,14 @@ test("desktop Broker liveness requires a signed response from the discovered hos
       invokeExternalAgentTool: async () => {
         throw new Error("The liveness probe must not invoke external mail tools.");
       },
+      onDiagnostic: (line) => relayDiagnostics.push(line),
     });
     const discovery = await host.start();
     const livenessAttempts: BrokerLivenessAttempt[] = [];
     try {
       // `undefined` keeps the probe's default budget; the attempt log is only
-      // there so a failure names the exchange that timed out or was refused.
+      // there so a failure names the exchange that timed out or was refused,
+      // and the relay diagnostic names its pid plus startup stages.
       assert.equal(
         await probeDesktopBrokerLiveness(
           directory,
@@ -504,7 +507,7 @@ test("desktop Broker liveness requires a signed response from the discovered hos
           (attempt) => livenessAttempts.push(attempt),
         ),
         true,
-        `The liveness probe must receive a signed response from the discovered host: ${JSON.stringify(livenessAttempts)}`,
+        `The liveness probe must receive a signed response from the discovered host: ${JSON.stringify({ attempts: livenessAttempts, relayDiagnostics })}`,
       );
     } finally {
       await host.close();

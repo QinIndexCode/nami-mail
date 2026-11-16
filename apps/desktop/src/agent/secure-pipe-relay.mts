@@ -25,6 +25,14 @@ export type SecurePipeRelayOptions = {
   requestReadTimeoutMs?: number;
   onRequest: (payload: string) => Promise<string>;
   onStderr?: (line: string) => void;
+  /** One line per relay start, so a slow start names its stage instead of staying silent. */
+  onDiagnostic?: (line: string) => void;
+};
+
+type RelayStageTimings = {
+  daclMs?: number;
+  pipeMs?: number;
+  readyMs?: number;
 };
 
 type RelayReadyMessage = {
@@ -35,6 +43,10 @@ type RelayReadyMessage = {
   daclProtected: boolean;
   ownerOnly: boolean;
   accessRuleCount: number;
+  /** Relay process id, so a timed-out start can be tied to a concrete process. */
+  pid?: number;
+  /** Relay-side stage durations; the Node side adds spawn and delivery time. */
+  stageTimings?: RelayStageTimings;
 };
 
 type RelayRequestMessage = {
@@ -80,7 +92,29 @@ function parseRelayMessage(line: string): RelayReadyMessage | RelayRequestMessag
     && typeof value.ownerOnly === "boolean"
     && typeof value.accessRuleCount === "number"
   ) {
-    return value as RelayReadyMessage;
+    const ready: RelayReadyMessage = {
+      type: "ready",
+      pipeName: value.pipeName,
+      path: value.path,
+      ownerSid: value.ownerSid,
+      daclProtected: value.daclProtected,
+      ownerOnly: value.ownerOnly,
+      accessRuleCount: value.accessRuleCount,
+    };
+    // Diagnostics are optional: an older script or a malformed timing field must
+    // not fail an otherwise valid relay.
+    if (typeof value.pid === "number" && Number.isInteger(value.pid) && value.pid > 0) ready.pid = value.pid;
+    if (isPlainObject(value.stageTimings)) {
+      const stages: RelayStageTimings = {};
+      for (const key of ["daclMs", "pipeMs", "readyMs"] as const) {
+        const milliseconds = value.stageTimings[key];
+        if (typeof milliseconds === "number" && Number.isFinite(milliseconds) && milliseconds >= 0) {
+          stages[key] = Math.round(milliseconds);
+        }
+      }
+      ready.stageTimings = stages;
+    }
+    return ready;
   }
   if (
     value.type === "request"
@@ -100,6 +134,14 @@ function asStableRelayFailure(): string {
       retryable: true,
     },
   });
+}
+
+function describeStageTimings(timings: RelayStageTimings | undefined): string {
+  if (!timings) return "";
+  const parts = (["daclMs", "pipeMs", "readyMs"] as const)
+    .filter((key) => timings[key] !== undefined)
+    .map((key) => `${key.slice(0, -2)} ${timings[key]}ms`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
 }
 
 /**
@@ -149,14 +191,21 @@ export class WindowsSidDaclPipeRelay {
         clearTimeout(timeout);
         callback();
       };
-      const fail = (message: string, retryable = false) => settle(() => reject(agentDesktopError(
-        "BROKER_SECURITY_UNAVAILABLE",
-        message,
-        retryable,
-        "Open Nami Mail again after Windows PowerShell 5.1 is available.",
-      )));
+      const fail = (message: string, retryable = false) => settle(() => {
+        const error = agentDesktopError(
+          "BROKER_SECURITY_UNAVAILABLE",
+          message,
+          retryable,
+          "Open Nami Mail again after Windows PowerShell 5.1 is available.",
+        );
+        // A failed start must not leave a live PowerShell relay or its named
+        // pipe behind: kill before rejecting so a retry starts from zero, and
+        // so host.close() never has to find an unregistered child.
+        void this.terminateChild().finally(() => reject(error));
+      });
       const timeout = setTimeout(() => fail("NamiMail could not start the secured Agent pipe."), startupTimeoutMs);
       timeout.unref?.();
+      const spawnedAt = Date.now();
       let child: ChildProcessWithoutNullStreams;
       try {
         child = nodeSpawn(powershellPath, [
@@ -182,8 +231,13 @@ export class WindowsSidDaclPipeRelay {
         return;
       }
       this.child = child;
-      this.stdout = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY, terminal: false });
-      this.stderr = createInterface({ input: child.stderr, crlfDelay: Number.POSITIVE_INFINITY, terminal: false });
+      try {
+        this.stdout = createInterface({ input: child.stdout, crlfDelay: Number.POSITIVE_INFINITY, terminal: false });
+        this.stderr = createInterface({ input: child.stderr, crlfDelay: Number.POSITIVE_INFINITY, terminal: false });
+      } catch {
+        fail("NamiMail could not launch the secured Windows Agent pipe.", true);
+        return;
+      }
       this.stderr.on("line", (line) => this.options.onStderr?.(String(line).slice(0, 1_024)));
       this.stdout.on("line", (line) => {
         const message = parseRelayMessage(String(line));
@@ -198,7 +252,6 @@ export class WindowsSidDaclPipeRelay {
             || message.accessRuleCount !== 1
           ) {
             fail("NamiMail could not verify the Windows Agent pipe security descriptor.");
-            void this.close();
             return;
           }
           const endpoint: SecurePipeEndpoint = {
@@ -208,6 +261,15 @@ export class WindowsSidDaclPipeRelay {
             ownerSid: message.ownerSid,
           };
           this.endpoint = endpoint;
+          try {
+            // One line per start, not per connection: the pid and relay-side
+            // stages are what make the next starvation self-evident.
+            this.options.onDiagnostic?.(
+              `Agent pipe ready pid=${message.pid ?? "unknown"} in ${Date.now() - spawnedAt}ms${describeStageTimings(message.stageTimings)}`,
+            );
+          } catch {
+            // Diagnostics must never fail a healthy relay.
+          }
           settle(() => resolve({ ...endpoint }));
           return;
         }
@@ -222,6 +284,43 @@ export class WindowsSidDaclPipeRelay {
       this.startPromise = undefined;
     });
     return this.startPromise;
+  }
+
+  /**
+   * Terminates the spawned PowerShell relay and drops its pipe endpoint. Used
+   * by every failed start path so a timeout or a rejected descriptor cannot
+   * leave an orphaned relay (or its named pipe) behind for the next attempt.
+   */
+  private async terminateChild(): Promise<void> {
+    this.stdout?.close();
+    this.stderr?.close();
+    this.stdout = undefined;
+    this.stderr = undefined;
+    this.endpoint = undefined;
+    const child = this.child;
+    this.child = undefined;
+    if (!child || child.killed || child.exitCode !== null) return;
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          // The process is already gone.
+        }
+        resolve();
+      }, 2_000);
+      timeout.unref?.();
+      child.once("exit", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      try {
+        child.kill();
+      } catch {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
   }
 
   private async handleRequest(message: RelayRequestMessage): Promise<void> {
