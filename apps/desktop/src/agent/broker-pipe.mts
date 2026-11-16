@@ -88,9 +88,9 @@ export async function requestPipe(
       closeTimeout = setTimeout(complete, 250);
       closeTimeout.unref?.();
       try {
-        // Electron's named-pipe client can leave a relay instance occupied
-        // after an abrupt destroy. Complete the response exchange first so
-        // PowerShell can recreate its single-instance SID-DACL pipe.
+        // Finish the response exchange before closing. The relay now keeps a
+        // pre-built instance listening while it releases the serving one, so
+        // an abrupt client can no longer take the pipe name down with it.
         socket.end();
       } catch {
         complete();
