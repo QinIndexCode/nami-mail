@@ -10,6 +10,11 @@ const windowsSidPattern = /^S-1-(?:0|1|2|3|5|15|16|18)-(?:\d+-){1,14}\d+$/;
 const maximumMessageLength = 1_000_000;
 const startupTimeoutMs = 10_000;
 const defaultRequestReadTimeoutMs = 10_000;
+// The relay used to wait for a parent answer without a limit. This ceiling is
+// a third of the client's 30s exchange budget and fifty times the slowest
+// healthy exchange measured under a 4-vCPU load, so it only fires for a parent
+// that actually stopped answering.
+const defaultParentResponseTimeoutMs = 10_000;
 
 export type SecurePipeEndpoint = {
   transport: "windows-named-pipe";
@@ -23,6 +28,8 @@ export type SecurePipeRelayOptions = {
   pipeName?: string;
   powershellPath?: string;
   requestReadTimeoutMs?: number;
+  /** Ceiling for one parent answer; must stay below the client's exchange budget. */
+  parentResponseTimeoutMs?: number;
   onRequest: (payload: string) => Promise<string>;
   onStderr?: (line: string) => void;
   /** One line per relay start, so a slow start names its stage instead of staying silent. */
@@ -182,6 +189,10 @@ export class WindowsSidDaclPipeRelay {
     if (!Number.isInteger(requestReadTimeoutMs) || requestReadTimeoutMs < 100 || requestReadTimeoutMs > 60_000) {
       throw agentDesktopError("INVALID_ARGUMENT", "The NamiMail Agent pipe read timeout is invalid.");
     }
+    const parentResponseTimeoutMs = this.options.parentResponseTimeoutMs ?? defaultParentResponseTimeoutMs;
+    if (!Number.isInteger(parentResponseTimeoutMs) || parentResponseTimeoutMs < 100 || parentResponseTimeoutMs > 60_000) {
+      throw agentDesktopError("INVALID_ARGUMENT", "The NamiMail Agent parent response timeout is invalid.");
+    }
     const powershellPath = this.options.powershellPath ?? defaultPowerShellPath();
     this.startPromise = new Promise<SecurePipeEndpoint>((resolve, reject) => {
       let settled = false;
@@ -220,6 +231,8 @@ export class WindowsSidDaclPipeRelay {
           pipeName,
           "-RequestReadTimeoutMilliseconds",
           String(requestReadTimeoutMs),
+          "-ParentResponseTimeoutMilliseconds",
+          String(parentResponseTimeoutMs),
         ], {
           env: minimalSpawnEnvironment(),
           windowsHide: true,

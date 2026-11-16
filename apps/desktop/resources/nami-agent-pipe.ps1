@@ -4,12 +4,28 @@ param(
   [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')]
   [string]$PipeName,
   [ValidateRange(100, 60000)]
-  [int]$RequestReadTimeoutMilliseconds = 10000
+  [int]$RequestReadTimeoutMilliseconds = 10000,
+  # This is the ceiling for the one hop that used to have none. It stays below
+  # the client's 30s exchange budget and above the slowest parent answer
+  # measured under load, so a client receives a classified failure here instead
+  # of running out its own budget, and an instance cannot be held past it.
+  [ValidateRange(100, 60000)]
+  [int]$ParentResponseTimeoutMilliseconds = 10000
 )
 
 $ErrorActionPreference = 'Stop'
 $MaximumMessageLength = 1048576
 $Utf8 = [System.Text.UTF8Encoding]::new($false)
+# Console.In.ReadLineAsync blocks in Windows PowerShell 5.1 (it is a
+# SyncTextReader), so the parent channel reads its own StreamReader over the
+# raw standard input handle. That reader is the only one reading stdin.
+$ParentReader = [System.IO.StreamReader]::new(
+  [Console]::OpenStandardInput(),
+  $Utf8,
+  $false,
+  $MaximumMessageLength,
+  $true
+)
 # Two instances keep the name registered while the serving instance is being
 # replaced: the pre-built one is still listening across Dispose and the
 # rebuild, so a client that arrives in that window connects instead of hitting
@@ -111,24 +127,62 @@ function Test-SidRestrictedPipeSecurity {
     -and (($rule.PipeAccessRights -band $PipeAccessRights) -eq $PipeAccessRights)
 }
 
+# One read is outstanding at a time. Keeping the task across a timed-out
+# exchange is what makes the next read safe: starting a second asynchronous
+# read on the same stream would race for the line that is still in flight.
+$script:parentReadTask = $null
+
+# Waiting for the parent used to be unbounded, so a parent that stopped
+# answering held the serving instance until the client gave up. A response
+# names its connection, so the answer to an exchange that already timed out is
+# dropped here instead of being served to whichever client is current.
 function Read-ParentResponse {
-  param([string]$ConnectionId)
-  $line = [Console]::In.ReadLine()
-  if ($null -eq $line -or $line.Length -gt $MaximumMessageLength) {
-    return $null
+  param(
+    [string]$ConnectionId,
+    [int]$TimeoutMilliseconds
+  )
+  $deadline = $Clock.ElapsedMilliseconds + $TimeoutMilliseconds
+  while ($true) {
+    if ($null -eq $script:parentReadTask) {
+      $script:parentReadTask = $ParentReader.ReadLineAsync()
+    }
+    $remaining = [int]($deadline - $Clock.ElapsedMilliseconds)
+    if ($remaining -le 0) {
+      return @{ TimedOut = $true; Payload = $null }
+    }
+    try {
+      $completed = $script:parentReadTask.Wait($remaining)
+    } catch {
+      # The parent's stdin failed; leaving a faulted task in place would make
+      # every later exchange fail the same way without releasing the instance.
+      $script:parentReadTask = $null
+      return @{ TimedOut = $false; Payload = $null }
+    }
+    if (-not $completed) {
+      return @{ TimedOut = $true; Payload = $null }
+    }
+    $line = $script:parentReadTask.GetAwaiter().GetResult()
+    $script:parentReadTask = $null
+    if ($null -eq $line -or $line.Length -gt $MaximumMessageLength) {
+      return @{ TimedOut = $false; Payload = $null }
+    }
+    try {
+      $candidate = $line | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+      return @{ TimedOut = $false; Payload = $null }
+    }
+    if ($candidate.type -ne 'response' -or $candidate.connectionId -isnot [string] -or $candidate.payload -isnot [string]) {
+      return @{ TimedOut = $false; Payload = $null }
+    }
+    if ($candidate.payload.Length -gt $MaximumMessageLength) {
+      return @{ TimedOut = $false; Payload = $null }
+    }
+    if ($candidate.connectionId -ne $ConnectionId) {
+      # Late answer to an exchange that already timed out; drop it.
+      continue
+    }
+    return @{ TimedOut = $false; Payload = [string]$candidate.payload }
   }
-  try {
-    $candidate = $line | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    return $null
-  }
-  if ($candidate.type -ne 'response' -or $candidate.connectionId -ne $ConnectionId -or $candidate.payload -isnot [string]) {
-    return $null
-  }
-  if ($candidate.payload.Length -gt $MaximumMessageLength) {
-    return $null
-  }
-  return [string]$candidate.payload
 }
 
 function Read-PipeRequest {
@@ -225,11 +279,18 @@ while ($true) {
     } else {
       $connectionId = [Guid]::NewGuid().ToString('N')
       Write-ParentMessage @{ type = 'request'; connectionId = $connectionId; payload = $request.Payload }
-      $responsePayload = Read-ParentResponse -ConnectionId $connectionId
-      if ($null -eq $responsePayload) {
+      $response = Read-ParentResponse -ConnectionId $connectionId -TimeoutMilliseconds $ParentResponseTimeoutMilliseconds
+      if ($response.TimedOut) {
+        # The parent took the request but produced no answer in time. Releasing
+        # the instance here is what keeps a silent parent from pinning the
+        # relay: the client's own budget is larger, so it still receives this
+        # classified failure instead of its generic exchange timeout.
+        [Console]::Error.WriteLine("NamiMail Agent parent response timed out after $ParentResponseTimeoutMilliseconds ms.")
+        $writer.WriteLine('{"type":"response","error":"parent-timeout"}')
+      } elseif ($null -eq $response.Payload) {
         $writer.WriteLine('{"type":"response","error":"broker-unavailable"}')
       } else {
-        $writer.WriteLine($responsePayload)
+        $writer.WriteLine($response.Payload)
       }
     }
   } catch {
