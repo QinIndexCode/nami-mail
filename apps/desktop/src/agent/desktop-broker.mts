@@ -13,7 +13,7 @@ import {
   type CallerContext,
   type ExternalPairingSummary,
 } from "@nami/agent-contracts";
-import { brokerPipeTimeoutMs, requestPipe } from "./broker-pipe.mjs";
+import { brokerPipeTimeoutMs, requestPipe, type BrokerPipeTiming } from "./broker-pipe.mjs";
 import {
   createHostIdentityProof,
   signBrokerRequest,
@@ -104,6 +104,10 @@ export type BrokerLivenessAttempt = {
   /** Budget handed to this exchange. */
   timeoutMs: number;
   elapsedMs: number;
+  /** Time until the pipe accepted the connection; absent when connect never completed. */
+  connectMs?: number;
+  /** Time until the first response byte; absent when the exchange produced none. */
+  firstByteMs?: number;
   outcome: "reachable" | "invalid-response" | "error";
   /** Broker error code and message for an `error` outcome. */
   error?: string;
@@ -275,11 +279,19 @@ export async function probeDesktopBrokerLiveness(
       ? Math.max(100, remaining - brokerLivenessAttemptTimeoutMs - brokerLivenessRetryDelayMs)
       : Math.max(100, Math.min(brokerLivenessAttemptTimeoutMs, remaining));
     const attemptStartedAt = Date.now();
+    let timing: BrokerPipeTiming | undefined;
+    const timingFields = () => (timing
+      ? {
+        ...(timing.connectMs === undefined ? {} : { connectMs: timing.connectMs }),
+        ...(timing.firstByteMs === undefined ? {} : { firstByteMs: timing.firstByteMs }),
+      }
+      : {});
     try {
       const rawResponse = await requestPipe(
         discovery.path,
         JSON.stringify(probe),
         attemptTimeoutMs,
+        (value) => { timing = value; },
       );
       const response = JSON.parse(rawResponse) as unknown;
       const reachable = verifyBrokerResponse(response, {
@@ -295,6 +307,7 @@ export async function probeDesktopBrokerLiveness(
         attempt,
         timeoutMs: attemptTimeoutMs,
         elapsedMs: Date.now() - attemptStartedAt,
+        ...timingFields(),
         outcome: reachable ? "reachable" : "invalid-response",
       });
       return reachable;
@@ -303,6 +316,7 @@ export async function probeDesktopBrokerLiveness(
         attempt,
         timeoutMs: attemptTimeoutMs,
         elapsedMs: Date.now() - attemptStartedAt,
+        ...timingFields(),
         outcome: "error",
         error: describeLivenessError(error),
       });
@@ -467,6 +481,7 @@ export class DesktopAgentBrokerHost {
       scriptPath: this.options.scriptPath,
       onRequest: (payload) => this.handleRawRequest(payload),
       onStderr: (line) => this.options.onDiagnostic?.(`Agent pipe: ${line}`),
+      onDiagnostic: (line) => this.options.onDiagnostic?.(line),
     });
     const endpoint = await relay.start();
     const discovery: DesktopBrokerDiscovery = {

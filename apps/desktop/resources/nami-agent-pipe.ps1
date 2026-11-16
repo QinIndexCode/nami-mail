@@ -10,6 +10,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $MaximumMessageLength = 1048576
 $Utf8 = [System.Text.UTF8Encoding]::new($false)
+# Stage timings are reported with `ready` so a starved start shows which part
+# of the relay lost the CPU instead of appearing as an unexplained timeout.
+$Clock = [System.Diagnostics.Stopwatch]::StartNew()
 
 function Write-ParentMessage {
   param([hashtable]$Message)
@@ -99,9 +102,12 @@ $pipeSecurity = New-SidRestrictedPipeSecurity
 if (-not (Test-SidRestrictedPipeSecurity -Security $pipeSecurity.Security -ExpectedOwnerSid $pipeSecurity.OwnerSid)) {
   throw 'The Agent pipe SID DACL could not be verified.'
 }
+$daclMilliseconds = $Clock.ElapsedMilliseconds
 
 $pipePath = "\\.\pipe\$PipeName"
 $pipe = New-SecurePipe -Security $pipeSecurity.Security
+$pipeMilliseconds = $Clock.ElapsedMilliseconds - $daclMilliseconds
+
 Write-ParentMessage @{
   type = 'ready'
   pipeName = $PipeName
@@ -110,6 +116,12 @@ Write-ParentMessage @{
   daclProtected = $true
   ownerOnly = $true
   accessRuleCount = 1
+  pid = $PID
+  stageTimings = @{
+    daclMs = $daclMilliseconds
+    pipeMs = $pipeMilliseconds
+    readyMs = $Clock.ElapsedMilliseconds - $daclMilliseconds - $pipeMilliseconds
+  }
 }
 
 while ($true) {

@@ -7,13 +7,29 @@ import { maximumMessageLength } from "./secure-pipe-relay.mjs";
 export const brokerPipeTimeoutMs = 30_000;
 
 /**
+ * Transport-level timings for one exchange. Optional fields stay absent when
+ * that stage was never reached, which is what separates "never connected"
+ * from "connected but no response" in a liveness attempt record.
+ */
+export type BrokerPipeTiming = {
+  connectMs?: number;
+  firstByteMs?: number;
+  totalMs: number;
+};
+
+/**
  * Sends one newline-terminated frame over the local named pipe and resolves
  * with the first reply line. The Broker host, its clients and the unpaired
  * liveness probe all speak through here, so the transport limits have one
  * owner. Moved out of desktop-broker.mts to keep that file under its
  * max-lines ratchet.
  */
-export async function requestPipe(pathname: string, request: string, timeoutMs = brokerPipeTimeoutMs): Promise<string> {
+export async function requestPipe(
+  pathname: string,
+  request: string,
+  timeoutMs = brokerPipeTimeoutMs,
+  onTiming?: (timing: BrokerPipeTiming) => void,
+): Promise<string> {
   if (
     !isValidBrokerEndpointPath(pathname)
     || request.length > maximumMessageLength
@@ -26,11 +42,29 @@ export async function requestPipe(pathname: string, request: string, timeoutMs =
   return new Promise<string>((resolve, reject) => {
     let settled = false;
     let received = "";
+    const startedAt = Date.now();
+    let connectedAt: number | undefined;
+    let firstByteAt: number | undefined;
+    let timingReported = false;
+    const reportTiming = () => {
+      if (timingReported) return;
+      timingReported = true;
+      try {
+        onTiming?.({
+          ...(connectedAt === undefined ? {} : { connectMs: connectedAt - startedAt }),
+          ...(firstByteAt === undefined ? {} : { firstByteMs: firstByteAt - startedAt }),
+          totalMs: Date.now() - startedAt,
+        });
+      } catch {
+        // A timing observer must never change the transport result.
+      }
+    };
     const socket = net.createConnection(pathname);
     const finishFailure = (callback: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      reportTiming();
       socket.removeAllListeners();
       socket.destroy();
       callback();
@@ -39,6 +73,7 @@ export async function requestPipe(pathname: string, request: string, timeoutMs =
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      reportTiming();
       socket.removeAllListeners();
       let closeTimeout: NodeJS.Timeout | undefined;
       const complete = () => {
@@ -69,9 +104,11 @@ export async function requestPipe(pathname: string, request: string, timeoutMs =
     ))), timeoutMs);
     timeout.unref?.();
     socket.once("connect", () => {
+      connectedAt = Date.now();
       socket.write(`${request}\n`);
     });
     socket.on("data", (chunk: Buffer) => {
+      firstByteAt ??= Date.now();
       received += chunk.toString("utf8");
       if (received.length > maximumMessageLength) {
         finishFailure(() => reject(agentDesktopError("BROKER_AUTHENTICATION_FAILED", "The NamiMail Agent response is too large.")));

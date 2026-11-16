@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { DesktopAgentBrokerHost } from "../src/agent/desktop-broker.mts";
 import { WindowsSidDaclPipeRelay } from "../src/agent/secure-pipe-relay.mts";
 
 const scriptPath = fileURLToPath(new URL("../resources/nami-agent-pipe.ps1", import.meta.url));
@@ -135,5 +140,98 @@ test("Windows SID-DACL relay recovers after a connected client stalls before sen
     assert.deepEqual(JSON.parse(response), { accepted: "request-after-stall" });
   } finally {
     await relay.close();
+  }
+});
+
+async function listRelayProcesses(marker: string): Promise<number[]> {
+  // Exclude the query itself: its own command line contains the marker.
+  const command = `$self = $PID; Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.ProcessId -ne $self -and $_.CommandLine -like '*${marker}*' } | ForEach-Object { $_.ProcessId }`;
+  const output = await new Promise<string>((resolve, reject) => {
+    execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { windowsHide: true }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+  return output.trim().split(/\r?\n/).filter(Boolean).map(Number);
+}
+
+async function waitForNoRelayProcess(marker: string): Promise<number[]> {
+  const deadline = Date.now() + 5_000;
+  let remaining = await listRelayProcesses(marker);
+  while (remaining.length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    remaining = await listRelayProcesses(marker);
+  }
+  return remaining;
+}
+
+/** Resolves with the connect error code, or rejects when the pipe still accepts clients. */
+async function expectMissingPipe(pathname: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(pathname);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("The failed relay's named pipe still exists."));
+    }, 2_000);
+    timer.unref?.();
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.destroy();
+      reject(new Error("The failed relay's named pipe still accepts connections."));
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(error.code ?? "unknown");
+    });
+  });
+}
+
+test("A failed relay start leaves no relay process or pipe, and host.close() is idempotent", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nami-relay-failure-"));
+  const pipeName = `nami-mail-relay-failure-test-${randomBytes(12).toString("hex")}`;
+  const badScript = path.join(directory, "bad-ready.ps1");
+  // Reports ready for a pipe name other than the one it was asked to serve, so
+  // start() fails on validation after the process is already running.
+  await fs.writeFile(badScript, [
+    "param([string]$PipeName, [int]$RequestReadTimeoutMilliseconds)",
+    "$message = @{ type = 'ready'; pipeName = 'unexpected-pipe'; path = '\\\\.\\pipe\\unexpected-pipe'; ownerSid = 'S-1-5-21-1-2-3-1001'; daclProtected = $true; ownerOnly = $true; accessRuleCount = 1 } | ConvertTo-Json -Compress",
+    "[Console]::Out.WriteLine($message)",
+    "[Console]::Out.Flush()",
+    "Start-Sleep -Seconds 60",
+  ].join("\n"), "utf8");
+  try {
+    const relay = new WindowsSidDaclPipeRelay({
+      scriptPath: badScript,
+      pipeName,
+      onRequest: async () => "{}",
+    });
+    await assert.rejects(relay.start(), /Agent pipe/);
+    assert.deepEqual(await waitForNoRelayProcess(pipeName), []);
+    assert.equal(await expectMissingPipe(`\\\\.\\pipe\\${pipeName}`), "ENOENT");
+    await relay.close();
+    await relay.close();
+    assert.equal(relay.isLive(), false);
+
+    // The same failure through the host: close() must be idempotent and leave
+    // no PowerShell relay behind either.
+    const host = new DesktopAgentBrokerHost({
+      userDataPath: path.join(directory, "host"),
+      safeStorage: {
+        isEncryptionAvailable: () => true,
+        encryptString: (value: string) => Buffer.from(value, "utf8"),
+        decryptString: (value: Buffer) => value.toString("utf8"),
+      },
+      scriptPath: badScript,
+      invokeExternalAgentTool: async () => { throw new Error("unused"); },
+    });
+    await assert.rejects(host.start(), /Agent pipe/);
+    await Promise.all([host.close(), host.close()]);
+    await host.close();
+    assert.deepEqual(await waitForNoRelayProcess(badScript), []);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
   }
 });
