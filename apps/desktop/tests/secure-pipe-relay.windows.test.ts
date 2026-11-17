@@ -354,6 +354,32 @@ test("A silent parent fails within the response ceiling without wedging the rela
   assert.deepEqual(await waitForNoRelayProcess(pipeName), []);
 });
 
+test("The ready diagnostic carries the event-loop delay measured during the start window", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const diagnostics: string[] = [];
+  let resets = 0;
+  const relay = new WindowsSidDaclPipeRelay({
+    scriptPath,
+    pipeName: `nami-mail-relay-event-loop-test-${randomBytes(12).toString("hex")}`,
+    eventLoopDelay: {
+      reset: () => { resets += 1; },
+      snapshot: () => ({ samples: 7, maxMs: 1234.5, meanMs: 11.1 }),
+    },
+    onDiagnostic: (line) => diagnostics.push(line),
+    onRequest: async (payload) => JSON.stringify({ accepted: payload }),
+  });
+  try {
+    await relay.start();
+  } finally {
+    await relay.close();
+  }
+  assert.equal(resets, 1);
+  const ready = diagnostics.find((line) => line.startsWith("Agent pipe ready"));
+  assert.ok(ready, `The relay did not report ready: ${diagnostics.join(" | ")}`);
+  assert.match(ready, /event loop max 1234\.5ms, mean 11\.1ms over 7 samples/);
+});
+
 test("The client reports a relay parent-timeout frame as a retryable host failure", {
   skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
 }, async () => {

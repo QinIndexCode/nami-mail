@@ -30,7 +30,7 @@ import {
 import { createTrayController, loadDesktopIcon } from "./tray.mjs";
 import { createGuiActivationWiring, installOpenUrlHandling } from "./gui-activation-wiring.mjs";
 import { loadOrCreateDesktopMasterKey } from "./secure-master-key.mjs";
-import { DesktopDiagnostics, serializeRuntimeError } from "./desktop-diagnostics.mjs";
+import { DesktopDiagnostics, desktopAgentStartEventLoopDelay, serializeRuntimeError } from "./desktop-diagnostics.mjs";
 import { installDesktopRuntimeDiagnostics } from "./desktop-runtime-diagnostics.mjs";
 import { openInBrowser as openExternalUrl } from "./desktop-external-open.mjs";
 import { installNavigationGuards, installRendererPermissionPolicy } from "./window-hardening.mjs";
@@ -339,6 +339,7 @@ async function createDesktopAgentBroker(): Promise<DesktopAgentBrokerHost> {
     safeStorage,
     scriptPath,
     invokeExternalAgentTool: (input) => server.invokeExternalAgentTool(input),
+    eventLoopDelay: desktopAgentStartEventLoopDelay,
     onDiagnostic: (message) => console.warn(message),
     onHostShutdown: () => { void closeLocalServerForExit().finally(() => app.quit()); },
   });

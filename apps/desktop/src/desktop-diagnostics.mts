@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 /**
  * Startup/shutdown timing and crash logging for the packaged app.
@@ -154,3 +155,96 @@ export class DesktopDiagnostics {
     }
   }
 }
+
+export type EventLoopDelaySnapshot = {
+  samples: number;
+  maxMs: number;
+  meanMs: number;
+};
+
+/**
+ * Event-loop delay of this process, sampled every 10ms.
+ *
+ * A slow stage and a blocked main thread look identical from stage timings
+ * alone: every stage after the block is late, and a relay that is alive but
+ * never reaches `ready` from the caller's side can be either. This sampler
+ * expects a tick every resolution and records how late it actually arrives, so
+ * `maxMs` proves a blocked loop while stage timings stay small, and
+ * `meanMs` separates one long block (high max, near-zero mean) from a loop
+ * that is generally saturated (both high).
+ *
+ * Implemented with a self-rescheduled timer instead of
+ * `perf_hooks.monitorEventLoopDelay` because the built-in histogram treats the
+ * first tick after `reset()` as its baseline: a block that starts at the reset
+ * moment — exactly the relay start window — would never be recorded. Here the
+ * first deadline is set at `start()`/`reset()`, so that block is measured.
+ *
+ * Reported as named numbers rather than histogram buckets because both sinks
+ * are flat text — `desktop-smoke.json` and the relay's one-line ready
+ * diagnostic (mirrored into `runtime-log.jsonl`) — where buckets would make
+ * runs harder to compare with grep.
+ */
+export class DesktopEventLoopDelayProbe {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private expectedAtMs = 0;
+  private samples = 0;
+  private totalMs = 0;
+  private maxMs = 0;
+
+  /** Idempotent; safe to call before Electron is ready. Returns `this` for inline use. */
+  start(): this {
+    if (this.timer) return this;
+    this.expectedAtMs = performance.now() + eventLoopDelayResolutionMs;
+    this.schedule();
+    return this;
+  }
+
+  /** Starts a fresh window; callers snapshot the previous one first. */
+  reset(): void {
+    this.samples = 0;
+    this.totalMs = 0;
+    this.maxMs = 0;
+    this.expectedAtMs = performance.now() + eventLoopDelayResolutionMs;
+    if (!this.timer) this.schedule();
+  }
+
+  snapshot(): EventLoopDelaySnapshot {
+    if (this.samples === 0) return { samples: 0, maxMs: 0, meanMs: 0 };
+    return {
+      samples: this.samples,
+      maxMs: toDelayMilliseconds(this.maxMs),
+      meanMs: toDelayMilliseconds(this.totalMs / this.samples),
+    };
+  }
+
+  private schedule(): void {
+    const timer = setTimeout(() => this.sample(), eventLoopDelayResolutionMs);
+    // Diagnostics must never keep the app alive on their own.
+    timer.unref();
+    this.timer = timer;
+  }
+
+  private sample(): void {
+    const now = performance.now();
+    const delayMs = Math.max(0, now - this.expectedAtMs);
+    this.samples += 1;
+    this.totalMs += delayMs;
+    this.maxMs = Math.max(this.maxMs, delayMs);
+    // Count from the tick that actually happened, so a block is not double
+    // counted by the ticks it displaced.
+    this.expectedAtMs = now + eventLoopDelayResolutionMs;
+    this.schedule();
+  }
+}
+
+const eventLoopDelayResolutionMs = 10;
+
+function toDelayMilliseconds(milliseconds: number): number {
+  return Math.round(milliseconds * 10) / 10;
+}
+
+/** Cumulative since boot: starts on module import, which is inside app startup. */
+export const desktopEventLoopDelay = new DesktopEventLoopDelayProbe().start();
+
+/** Reset around each relay start so its ready line covers only that window. */
+export const desktopAgentStartEventLoopDelay = new DesktopEventLoopDelayProbe();

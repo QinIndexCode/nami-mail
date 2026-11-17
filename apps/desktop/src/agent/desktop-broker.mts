@@ -34,7 +34,7 @@ import {
   isValidBrokerEndpointPath,
   type SupportedBrokerTransport,
 } from "./ipc-transport.mjs";
-import { WindowsSidDaclPipeRelay, expectedPipePath } from "./secure-pipe-relay.mjs";
+import { WindowsSidDaclPipeRelay, expectedPipePath, type RelayEventLoopDelayProbe } from "./secure-pipe-relay.mjs";
 
 const discoveryVersion = 1;
 const brokerLivenessTimeoutMs = 2_000;
@@ -70,6 +70,8 @@ export type DesktopBrokerHostOptions = {
   safeStorage: DesktopSafeStorage;
   scriptPath: string;
   invokeExternalAgentTool: ExternalAgentToolBridge["invokeExternalAgentTool"];
+  /** Windowed event-loop delay of this process, reported with the relay ready line. */
+  eventLoopDelay?: RelayEventLoopDelayProbe;
   onDiagnostic?: (message: string) => void;
   /** Invoked after the shutdown response is delivered when a paired client requests host shutdown. */
   onHostShutdown?: () => void | Promise<void>;
@@ -479,6 +481,7 @@ export class DesktopAgentBrokerHost {
     const bootId = `boot-${randomBytes(18).toString("base64url")}`;
     const relay = new WindowsSidDaclPipeRelay({
       scriptPath: this.options.scriptPath,
+      eventLoopDelay: this.options.eventLoopDelay,
       onRequest: (payload) => this.handleRawRequest(payload),
       onStderr: (line) => this.options.onDiagnostic?.(`Agent pipe: ${line}`),
       onDiagnostic: (line) => this.options.onDiagnostic?.(line),

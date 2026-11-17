@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   DesktopDiagnostics,
+  DesktopEventLoopDelayProbe,
   formatConsoleArgs,
   isDesktopStartupLogDisabled,
   runtimeLogMaxLines,
@@ -106,6 +107,22 @@ test("stays inert before initialize and when the kill switch is set", async (t) 
     if (previous === undefined) delete process.env.NAMI_MAIL_NO_STARTUP_LOG;
     else process.env.NAMI_MAIL_NO_STARTUP_LOG = previous;
   }
+});
+
+test("records a blocked event loop as a delay above the sampling floor", async () => {
+  const probe = new DesktopEventLoopDelayProbe();
+  probe.start();
+  // Block this thread without yielding: the sampler can only run afterwards and
+  // records the whole block as one late tick, which is the signal a slow stage
+  // alone cannot provide.
+  const gate = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(gate, 0, 0, 150);
+  // Give the delayed sample and the following one time to be recorded.
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const snapshot = probe.snapshot();
+  assert.ok(snapshot.samples > 0, "The event-loop probe recorded no samples.");
+  assert.ok(snapshot.maxMs >= 100, `The event-loop probe reported ${snapshot.maxMs}ms for a 150ms block.`);
+  assert.ok(snapshot.maxMs >= snapshot.meanMs);
 });
 
 test("formats console arguments and errors for the runtime log", () => {

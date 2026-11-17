@@ -13,6 +13,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { type BrowserWindow, type MessageBoxReturnValue, type NativeImage, type Tray } from "electron";
 import type { CloseBehavior } from "@nami/agent-contracts";
+import { desktopEventLoopDelay } from "./desktop-diagnostics.mjs";
 
 export type { CloseBehavior };
 
@@ -252,8 +253,7 @@ export type DesktopSmokeHost = {
 };
 
 let smokeHost: DesktopSmokeHost | undefined;
-// Module import time lands inside the Electron boot path (before the app
-// ready event), so progress timestamps measure the real startup journey.
+// Import time lands inside the boot path (before app ready), so timestamps are real.
 const desktopSmokeProcessStartedAt = Date.now();
 const desktopSmokeTimeline: Array<{ stage: string; elapsedMs: number }> = [];
 let closePromptSmokeSession: ClosePromptSmokeSession | undefined;
@@ -1291,7 +1291,7 @@ export function inspectDesktopLifecycle(): DesktopLifecycleSmokeResult {
 export async function writeSmokeResult(result: Record<string, unknown>): Promise<void> {
   const host = requireHost();
   if (!host.smokeResultPath) return;
-  desktopSmokeResult = { ...result, desktopStartupTimeline: desktopSmokeTimeline };
+  desktopSmokeResult = { ...result, desktopStartupTimeline: desktopSmokeTimeline, desktopEventLoopDelay: desktopEventLoopDelay.snapshot() };
   await fs.mkdir(path.dirname(host.smokeResultPath), { recursive: true });
   await fs.writeFile(host.smokeResultPath, JSON.stringify(desktopSmokeResult), "utf8");
 }

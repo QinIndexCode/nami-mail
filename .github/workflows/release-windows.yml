@@ -104,6 +104,7 @@ jobs:
         with:
           name: release-smoke-diagnostics-${{ github.ref_name }}
           path: |
+            output/desktop-smoke.json
             output/desktop-smoke-diagnostic.json
             output/installer-smoke-diagnostic.json
             output/package-smoke-diagnostic.json
