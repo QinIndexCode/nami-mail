@@ -1,5 +1,5 @@
 import net from "node:net";
-import { agentDesktopError } from "./contracts.mjs";
+import { agentDesktopError, type AgentDesktopError } from "./contracts.mjs";
 import { isValidBrokerEndpointPath } from "./ipc-transport.mjs";
 import { maximumMessageLength } from "./secure-pipe-relay.mjs";
 
@@ -16,6 +16,34 @@ export type BrokerPipeTiming = {
   firstByteMs?: number;
   totalMs: number;
 };
+
+/**
+ * The relay answers with `{"type":"response","error":...}` when it could not
+ * obtain a Broker answer at all. Such a frame carries no signed payload, so it
+ * is a transport failure; classifying it here keeps it from being reported as
+ * an authentication failure by response verification and gives it the same
+ * retry semantics as the client's own exchange timeout. The relay's other two
+ * frames are not mapped: `request-timeout` and `invalid-request` describe a
+ * malformed or silent client, not an unavailable host.
+ */
+function relayTransportError(line: string): AgentDesktopError | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const frame = value as Record<string, unknown>;
+  if (frame.type !== "response" || typeof frame.error !== "string" || typeof frame.payload === "string") return undefined;
+  if (frame.error === "parent-timeout") {
+    return agentDesktopError("HOST_UNAVAILABLE", "NamiMail Agent host did not respond in time.", true, "Open Nami Mail and try again.");
+  }
+  if (frame.error === "broker-unavailable") {
+    return agentDesktopError("HOST_UNAVAILABLE", "NamiMail Agent host is not available.", true, "Open Nami Mail or run namimail service start.");
+  }
+  return undefined;
+}
 
 /**
  * Sends one newline-terminated frame over the local named pipe and resolves
@@ -117,6 +145,11 @@ export async function requestPipe(
       const lineEnd = received.indexOf("\n");
       if (lineEnd === -1) return;
       const line = received.slice(0, lineEnd).replace(/\r$/, "");
+      const transportError = relayTransportError(line);
+      if (transportError) {
+        finishFailure(() => reject(transportError));
+        return;
+      }
       finishSuccess(line);
     });
     socket.once("error", () => finishFailure(() => reject(agentDesktopError(

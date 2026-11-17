@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { requestPipe as brokerRequestPipe } from "../src/agent/broker-pipe.mts";
 import { DesktopAgentBrokerHost } from "../src/agent/desktop-broker.mts";
 import { WindowsSidDaclPipeRelay } from "../src/agent/secure-pipe-relay.mts";
 
@@ -196,7 +197,7 @@ test("A failed relay start leaves no relay process or pipe, and host.close() is 
   // Reports ready for a pipe name other than the one it was asked to serve, so
   // start() fails on validation after the process is already running.
   await fs.writeFile(badScript, [
-    "param([string]$PipeName, [int]$RequestReadTimeoutMilliseconds)",
+    "param([string]$PipeName, [int]$RequestReadTimeoutMilliseconds, [int]$ParentResponseTimeoutMilliseconds)",
     "$message = @{ type = 'ready'; pipeName = 'unexpected-pipe'; path = '\\\\.\\pipe\\unexpected-pipe'; ownerSid = 'S-1-5-21-1-2-3-1001'; daclProtected = $true; ownerOnly = $true; accessRuleCount = 1 } | ConvertTo-Json -Compress",
     "[Console]::Out.WriteLine($message)",
     "[Console]::Out.Flush()",
@@ -308,6 +309,76 @@ test("Stalled clients cannot hold both instances: each is reclaimed within the r
     assert.deepEqual(JSON.parse(response), { accepted: "after-two-stalled-clients" });
   } finally {
     await relay.close();
+  }
+});
+
+test("A silent parent fails within the response ceiling without wedging the relay", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const parentResponseTimeoutMs = 300;
+  const pipeName = `nami-mail-relay-parent-timeout-test-${randomBytes(12).toString("hex")}`;
+  const hung = new Map<string, () => void>();
+  const relay = new WindowsSidDaclPipeRelay({
+    scriptPath,
+    pipeName,
+    parentResponseTimeoutMs,
+    onRequest: async (payload) => {
+      if (payload.startsWith("hang-")) {
+        await new Promise<void>((resolve) => { hung.set(payload, resolve); });
+      }
+      return JSON.stringify({ accepted: payload });
+    },
+  });
+  try {
+    const endpoint = await relay.start();
+    // Two rounds: each timeout releases its instance, and the pre-built spare
+    // is what serves the next client while the replacement is built.
+    for (const round of ["first", "second"]) {
+      const startedAt = Date.now();
+      const timeoutResponse = await requestPipe(endpoint.path, `hang-${round}`);
+      const elapsedMs = Date.now() - startedAt;
+      assert.deepEqual(JSON.parse(timeoutResponse), { type: "response", error: "parent-timeout" });
+      assert.ok(elapsedMs >= parentResponseTimeoutMs - 50, `The parent wait ended after ${elapsedMs}ms, before its ${parentResponseTimeoutMs}ms ceiling.`);
+      assert.ok(elapsedMs < 5_000, `The parent wait took ${elapsedMs}ms instead of failing at its ${parentResponseTimeoutMs}ms ceiling.`);
+
+      // A late answer names the exchange that already failed: releasing it here
+      // must not deliver it to the next client.
+      hung.get(`hang-${round}`)?.();
+      const after = await requestPipeEventually(endpoint.path, `after-${round}`);
+      assert.deepEqual(JSON.parse(after), { accepted: `after-${round}` });
+    }
+    assert.equal(relay.isLive(), true);
+  } finally {
+    await relay.close();
+  }
+  assert.deepEqual(await waitForNoRelayProcess(pipeName), []);
+});
+
+test("The client reports a relay parent-timeout frame as a retryable host failure", {
+  skip: process.platform !== "win32" ? "Requires Windows SID-DACL named pipes." : false,
+}, async () => {
+  const pathname = `\\\\.\\pipe\\nami-mail-relay-protocol-test-${randomBytes(12).toString("hex")}`;
+  // The relay's own error frame carries no signed payload, so it must be
+  // rejected as a transport failure instead of reaching response verification.
+  const server = net.createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(`${JSON.stringify({ type: "response", error: "parent-timeout" })}\n`);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(pathname, resolve);
+  });
+  try {
+    await assert.rejects(brokerRequestPipe(pathname, "probe"), (error: unknown) => {
+      const failure = error as { code?: string; retryable?: boolean; message?: string };
+      assert.equal(failure.code, "HOST_UNAVAILABLE");
+      assert.equal(failure.retryable, true);
+      assert.match(String(failure.message), /did not respond in time/);
+      return true;
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
