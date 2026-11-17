@@ -696,7 +696,7 @@ test("release workflow isolates read-only validation from credential-minimized p
   assert.equal(diagnosticsStep.with.name, "release-smoke-diagnostics-${{ github.ref_name }}");
   assert.equal(
     diagnosticsStep.with.path,
-    "output/desktop-smoke-diagnostic.json\noutput/installer-smoke-diagnostic.json\noutput/package-smoke-diagnostic.json\n",
+    "output/desktop-smoke.json\noutput/desktop-smoke-diagnostic.json\noutput/installer-smoke-diagnostic.json\noutput/package-smoke-diagnostic.json\n",
   );
   assert.equal(diagnosticsStep.with["if-no-files-found"], "ignore");
   assert.equal(diagnosticsStep.with["retention-days"], 7);

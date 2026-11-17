@@ -23,6 +23,23 @@ export type SecurePipeEndpoint = {
   ownerSid: string;
 };
 
+export type RelayEventLoopDelaySnapshot = {
+  samples: number;
+  maxMs: number;
+  meanMs: number;
+};
+
+/**
+ * Windowed event-loop delay of the calling process. The relay resets it at
+ * spawn and reads it at `ready`, so a start that took seconds but whose
+ * PowerShell stages were fast can be attributed to the caller's loop instead
+ * of being left as an unexplained gap.
+ */
+export type RelayEventLoopDelayProbe = {
+  reset(): void;
+  snapshot(): RelayEventLoopDelaySnapshot;
+};
+
 export type SecurePipeRelayOptions = {
   scriptPath: string;
   pipeName?: string;
@@ -30,6 +47,7 @@ export type SecurePipeRelayOptions = {
   requestReadTimeoutMs?: number;
   /** Ceiling for one parent answer; must stay below the client's exchange budget. */
   parentResponseTimeoutMs?: number;
+  eventLoopDelay?: RelayEventLoopDelayProbe;
   onRequest: (payload: string) => Promise<string>;
   onStderr?: (line: string) => void;
   /** One line per relay start, so a slow start names its stage instead of staying silent. */
@@ -151,6 +169,11 @@ function describeStageTimings(timings: RelayStageTimings | undefined): string {
   return parts.length ? ` (${parts.join(", ")})` : "";
 }
 
+function describeEventLoopDelay(delay: RelayEventLoopDelaySnapshot | undefined): string {
+  if (!delay || delay.samples === 0) return "";
+  return `; event loop max ${delay.maxMs}ms, mean ${delay.meanMs}ms over ${delay.samples} samples`;
+}
+
 /**
  * Owns the only Windows-native transport used by external callers. The
  * PowerShell 5.1 process creates the named pipe with a current-user SID DACL;
@@ -217,6 +240,9 @@ export class WindowsSidDaclPipeRelay {
       const timeout = setTimeout(() => fail("NamiMail could not start the secured Agent pipe."), startupTimeoutMs);
       timeout.unref?.();
       const spawnedAt = Date.now();
+      // The window starts just before the synchronous spawn so a slow spawn and
+      // a loop that cannot deliver `ready` are both inside it.
+      this.options.eventLoopDelay?.reset();
       let child: ChildProcessWithoutNullStreams;
       try {
         child = nodeSpawn(powershellPath, [
@@ -278,7 +304,7 @@ export class WindowsSidDaclPipeRelay {
             // One line per start, not per connection: the pid and relay-side
             // stages are what make the next starvation self-evident.
             this.options.onDiagnostic?.(
-              `Agent pipe ready pid=${message.pid ?? "unknown"} in ${Date.now() - spawnedAt}ms${describeStageTimings(message.stageTimings)}`,
+              `Agent pipe ready pid=${message.pid ?? "unknown"} in ${Date.now() - spawnedAt}ms${describeStageTimings(message.stageTimings)}${describeEventLoopDelay(this.options.eventLoopDelay?.snapshot())}`,
             );
           } catch {
             // Diagnostics must never fail a healthy relay.
