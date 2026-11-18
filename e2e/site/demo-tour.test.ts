@@ -8,13 +8,68 @@ async function loadSite(page: Page): Promise<void> {
   await page.goto("/");
 }
 
+const STEP_ANCHORS = {
+  mail: [
+    { step: "overview", target: "mail-list" },
+    { step: "search", target: "mail-row", interactive: true },
+    { step: "read", target: "reader-title" },
+  ],
+  agent: [
+    { step: "answer", target: "agent-answer" },
+    { step: "citations", target: "citation-card", interactive: true },
+    { step: "source", target: "source-card" },
+  ],
+} as const;
+
 async function readyTour(page: Page, view: "mail" | "agent") {
   const stage = page.locator(".demo-stage").filter({ has: page.locator(`iframe[data-demo="${view}"]`) });
-  await stage.scrollIntoViewIfNeeded();
+  // Land on the section like the nav link does, so the sticky header does not
+  // cover the tour toolbar (a real click there would otherwise be obstructed).
+  await page.evaluate((id) => document.getElementById(id)!.scrollIntoView({ block: "start", behavior: "instant" }), view === "mail" ? "demo" : "agent");
   await expect(stage).toHaveAttribute("data-state", "ready");
   const frame = frameFor(page, view);
-  await expect(frame.locator(view === "mail" ? ".message-item" : ".agent-workspace").first()).toBeVisible();
+  await expect(frame.locator(view === "mail" ? '[data-tour-target="mail-row"]' : '[data-tour-target="agent-answer"]').first()).toBeVisible();
   return { stage, frame, toolbar: stage.locator("xpath=ancestor::figure") };
+}
+
+/** Walk one demo and require every step's contract anchor to be present. */
+async function walkStepAnchors(page: Page, view: "mail" | "agent") {
+  const errors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" && message.text().includes("[demo-tour]")) errors.push(message.text());
+  });
+  const { stage, frame } = await readyTour(page, view);
+  // The tour needs its fake clock ticked forward, and the step only advances
+  // after in-frame clicks/typing have settled, so poll in 100ms slices rather
+  // than guessing fixed hold durations.
+  const advanceUntil = async (check: () => Promise<boolean>) => {
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 100) {
+      if (await check()) return;
+      await page.clock.runFor(100);
+    }
+    throw new Error(`${view} tour did not reach the expected step (${await stage.getAttribute("data-tour-step")}, ${await stage.getAttribute("data-tour-error")})`);
+  };
+  await advanceUntil(async () => (await stage.getAttribute("data-tour-step")) === STEP_ANCHORS[view][0].step);
+  for (const step of STEP_ANCHORS[view]) {
+    await expect(stage).toHaveAttribute("data-tour-step", step.step);
+    await expect(stage).not.toHaveAttribute("data-tour-error", /.+/);
+    const anchor = frame.locator(`[data-tour-target="${step.target}"]`).first();
+    await expect(anchor).toBeVisible();
+    // Visibility can land one frame before layout settles on slower runners, so
+    // poll the box instead of reading a single snapshot.
+    await expect.poll(() => anchor.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return Math.min(rect.width, rect.height);
+    })).toBeGreaterThan(0);
+    if ("interactive" in step && step.interactive) await expect(anchor).toBeEnabled();
+    await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-visible", "true");
+    const next = STEP_ANCHORS[view][STEP_ANCHORS[view].indexOf(step) + 1];
+    await advanceUntil(async () => (await stage.getAttribute("data-tour-state")) === "error"
+      || (next ? (await stage.getAttribute("data-tour-step")) === next.step : (await stage.getAttribute("data-tour-state")) === "complete"));
+    await expect(stage).not.toHaveAttribute("data-tour-error", /.+/);
+  }
+  await expect(stage).toHaveAttribute("data-tour-state", "complete");
+  expect(errors).toEqual([]);
 }
 
 test("mail tour searches and reads the real sample message, uses close-up, finishes once, and makes no API requests", async ({ page }) => {
@@ -44,10 +99,12 @@ test("mail tour searches and reads the real sample message, uses close-up, finis
   await expect(stage).toHaveAttribute("data-tour-step", "search");
   await expect(frame.locator("#mail-search")).toHaveValue("lin@example.com");
   await page.clock.runFor(800);
-  expect(Number(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThan(1);
+  expect(Number(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThanOrEqual(1.18);
   const pointer = stage.locator(".demo-tour-pointer");
   await expect(pointer).toHaveAttribute("data-visible", "true");
-  await expect(stage.locator(".demo-tour-focus")).toHaveCount(0);
+  await expect(stage.locator(".demo-tour-focus")).toHaveCount(1);
+  await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-visible", "true");
+  await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-dim", "true");
   expect(await pointer.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
   await expect.poll(() => stage.evaluate((element) => {
     const frame = getComputedStyle(element.querySelector(".demo-frame")!).transform;
@@ -62,7 +119,7 @@ test("mail tour searches and reads the real sample message, uses close-up, finis
   expect(await stage.evaluate((element) => getComputedStyle(element).getPropertyValue("--demo-tour-scale").trim())).toBe("1");
   await closeup.click();
   await expect(closeup).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(() => stage.evaluate((element) => Number(getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThan(1);
+  await expect.poll(() => stage.evaluate((element) => Number(getComputedStyle(element).getPropertyValue("--demo-tour-scale")))).toBeGreaterThanOrEqual(1.18);
 
   await page.clock.runFor(1600);
   await page.clock.runFor(650);
@@ -118,6 +175,18 @@ test("agent tour opens citations and the original source while staying in the as
   await page.clock.runFor(3600);
   await expect(stage).toHaveAttribute("data-tour-state", "complete");
   await expect(frame.locator(".demo-source-card")).toHaveCount(0);
+});
+
+test("every mail step resolves its data-tour-target anchor", async ({ page }) => {
+  await page.clock.install();
+  await loadSite(page);
+  await walkStepAnchors(page, "mail");
+});
+
+test("every agent step resolves its data-tour-target anchor", async ({ page }) => {
+  await page.clock.install();
+  await loadSite(page);
+  await walkStepAnchors(page, "agent");
 });
 
 test("leaving the visible stage pauses the tour and returning resumes it", async ({ page }) => {
@@ -178,3 +247,68 @@ test("a narrow viewport disables close-up and keeps tour controls within the pag
   await expect(stage).toHaveAttribute("data-tour-step", "overview");
   await expect(stage.locator(".demo-tour-pointer")).toHaveAttribute("data-visible", "false");
 });
+
+test("entering the demo keeps toolbar, stage, and figcaption in one desktop viewport", async ({ page }) => {
+  await page.clock.install();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
+    await page.setViewportSize(viewport);
+    await loadSite(page);
+    const { stage } = await readyTour(page, "mail");
+    await page.evaluate(() => document.getElementById("demo")!.scrollIntoView({ block: "start", behavior: "instant" }));
+    await page.clock.runFor(1100);
+    await expect(stage).toHaveAttribute("data-tour-state", "playing");
+    // The overview frames the whole list without dimming it.
+    await expect(stage.locator(".demo-tour-focus")).toHaveAttribute("data-dim", "false");
+    // The narration caption is gone; the stage starts right under the toolbar.
+    await expect(page.locator(".demo-tour-caption")).toHaveCount(0);
+    const box = await stage.evaluate((element) => {
+      const figure = element.closest("figure")!;
+      const rect = (selector: string) => figure.querySelector(selector)!.getBoundingClientRect();
+      const bar = rect(".demo-toolbar");
+      const stageRect = rect(".demo-stage");
+      const figcaption = rect("figcaption");
+      return {
+        innerHeight,
+        barTop: bar.top,
+        barBottom: bar.bottom,
+        stageTop: stageRect.top,
+        stageHeight: stageRect.height,
+        stageBottom: stageRect.bottom,
+        figcaptionBottom: figcaption.bottom,
+      };
+    });
+    expect(box.barTop).toBeGreaterThanOrEqual(0);
+    expect(box.stageTop).toBeGreaterThanOrEqual(box.barBottom - 1);
+    expect(box.stageHeight).toBeGreaterThan(300);
+    expect(box.stageBottom).toBeLessThanOrEqual(box.innerHeight);
+    expect(box.figcaptionBottom).toBeLessThanOrEqual(box.innerHeight - 8);
+  }
+});
+
+test("wheel input scrolls the page naturally instead of snapping a section height", async ({ page }) => {
+  await loadSite(page);
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  const before = await page.evaluate(() => window.scrollY);
+  await page.mouse.move(720, 450);
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => window.scrollY);
+  expect(after - before).toBeGreaterThan(0);
+  expect(after - before).toBeLessThan(400);
+});
+
+test("scrolling inside the demo keeps the tour playing", async ({ page }) => {
+  await loadSite(page);
+  const { stage, frame } = await readyTour(page, "mail");
+  await expect(stage).toHaveAttribute("data-tour-state", "playing");
+  await expect(stage).toHaveAttribute("data-tour-step", "overview");
+  // The old site forwarded this gesture to the outer page, which snapped the
+  // scroll position down a section and paused the tour as an interaction.
+  await frame.locator(".message-list").evaluate((element) => {
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: 240, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(400);
+  await expect(stage).toHaveAttribute("data-tour-state", "playing");
+  expect(await stage.evaluate((element) => element.dataset.tourPause ?? null)).toBeNull();
+});
+
