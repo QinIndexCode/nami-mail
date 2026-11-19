@@ -62,29 +62,41 @@ price of matching Gmail; on narrower windows the column width takes over and cap
 `border-radius:var(--radius-md) var(--radius-md) 4px` to round just the top corners) — and even then
 each tier must still reference a token.
 
-### 2.1 Window-control tray: a derived concentric arc
+### 2.1 Window-control band: square hit areas on the right edge, on the header's centre line
 
-The window-control tray in the top-right of the window bar is the one radius derived from geometry
-rather than picked from the four tiers:
+The window buttons at the top-right of Windows/Linux are not cards. They are the Windows-standard
+caption band: three hit areas against the window's right edge, adjacent with no gap, no container,
+and fully transparent at rest, vertically centred in the 66px header row so they share the icon
+centre line of the search field and buttons to their left (32px tall, so 17px from the window top).
+It deliberately does not use the radius tiers above:
 
-| token | derivation |
-|---|---|
-| `--window-control-size` | `32px`, the window button's edge; the control consumes it for width and height |
-| `--window-control-tray-padding` | `6px`, the inset from the button to the tray edge; the tray `padding` consumes it |
-| `--window-control-tray-height` | `calc(size + padding × 2)`, i.e. `44px` |
-| `--window-control-cap-radius` | `calc(tray-height / 2)`, i.e. `22px`. The tray still declares `--radius-pill`, but a box only paints its end cap at half its height, so the effective cap is `22px`, not `999px` |
-| `--window-control-outer-radius` | `calc(cap-radius − padding)`, i.e. `16px`; used by the outward corners of the first and last buttons |
-| `--window-control-cap-corner-shape` | `superellipse(1)`, shared by the tray cap and those outward corners |
+| contract | value | meaning |
+|---|---|---|
+| `--window-control-width` | `46px` | one hit area's width (Windows 11 at 100% scaling is 46×32) |
+| `--window-control-height` | `32px` | one hit area's height |
+| `--window-control-count` | `3` | minimize / maximize (restore) / close |
+| `--window-chrome-right` | `calc(width × count)`, i.e. `138px` | the corner width the band owns, and the header's safe area |
+| `margin-right` | `calc(--window-chrome-right − 56px)`, i.e. `82px` | `.column-header` / `.reader-toolbar` / `.agent-workspace-header` subtract the 56px rail column so the header's right edge **coincides** with the band's left edge (zero overlap, zero seam) |
 
-**Why it has to be an exception**: the outward corner is concentric with the cap only at
-"cap radius − inset", which is not on the design scale; and changing the radius alone is not enough —
-a 16px `superellipse(2)` corner still bulges into the gap at a 6px offset. With the token chain,
-changing the button size or the inset moves the tray height, the cap and the outward radius together;
-`apps/web/src/windowControlsCorners.test.ts` re-runs the chain with perturbed dimensions, so copying
-the relationship into a literal fails.
+**Shape**: `.window-bar` has no trailing inset any more; the band ends on the window's right edge,
+so the close button's right edge is the window's right edge, and it keeps `align-items: center` so
+the tiles sit on the same centre line as the header icons. `.window-controls` carries no padding, no
+tint, no radius and no gap, every button is `border-radius: 0`, and the three 46×32 hit areas tile
+edge to edge. `--window-chrome-right` is derived from the hit area instead of restating 138, so the
+band and the header safe area move together with the hit area;
+`apps/web/src/windowControlsCorners.test.ts` re-runs the chain with a perturbed width.
 
-**Scope**: only `.desktop-app .window-controls` and its first/last `.window-control`; every other
-button keeps the four-tier tokens.
+**Colour**: transparent at rest; hover fills the whole tile with `--hover` and lifts the glyph to
+`--text`; the close button hovers to `#C42B1C` with a white glyph and presses darker at `#a32415`.
+Red means exactly one thing, closing the whole app; the compose card's own × stays neutral grey.
+
+**Focus**: the band is flush with the window edge, so the global 2px/+2px ring would be clipped by
+the frame. Here `outline-offset` becomes `-2px` so the ring sits fully inside the button box; the
+close button's ring is `--danger`, and turns white while the red hover fill is painted under it.
+
+**Scope**: only non-macOS platforms under `.desktop-app`. The browser build draws no window controls
+(`--window-chrome-*` stay `0` there, so every derived rule is a no-op); macOS keeps the native traffic
+lights and the static 42px `.window-bar` row.
 
 ## 3. Shadows
 

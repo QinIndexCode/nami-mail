@@ -235,7 +235,12 @@ describe("styles.css size ratchet", () => {
   // 托盘 padding 改消费令牌并显式声明帽的 corner-shape（+1 行）；新增一条把窗口按钮宽高
   // 绑定到 --window-control-size 的规则（+5 行），端点两条规则改为引用令牌、行数不变。
   // 净 +25 行，实测 18_857，阈值取 18_867（余量 10 行，仍在 12 行缓冲政策内）。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_867;
+  // 2026-11-20 一次下降（18_867 → 18_859）：窗口控件从自定义胶囊托盘改为 Windows 标准
+  // 控件带，令牌链（尺寸/内缩/托盘高/帽半径/外角半径/帽 corner-shape）与首尾两条单侧圆角
+  // 规则整组删除，改为命中区宽高 + 数量推导 --window-chrome-right；托盘底色令牌
+  // --chrome-tray 一并移除，悬停改为整块 var(--hover)，关闭键 #C42B1C / #a32415，焦点环
+  // 改内嵌 offset。净 −8 行，实测 18_849，阈值随之下调到实测 +10 行缓冲。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_859;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

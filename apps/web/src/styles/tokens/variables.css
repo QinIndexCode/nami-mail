@@ -62,11 +62,6 @@ font-synthesis:none;
 --window-chrome-top:0px;
 --window-chrome-right:0px;
 --window-chrome-left:0px;
-/* The window buttons float over whatever view is beneath them, so at rest they
-   need to read as OS chrome rather than as one more button in the card below. A
-   tint of --text derives both themes from one value, and it stays below --hover
-   (4.3% light / 5.5% dark) so hover still lifts off the tray. */
---chrome-tray:color-mix(in srgb,var(--text) 4%,transparent);
 /* One timeline for every property that moves when a compose card flips between
    windowed and full-bleed: the card's own box, the backdrop gutter it grows
    into, and the header inset that clears the window buttons. Keeping them on a

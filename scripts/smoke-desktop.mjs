@@ -400,8 +400,8 @@ try {
   const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
   if (headerRight != null && windowWidth != null) {
     assert.ok(
-      Math.abs(headerRight - (windowWidth - 144)) < 1,
-      `The header row must stop 144px short of the window's right edge so the control overlay owns that corner (header right ${headerRight}px vs window ${windowWidth}px).`,
+      Math.abs(headerRight - (windowWidth - 138)) < 1,
+      `The header row must stop 138px short of the window's right edge so the control band owns that corner (header right ${headerRight}px vs window ${windowWidth}px).`,
     );
   }
   assert.ok(
@@ -415,27 +415,60 @@ try {
   if (renderer.desktopWindowBarLayout?.agentHeaderActionsClearOfControls != null) {
     assert.equal(renderer.desktopWindowBarLayout.agentHeaderActionsClearOfControls, true, "The agent header actions must not overlap the window controls.");
   }
-  const windowControlsCenter = renderer.desktopWindowBarLayout?.controlsCenter;
-  if (windowControlsCenter != null) {
+  const windowControlsBand = renderer.desktopWindowBarLayout?.controls;
+  if (windowControlsBand != null) {
+    // The band shares the header's icon centre line, and its right edge is the
+    // window's right edge. Assert the real geometry instead of restating the
+    // CSS numbers.
+    const controls = renderer.desktopWindowBarLayout;
+    const band = controls.controls;
+    const buttons = controls.windowControls ?? [];
+    const closeRight = buttons.at(-1)?.right ?? -1;
+    const barHeight = controls.barHeight ?? 66;
+    const centre = band.top + band.height / 2;
     assert.ok(
-      Math.abs(windowControlsCenter - (renderer.desktopWindowBarLayout?.columnRowCenter ?? -1)) < 2,
-      "The window controls must center on the same line as the header icons.",
+      Math.abs(band.top - (barHeight - 32) / 2) < 1,
+      `The control band must be vertically centred in the ${barHeight}px header row (top ${band.top}px).`,
     );
     assert.ok(
-      Math.abs(windowControlsCenter - (renderer.desktopWindowBarLayout?.sidebarBrandCenter ?? -1)) < 2,
-      "The window controls must center on the same line as the sidebar brand icon.",
+      Math.abs(centre - (controls.columnRowCenter ?? -1)) < 1,
+      `The window controls must centre on the same line as the header icons (control centre ${centre}px vs header ${controls.columnRowCenter}px).`,
     );
+    assert.ok(
+      Math.abs(band.right - (windowWidth ?? -1)) < 0.5,
+      `The control band must end on the window's right edge (right ${band.right}px vs window ${windowWidth}px).`,
+    );
+    assert.ok(
+      Math.abs(closeRight - (windowWidth ?? -1)) < 0.5,
+      `The close button's right edge must be the window's right edge (close right ${closeRight}px vs window ${windowWidth}px).`,
+    );
+    assert.equal(band.width, 138, "The band must be exactly three 46px hit areas wide.");
+    assert.equal(band.height, 32, "The band must be exactly one 32px hit area tall.");
+    assert.equal(buttons.length, 3, "The Windows caption band must draw exactly three buttons.");
+    for (const [index, button] of buttons.entries()) {
+      assert.ok(
+        Math.abs(button.width - 46) < 0.5 && Math.abs(button.height - 32) < 0.5,
+        `Window control ${index + 1} must be a 46x32 hit area (got ${button.width}x${button.height}).`,
+      );
+      assert.equal(button.borderRadius, "0px", `Window control ${index + 1} must be square, not a rounded chip.`);
+    }
+    const headerRightToControls = controls.headerRightToControls;
+    if (headerRightToControls != null) {
+      assert.ok(
+        Math.abs(headerRightToControls) < 0.5,
+        `The header must end exactly on the band's left edge with no overlap and no seam (gap ${headerRightToControls}px).`,
+      );
+    }
   }
   const headerControlsGap = renderer.desktopWindowBarLayout?.headerActionsGapToControls;
   if (headerControlsGap != null) {
-    // 18.33 rather than 17.33: the tray used to hang 1px past the window bar's
-    // content box (1px divider + 12px padding on a 133px group), so this gap was
-    // measured against that protruding edge. The group now fills the 132px
-    // content box exactly with a symmetric 6px inset, and the header keeps its
-    // one-icon gap to the tray's true left edge.
+    // Measured against the real renderer at 1440px: the header's inner padding
+    // is 18px and the band's left edge now coincides with the header's box
+    // edge, so the gap is exactly one icon gap. (The retired tray hung 1px
+    // past the bar's content box, which is where the old 18.33 came from.)
     assert.ok(
-      Math.abs(headerControlsGap - 18.33) < 1,
-      `The header must sit one icon gap away from the window control overlay (got ${headerControlsGap}px, expected ~18.33px).`,
+      Math.abs(headerControlsGap - 18) < 0.5,
+      `The header must sit one icon gap away from the window control band (got ${headerControlsGap}px, expected 18px).`,
     );
   }
   assert.equal(renderer.desktopWindowControls, true, "The frameless window bar must carry its own controls (or the macOS traffic-light slot).");
