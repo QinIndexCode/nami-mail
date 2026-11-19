@@ -55,6 +55,26 @@
 `border-radius:var(--radius-md) var(--radius-md) 4px` 表示只圆上方两角）——即便如此，
 其中的每一档也必须引用 token。
 
+### 2.1 窗口控件托盘：导出的同心圆角
+
+窗口栏右上角的窗口控件托盘是唯一由几何推导出的圆角，不是四档之外的新档位：
+
+| token | 推导 |
+|---|---|
+| `--window-control-size` | `32px`，窗口按钮的边长；按钮宽高都消费它 |
+| `--window-control-tray-padding` | `6px`，按钮到托盘四边的内缩；托盘 `padding` 消费它 |
+| `--window-control-tray-height` | `calc(size + padding × 2)`，即 `44px` |
+| `--window-control-cap-radius` | `calc(tray-height / 2)`，即 `22px`。托盘仍写 `--radius-pill`，但盒子只会把端头画到高度的一半，所以有效帽半径是 `22px` 而不是 `999px` |
+| `--window-control-outer-radius` | `calc(cap-radius − padding)`，即 `16px`；首尾按钮靠外的单侧圆角用它 |
+| `--window-control-cap-corner-shape` | `superellipse(1)`，托盘端头与首尾按钮的外侧角共用 |
+
+**为什么这里必须是特例**：外角要与端头弧同心，半径只能是“帽半径 − 内缩”，它不落在设计刻度的任何一档；
+只改半径也不够——`superellipse(2)` 的 16px 角在 6px 偏移处仍会向间隙鼓出。写成令牌链后，改按钮尺寸或内缩，
+托盘高度、帽半径与外角一起跟随；`apps/web/src/windowControlsCorners.test.ts` 会用扰动后的尺寸重算这条链，
+把关系复制成字面量会失败。
+
+**适用范围**：只用于 `.desktop-app .window-controls` 及首尾两个 `.window-control`；其他按钮仍用四档 token。
+
 ## 3. 阴影
 
 | token | 用于 |

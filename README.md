@@ -76,7 +76,7 @@ Download the latest Windows x64 `.exe` installer from [GitHub Releases](https://
 
 ### For developers
 
-Node.js 24.21.0 or newer is required — the same major as the runtime bundled with Electron 43.
+Node.js 24.21.0 or newer is required — the floor pinned by `engines.node` in the root `package.json`; the desktop runtime is Electron 45.
 
 ```powershell
 git clone https://github.com/QinIndexCode/nami-mail.git

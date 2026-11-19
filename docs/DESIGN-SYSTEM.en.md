@@ -62,6 +62,30 @@ price of matching Gmail; on narrower windows the column width takes over and cap
 `border-radius:var(--radius-md) var(--radius-md) 4px` to round just the top corners) — and even then
 each tier must still reference a token.
 
+### 2.1 Window-control tray: a derived concentric arc
+
+The window-control tray in the top-right of the window bar is the one radius derived from geometry
+rather than picked from the four tiers:
+
+| token | derivation |
+|---|---|
+| `--window-control-size` | `32px`, the window button's edge; the control consumes it for width and height |
+| `--window-control-tray-padding` | `6px`, the inset from the button to the tray edge; the tray `padding` consumes it |
+| `--window-control-tray-height` | `calc(size + padding × 2)`, i.e. `44px` |
+| `--window-control-cap-radius` | `calc(tray-height / 2)`, i.e. `22px`. The tray still declares `--radius-pill`, but a box only paints its end cap at half its height, so the effective cap is `22px`, not `999px` |
+| `--window-control-outer-radius` | `calc(cap-radius − padding)`, i.e. `16px`; used by the outward corners of the first and last buttons |
+| `--window-control-cap-corner-shape` | `superellipse(1)`, shared by the tray cap and those outward corners |
+
+**Why it has to be an exception**: the outward corner is concentric with the cap only at
+"cap radius − inset", which is not on the design scale; and changing the radius alone is not enough —
+a 16px `superellipse(2)` corner still bulges into the gap at a 6px offset. With the token chain,
+changing the button size or the inset moves the tray height, the cap and the outward radius together;
+`apps/web/src/windowControlsCorners.test.ts` re-runs the chain with perturbed dimensions, so copying
+the relationship into a literal fails.
+
+**Scope**: only `.desktop-app .window-controls` and its first/last `.window-control`; every other
+button keeps the four-tier tokens.
+
 ## 3. Shadows
 
 | token | used for |

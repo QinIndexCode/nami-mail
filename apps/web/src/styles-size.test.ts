@@ -230,7 +230,12 @@ describe("styles.css size ratchet", () => {
   // nth-child(3) 的右上/右下换 16px 半径（22 − 6 = 16 才同心）并把这两个角改回
   // superellipse(1)（squircle 的 16px 仍会鼓出 3.25px）。净 +24 行（12 行注释 + 两条
   // 各 6 行的单侧角规则），实测 18_832，阈值取实测 +12 行缓冲。
-  const FROZEN_AGGREGATED_MAX_LINES = 18_844;
+  // 2026-11-19 上调（18_844 → 18_867）：把“外角半径 = 帽半径 − 内缩”写成令牌链，避免
+  // 16px 字面量在按钮尺寸或内缩变化时失配。.desktop-app 内新增 6 个几何令牌与 11 行说明；
+  // 托盘 padding 改消费令牌并显式声明帽的 corner-shape（+1 行）；新增一条把窗口按钮宽高
+  // 绑定到 --window-control-size 的规则（+5 行），端点两条规则改为引用令牌、行数不变。
+  // 净 +25 行，实测 18_857，阈值取 18_867（余量 10 行，仍在 12 行缓冲政策内）。
+  const FROZEN_AGGREGATED_MAX_LINES = 18_867;
   const STALENESS_WINDOW = 900;
 
   it("maintains a clean, modular root entry stylesheet", () => {

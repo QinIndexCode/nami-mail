@@ -86,7 +86,7 @@ See [Windows installation and updates](docs/INSTALLING.en.md) for first installa
 
 ## Run from Source
 
-Node.js 24.21.0 or newer is required (the same major as the Node runtime bundled with Electron 43).
+Node.js 24.21.0 or newer is required (the floor pinned by `engines.node` in the root `package.json`; the desktop runtime is Electron 45).
 
 ```powershell
 # Run these commands from the project root.
@@ -101,7 +101,7 @@ Open [http://127.0.0.1:3187](http://127.0.0.1:3187) in a browser. For developmen
 npm.cmd run dev
 ```
 
-The development service uses the root `better-sqlite3` module directly. On Windows x64, v13 uses the N-API prebuilt module at `prebuilds/win32-x64.node`; command-line Node and Electron each run a real query to validate that module. No ABI-specific binary swapping is required. You can validate the load paths separately:
+The development service uses the root `better-sqlite3-multiple-ciphers` module directly. On Windows x64, v13 uses the N-API prebuilt module at `prebuilds/win32-x64.node`; command-line Node and Electron each run a real query to validate that module. No ABI-specific binary swapping is required. You can validate the load paths separately:
 
 ```powershell
 npm.cmd run verify:node-sqlite
@@ -129,7 +129,7 @@ After the build completes, the installer is at `release-artifacts/<package.json 
 - When the installed version is higher than the installer, the interactive installer cancels a downgrade by default and continues only after explicit confirmation. A silent downgrade additionally requires `--nami-allow-downgrade`; otherwise it exits with code `3`.
 - During uninstallation, the app asks whether to delete the current Windows user's local Nami Mail data and keeps it by default. Deletion removes only `%APPDATA%\Nami Mail`, including the local database, encryption keys, saved settings, and public OAuth configuration. It does not delete mail held by the provider. Silent uninstall keeps data by default; use `Uninstall Nami Mail.exe /S --nami-delete-data` for explicit deletion. A test or custom directory set with `NAMI_MAIL_USER_DATA_DIR` is never removed automatically by the installer.
 
-The desktop app and Web server both use the native SQLite module. `better-sqlite3 13` uses the same N-API prebuilt module on Windows x64. Before desktop startup or packaging, the project performs a real validation that Electron can load the root module.
+The desktop app and Web server both use the native SQLite module. `better-sqlite3-multiple-ciphers 13` uses the same N-API prebuilt module on Windows x64. Before desktop startup or packaging, the project performs a real validation that Electron can load the root module.
 
 For public Windows distribution, a timestamped Authenticode signature on the final installer is strongly recommended. An unsigned installer can still use an Ed25519 manifest trust root for updates, but Windows SmartScreen can display an origin warning.
 
@@ -294,7 +294,7 @@ npm.cmd audit --omit=dev
 - Web: React, TypeScript, Vite
 - API: Fastify, TypeScript
 - Mail: ImapFlow, MailParser, Nodemailer
-- Storage: SQLite (`better-sqlite3`)
+- Storage: SQLite (`better-sqlite3-multiple-ciphers`)
 - Key protection: Node.js `crypto` plus AES-256-GCM
 
 The architecture draws on public implementation ideas from [ImapFlow](https://github.com/postalsys/imapflow), [Stork](https://github.com/paperkite-hq/stork), and [MailGo](https://github.com/MengMengCode/MailGo). Nami Mail itself uses a lightweight all-Node.js local architecture and does not depend on MySQL or Redis.

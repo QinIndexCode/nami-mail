@@ -6,7 +6,7 @@
 
 ## 前置条件
 
-- Node.js 24.21.0 或更高版本（Electron 43 内置 Node 24，CI 亦以该下限验证）；
+- Node.js 24.21.0 或更高版本（与根 `package.json` 的 `engines.node` 一致，CI 亦以该下限验证；桌面端运行时为 Electron 45）；
 - Windows（构建 NSIS 安装包和验证 Electron 路径时需要）；
 - 用于实际邮箱验证的测试账户和应用专用密码/授权码。不要使用主密码，也不要把任何凭据写入代码、测试、截图或提交记录。
 

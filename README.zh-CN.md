@@ -86,7 +86,7 @@ Nami Mail 是一个本地优先的多账户 Windows 桌面邮件客户端。它�
 
 ## 运行
 
-需要 Node.js 24.21.0 或更高版本（与 Electron 43 内置的 Node 24 同主版本）。
+需要 Node.js 24.21.0 或更高版本（与根 `package.json` 的 `engines.node` 一致；桌面端运行时为 Electron 45）。
 
 ```powershell
 # 在本项目根目录执行
@@ -101,7 +101,7 @@ npm.cmd start
 npm.cmd run dev
 ```
 
-开发服务直接使用根目录的 `better-sqlite3`。Windows x64 的 v13 使用 `prebuilds/win32-x64.node` N-API 预编译模块，命令行 Node 与 Electron 都会分别执行真实查询验证该文件；不需要在项目中交换 ABI 专用二进制文件。可单独验证两个运行时的加载路径：
+开发服务直接使用根目录的 `better-sqlite3-multiple-ciphers`。Windows x64 的 v13 使用 `prebuilds/win32-x64.node` N-API 预编译模块，命令行 Node 与 Electron 都会分别执行真实查询验证该文件；不需要在项目中交换 ABI 专用二进制文件。可单独验证两个运行时的加载路径：
 
 ```powershell
 npm.cmd run verify:node-sqlite
@@ -129,7 +129,7 @@ npm.cmd run package:win
 - 已安装版本高于当前安装包时，交互式安装程序会默认取消降级，只有明确确认后才继续；静默降级必须额外传入 `--nami-allow-downgrade`，否则退出码为 `3`。
 - 卸载时会询问是否同时删除当前 Windows 用户的 Nami Mail 本地数据，默认保留。选择删除只会移除 `%APPDATA%\Nami Mail`，其中包括本地数据库、加密密钥、已保存设置和 OAuth 公共配置，不会删除邮箱服务商上的邮件。静默卸载默认保留数据；需要显式删除时使用 `Uninstall Nami Mail.exe /S --nami-delete-data`。通过 `NAMI_MAIL_USER_DATA_DIR` 指定的测试或自定义目录不会被安装程序自动删除。
 
-桌面版与 Web 服务端都使用 SQLite 原生模块。`better-sqlite3 13` 在 Windows x64 使用同一个 N-API 预编译模块；桌面启动或打包前，项目会实际验证 Electron 能加载根目录模块。
+桌面版与 Web 服务端都使用 SQLite 原生模块。`better-sqlite3-multiple-ciphers 13` 在 Windows x64 使用同一个 N-API 预编译模块；桌面启动或打包前，项目会实际验证 Electron 能加载根目录模块。
 
 面向普通 Windows 用户的公开分发，强烈建议使用带时间戳的 Authenticode 证书签名最终安装程序；未签名安装程序仍可依靠 Ed25519 清单信任根进行更新，但 Windows SmartScreen 可能显示来源警告。
 
@@ -294,7 +294,7 @@ npm.cmd audit --omit=dev
 - Web：React、TypeScript、Vite
 - API：Fastify、TypeScript
 - 邮件：ImapFlow、MailParser、Nodemailer
-- 存储：SQLite（better-sqlite3）
+- 存储：SQLite（better-sqlite3-multiple-ciphers）
 - 密钥保护：Node.js `crypto` + AES-256-GCM
 
 架构参考了 [ImapFlow](https://github.com/postalsys/imapflow)、[Stork](https://github.com/paperkite-hq/stork) 和 [MailGo](https://github.com/MengMengCode/MailGo) 的公开实现思路，但项目本身采用轻量的全 Node.js 本地架构，不依赖 MySQL 或 Redis。

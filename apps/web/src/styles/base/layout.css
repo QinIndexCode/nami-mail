@@ -209,7 +209,24 @@ display:grid;
 .desktop-app
 {
 --window-chrome-top:66px;
---window-chrome-right:144px
+--window-chrome-right:144px;
+/* Window-control tray geometry. The tray is a pill, but a box only ever paints
+   half its height as the end cap, so the cap radius is tray-height / 2, not
+   --radius-pill's 999px. The end buttons sit one `tray-padding` inside that
+   cap; their outward corner is concentric with it only at cap − padding
+   (22 − 6 = 16px here). Every term is a token: changing the button size or the
+   padding moves the tray height, the cap and the outward radius together
+   instead of leaving a literal to re-sync by hand. windowControlsCorners.test.ts
+   re-derives this same chain from the stylesheet. */
+--window-control-size:32px;
+--window-control-tray-padding:6px;
+--window-control-tray-height:calc(var(--window-control-size) + var(--window-control-tray-padding) * 2);
+--window-control-cap-radius:calc(var(--window-control-tray-height) / 2);
+--window-control-outer-radius:calc(var(--window-control-cap-radius) - var(--window-control-tray-padding));
+/* The cap keeps the tray's round arc (superellipse(1) ≡ round). The outward
+   button corners must use this same shape: a 16px squircle still bulges into
+   the gap, because superellipse(2) cuts less at a 6px offset. */
+--window-control-cap-corner-shape:superellipse(1)
 }
 /* macOS draws the native traffic lights at the top-left and reserves a leading
    slot for them, so nothing is drawn at the right edge. */
@@ -435,7 +452,7 @@ z-index:95;
    the end radius below, and the tray tint separates the cluster anyway. With
    6px around 32px buttons the group is 132px wide — exactly the bar's content
    box — so it also stops hanging 1px past the bar's left edge. */
-padding:6px;
+padding:var(--window-control-tray-padding);
 /* The tray is the static half of the "window, not card" signal — hover only
    fires once the pointer has already committed. It paints the group's own box:
    a square block would end 12px short of the window edge and read as a stray
@@ -443,33 +460,41 @@ padding:6px;
    larger than the ring's corner radius plus the offset between both arcs, so
    the first, middle and last hover rings stay inside the painted tray instead
    of poking past its corners, and the focus ring (2px outline + 2px offset)
-   still clears the cap — 2px at the sides, ~1px on the diagonal. */
+   still clears the cap — 2px at the sides, and 1.9–2.1px on the end corners'
+   diagonal (measured with the same 45° apex probe as the block below). */
 background:var(--chrome-tray);
-border-radius:var(--radius-pill)
+border-radius:var(--radius-pill);
+corner-shape:var(--window-control-cap-corner-shape)
 }
 /* Only the two end buttons meet the tray's pill cap, so only their outward
    corners take that cap's curvature: the cap is a 22px arc, the buttons sit 6px
    inside it, and 22 − 6 = 16px is the radius that makes the hover block
    concentric with it (6px of tray all the way round, exactly like the straight
-   sides). The radius alone is not enough: these buttons are squircles
-   (superellipse(2), 13.76px), and a 16px squircle bulges into the gap — measured
-   2.75px of tray left at the 45° apex instead of 6px — so the two outward
-   corners are plain superellipse(1) like the tray's own arc, while the inward
-   corners keep --corner-shape. Measured at the apex after the change: 6.00px on
-   all four end corners, and the focus ring clears the tray by 1.85–2.09px
-   instead of poking 2.05–2.41px outside it. The middle button and every other
-   .icon-button keep the untouched squircle. */
+   sides). The radius alone is not enough: the base .icon-button corner is a
+   13.76px squircle (superellipse(2)), and even at 16px it still bulges into the
+   gap, so the two outward corners take the cap's superellipse(1) while the
+   inward corners keep --corner-shape. Measured at the 45° apex as the 50%
+   coverage crossing of the rendered pixels (1024/1400/1920 at DPR 1 and 1.5):
+   5.2–6.0px of tray on all four end corners (5.6–5.9px at DPR 1.5, where the
+   pixel grid quantises the arc less), and the focus ring keeps 1.6–2.2px of
+   tray. With the squircle kept instead the same probe reads 1.8–2.7px. The
+   middle button and every other .icon-button keep the untouched squircle. */
+.window-controls .window-control
+{
+width:var(--window-control-size);
+height:var(--window-control-size)
+}
 .window-controls .window-control:nth-child(1)
 {
-border-top-left-radius:16px;
-border-bottom-left-radius:16px;
-corner-shape:superellipse(1) var(--corner-shape) var(--corner-shape) superellipse(1)
+border-top-left-radius:var(--window-control-outer-radius);
+border-bottom-left-radius:var(--window-control-outer-radius);
+corner-shape:var(--window-control-cap-corner-shape) var(--corner-shape) var(--corner-shape) var(--window-control-cap-corner-shape)
 }
 .window-controls .window-control:nth-child(3)
 {
-border-top-right-radius:16px;
-border-bottom-right-radius:16px;
-corner-shape:var(--corner-shape) superellipse(1) superellipse(1) var(--corner-shape)
+border-top-right-radius:var(--window-control-outer-radius);
+border-bottom-right-radius:var(--window-control-outer-radius);
+corner-shape:var(--corner-shape) var(--window-control-cap-corner-shape) var(--window-control-cap-corner-shape) var(--corner-shape)
 }
 /* `.icon-button:hover` lives in features/mail.css, imported after this file, so
    this needs more weight than its (0,3,0) — hence the `.window-bar` ancestor. It
