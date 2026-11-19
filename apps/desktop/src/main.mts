@@ -1824,12 +1824,12 @@ async function boot(): Promise<void> {
                   }),
                 };
               })(),
-              // The window controls, the column header's first row and the
-              // sidebar brand all rest on one shared vertical line, so the
-              // drag strip does not visually separate the top edge.
-              controlsCenter: controls ? controls.getBoundingClientRect().top + controls.getBoundingClientRect().height / 2 : null,
+              // Caption band: 46x32 tiles flush right, centred on the header line.
               columnRowCenter: searchWrap ? searchWrap.getBoundingClientRect().top + searchWrap.getBoundingClientRect().height / 2 : null,
               sidebarBrandCenter: (() => { const mark = document.querySelector(".brand-mark"); return mark ? mark.getBoundingClientRect().top + mark.getBoundingClientRect().height / 2 : null; })(),
+              controls: controlsRect ? { top: controlsRect.top, left: controlsRect.left, right: controlsRect.right, width: controlsRect.width, height: controlsRect.height } : null,
+              windowControls: Array.from(document.querySelectorAll(".window-control")).map((button) => { const r = button.getBoundingClientRect(); return { width: r.width, height: r.height, left: r.left, right: r.right, top: r.top, bottom: r.bottom, borderRadius: getComputedStyle(button).borderTopLeftRadius }; }),
+              headerRightToControls: columnHeader && controlsRect ? controlsRect.left - columnHeader.getBoundingClientRect().right : null,
               // The header's right-most control sits one header gap away
               // from the window controls instead of leaving a wide hole.
               headerActionsGapToControls: (() => {

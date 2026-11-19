@@ -205,28 +205,21 @@ display:grid;
    safe-area tokens every surface must keep clear of: the header row reserves it
    as a grid track, dialogs cap their height against it, and a surface that goes
    full-bleed insets its own controls by it. Defined once here, consumed through
-   the tokens instead of restating 144/66 at each call site. */
+   the tokens instead of restating 138/66 at each call site. */
 .desktop-app
 {
 --window-chrome-top:66px;
---window-chrome-right:144px;
-/* Window-control tray geometry. The tray is a pill, but a box only ever paints
-   half its height as the end cap, so the cap radius is tray-height / 2, not
-   --radius-pill's 999px. The end buttons sit one `tray-padding` inside that
-   cap; their outward corner is concentric with it only at cap − padding
-   (22 − 6 = 16px here). Every term is a token: changing the button size or the
-   padding moves the tray height, the cap and the outward radius together
-   instead of leaving a literal to re-sync by hand. windowControlsCorners.test.ts
-   re-derives this same chain from the stylesheet. */
---window-control-size:32px;
---window-control-tray-padding:6px;
---window-control-tray-height:calc(var(--window-control-size) + var(--window-control-tray-padding) * 2);
---window-control-cap-radius:calc(var(--window-control-tray-height) / 2);
---window-control-outer-radius:calc(var(--window-control-cap-radius) - var(--window-control-tray-padding));
-/* The cap keeps the tray's round arc (superellipse(1) ≡ round). The outward
-   button corners must use this same shape: a 16px squircle still bulges into
-   the gap, because superellipse(2) cuts less at a 6px offset. */
---window-control-cap-corner-shape:superellipse(1)
+/* Windows draws its caption buttons flush into the window's top-right corner:
+   three 46x32 hit areas, no gap, no container, no inset. The close button's
+   right edge therefore IS the window's right edge. The band width is derived
+   from the hit area rather than restating 3 x 46, and the header row keeps the
+   relationship it always had — its right edge lands exactly on the band's left
+   edge via margin-right (band − 56px rail). windowControlsCorners.test.ts
+   re-derives this chain from the stylesheet. */
+--window-control-width:46px;
+--window-control-height:32px;
+--window-control-count:3;
+--window-chrome-right:calc(var(--window-control-width) * var(--window-control-count))
 }
 /* macOS draws the native traffic lights at the top-left and reserves a leading
    slot for them, so nothing is drawn at the right edge. */
@@ -259,17 +252,21 @@ position:absolute;
 display:flex;
 align-items:center;
 justify-content:flex-end;
-padding-right:12px;
 pointer-events:auto;
 -webkit-app-region:no-drag
 }
 /* On Windows/Linux the overlay floats over the already-tinted frame/panel
    behind it. Painting its own panel layer on top makes the corner read as a
    solid protruding slab against the wallpaper. The buttons stay reachable
-   with no background, so the overlay blends into the header surface. macOS
-   keeps its static 42px bar above (traffic lights row), untouched here. */
+   with no background, so the overlay blends into the header surface. The band
+   is flush with the window's right edge with no trailing inset: the buttons
+   tile the bar's full width and the close button ends on the window's own
+   corner. Vertically it keeps the base `align-items:center`, so the 46x32
+   tiles share the header row's icon centre line instead of sitting on the top
+   edge. macOS keeps its static 42px bar above (traffic lights row), untouched. */
 .desktop-app:not([data-platform=darwin]) .window-bar
 {
+padding-right:0;
 background:transparent
 }
 /* Region distinction relies solely on the shared chrome color, so the window
@@ -346,19 +343,21 @@ grid-column:2
 /* The header row spans the whole right side (everything right of the
    sidebar): the list header extends across the rail's top strip, so the
    rail can simply live on the row below without any computed offset.
-   margin-right keeps header content from overlapping the window-bar buttons. */
+   The header's right edge must land exactly on the window-control band's
+   left edge, so the margin is the band width minus the 56px rail column it
+   stops short of — the two never overlap and never leave a seam. */
 .desktop-app .column-header
 {
 position:relative;
-margin-right:88px
+margin-right:calc(var(--window-chrome-right) - 56px)
 }
 .desktop-app .reader-toolbar
 {
-margin-right:88px
+margin-right:calc(var(--window-chrome-right) - 56px)
 }
 .desktop-app .agent-workspace-header
 {
-margin-right:88px
+margin-right:calc(var(--window-chrome-right) - 56px)
 }
 /* macOS keeps the native traffic lights in the same row as the sidebar
    brand, so the shell keeps its single row and the rail starts at the
@@ -444,73 +443,70 @@ display:flex;
    scrims (update-prompt / toast are 90) so they stay reachable over any
    dialog, while the window-bar background beneath dims with the scrim. */
 z-index:95;
-/* One inset on all four sides. The group used to reserve 13px on the leading
-   side (1px divider + 12px padding) and 0 on the trailing side, so the close
-   hover ring sat on the tray's right edge and read as framed while the minimize
-   ring floated 13px inside the left end next to the tray's own outline. The
-   divider went with that border box: a 1px left edge is clipped into an arc by
-   the end radius below, and the tray tint separates the cluster anyway. With
-   6px around 32px buttons the group is 132px wide — exactly the bar's content
-   box — so it also stops hanging 1px past the bar's left edge. */
-padding:var(--window-control-tray-padding);
-/* The tray is the static half of the "window, not card" signal — hover only
-   fires once the pointer has already committed. It paints the group's own box:
-   a square block would end 12px short of the window edge and read as a stray
-   slab, so it keeps a rounded end. The pill cap (22px on the 44px tray) is
-   larger than the ring's corner radius plus the offset between both arcs, so
-   the first, middle and last hover rings stay inside the painted tray instead
-   of poking past its corners, and the focus ring (2px outline + 2px offset)
-   still clears the cap — 2px at the sides, and 1.9–2.1px on the end corners'
-   diagonal (measured with the same 45° apex probe as the block below). */
-background:var(--chrome-tray);
-border-radius:var(--radius-pill);
-corner-shape:var(--window-control-cap-corner-shape)
+/* Windows' caption band is not a container: no padding, no tint, no radius and
+   no gap. The three hit areas tile edge to edge, the close button ends on the
+   window's own corner, and at rest the band paints nothing at all — hover is
+   the only thing that makes a button visible. */
+gap:0;
+padding:0;
+background:none;
+border-radius:0
 }
-/* Only the two end buttons meet the tray's pill cap, so only their outward
-   corners take that cap's curvature: the cap is a 22px arc, the buttons sit 6px
-   inside it, and 22 − 6 = 16px is the radius that makes the hover block
-   concentric with it (6px of tray all the way round, exactly like the straight
-   sides). The radius alone is not enough: the base .icon-button corner is a
-   13.76px squircle (superellipse(2)), and even at 16px it still bulges into the
-   gap, so the two outward corners take the cap's superellipse(1) while the
-   inward corners keep --corner-shape. Measured at the 45° apex as the 50%
-   coverage crossing of the rendered pixels (1024/1400/1920 at DPR 1 and 1.5):
-   5.2–6.0px of tray on all four end corners (5.6–5.9px at DPR 1.5, where the
-   pixel grid quantises the arc less), and the focus ring keeps 1.6–2.2px of
-   tray. With the squircle kept instead the same probe reads 1.8–2.7px. The
-   middle button and every other .icon-button keep the untouched squircle. */
 .window-controls .window-control
 {
-width:var(--window-control-size);
-height:var(--window-control-size)
-}
-.window-controls .window-control:nth-child(1)
-{
-border-top-left-radius:var(--window-control-outer-radius);
-border-bottom-left-radius:var(--window-control-outer-radius);
-corner-shape:var(--window-control-cap-corner-shape) var(--corner-shape) var(--corner-shape) var(--window-control-cap-corner-shape)
-}
-.window-controls .window-control:nth-child(3)
-{
-border-top-right-radius:var(--window-control-outer-radius);
-border-bottom-right-radius:var(--window-control-outer-radius);
-corner-shape:var(--corner-shape) var(--window-control-cap-corner-shape) var(--window-control-cap-corner-shape) var(--corner-shape)
+width:var(--window-control-width);
+height:var(--window-control-height);
+border-radius:0
 }
 /* `.icon-button:hover` lives in features/mail.css, imported after this file, so
-   this needs more weight than its (0,3,0) — hence the `.window-bar` ancestor. It
-   stays scoped there: the compose card's own close button is neutral grey,
-   because red means exactly one thing, closing the whole app. */
+   these need more weight than its (0,3,0) — hence the `.window-bar` ancestor.
+   They also drop the base button's border and press scale: a caption button is
+   a flat tile, not a chip that shrinks under the pointer. */
+.window-bar .window-control:hover:not(:disabled)
+{
+border-color:#0000;
+background:var(--hover);
+color:var(--text);
+transform:none
+}
+.window-bar .window-control:active:not(:disabled)
+{
+background:var(--hover);
+transform:none
+}
+/* Red means exactly one thing: closing the whole app. The hover fill is
+   Windows' #C42B1C with a white glyph, and the pressed state darkens it while
+   keeping the glyph white. Scoped to `.window-bar`, so the compose card's own
+   close button stays neutral grey. */
 .window-bar .window-control-close:hover:not(:disabled)
 {
-border-color:color-mix(in srgb, var(--danger) 30%, transparent);
-background:color-mix(in srgb, var(--danger) 13%, transparent);
-color:var(--danger)
+border-color:#0000;
+background:#c42b1c;
+color:#fff
 }
-/* The same one-thing rule for the keyboard: the ring keeps its global 2px/2px
-   geometry and only takes the danger colour on the window's close button. */
+.window-bar .window-control-close:active:not(:disabled)
+{
+background:#a32415;
+color:#fff
+}
+/* The band is flush with the window edge, so the global 2px ring at +2px would
+   be clipped by the frame on the top and right sides. A negative offset pulls
+   the ring inside the button box: it stays fully visible and keyboard-reachable
+   without widening the hit area or shifting the glyph. */
+.window-bar .window-control:focus-visible
+{
+outline-offset:-2px
+}
+/* The same one-thing rule for the keyboard: the ring only takes the danger
+   colour on the window's close button — and turns white while the red hover
+   surface is painted underneath it, where danger red would vanish. */
 .window-bar .window-control-close:focus-visible
 {
 outline-color:var(--danger)
+}
+.window-bar .window-control-close:hover:focus-visible
+{
+outline-color:#fff
 }
 .local-pill
 {

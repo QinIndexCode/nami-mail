@@ -41,7 +41,7 @@ export function WindowBar({ t, theme, onToggleTheme, platform, isDesktop }: Wind
 
   const handleBarDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     // Double-clicks on the actions (pill, controls) must not maximize.
-    if (event.target instanceof HTMLElement && event.target.closest(".window-actions")) return;
+    if (event.target instanceof HTMLElement && event.target.closest(".window-actions, .window-controls")) return;
     // macOS zoom is left to the native traffic-light region.
     if (platform === "darwin") return;
     bridge?.toggleMaximizeWindow?.();

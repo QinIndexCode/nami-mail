@@ -3,53 +3,42 @@ import { describe, expect, it } from "vitest";
 import { loadAggregatedCss } from "./testUtils/loadStyles";
 
 /**
- * Guard: the two end window controls must stay nested inside the tray's cap.
+ * Guard: the Windows caption band must stay a Windows caption band.
  *
- * The tray (`.desktop-app .window-controls`) is a 6px-padded pill. With 32px
- * buttons it is 44px tall, so `--radius-pill` resolves to a 22px semicircular
- * cap. A 32px hover block 6px inside that cap only keeps the straight sides'
- * 6px of tray if its outward arc is concentric with the cap — i.e. 22 − 6 = 16px,
- * which for this geometry is also exactly half the button height. Concentric
- * circles are not sufficient on their own: the buttons are squircles
- * (`superellipse(2)`), and a 16px squircle still bulges into the corner —
- * measured as little as ~1.8px of tray at the 45° apex instead of 6px. That is
- * why the two outward corners also reset to `superellipse(1)`, the curvature the
- * tray's own cap uses, while the inward corners keep the design system's
- * `--corner-shape`.
+ * The band is not a container. It is three 46x32 hit areas tiled edge to edge
+ * against the window's right edge: no gap, no padding, no tint, no radius, and
+ * the close button's right edge is the window's own right edge. Vertically the
+ * band is centred in the header row, so it shares the icon centre line of the
+ * buttons and search field to its left. The band width is derived from the hit
+ * area (`--window-control-width` x `--window-control-count`), and the header
+ * row's `margin-right` is that same token minus the 56px rail column, which is
+ * what keeps the header flush with the band's left edge instead of overlapping
+ * it or leaving a seam.
  *
- * The stylesheet expresses that relationship as a token chain on `.desktop-app`:
- * `--window-control-size` + `--window-control-tray-padding` → tray height →
- * cap radius → `--window-control-outer-radius` (= cap − padding). The tray and
- * the end buttons consume those tokens, so changing the padding or the button
- * size moves both the cap and the outward arc together. This file re-derives
- * the same chain from the stylesheet instead of hard-coding 16px, and it
- * requires the rules to reference the tokens (a copied literal fails even when
- * today's arithmetic happens to match). It catches:
- *   - the outward radius drifting off the concentric value when the tray
- *     padding, the pill cap or the button size changes underneath it;
- *   - a literal replacing the derived token, so the next dimension change
- *     silently leaves a gap at the apex;
- *   - the single-side cap curvature being dropped, applied to the wrong
- *     corners, or replaced by a four-corner shorthand;
- *   - the middle button (or any other `.window-control`) growing an override;
- *   - the inward corners no longer following `--corner-shape`.
+ * This file used to guard the retired tray: a 6px-padded pill with a 22px cap
+ * and two `superellipse(1)` outward corners derived as cap − padding. That
+ * geometry no longer exists, but the guard does — repointed at the invariants
+ * that replaced it, so a future edit cannot quietly bring the tray back or
+ * drift the band off the window corner. It catches:
+ *   - the hit area changing without the band width following (or a literal
+ *     replacing the derived `--window-chrome-right`);
+ *   - the bar or the group growing an inset, a tint, a radius or a gap;
+ *   - a button keeping the design system's squircle instead of a square tile;
+ *   - the close button losing its #C42B1C hover / darker pressed red, or the
+ *     fill spilling onto the other two buttons;
+ *   - the focus ring going back to a positive offset, where the window edge
+ *     clips it;
+ *   - any tray-era token or corner override coming back.
  *
- * It cannot see pixels: squircle rasterisation, antialiasing and the hover /
- * focus colours only exist in a real render. The 45°-apex measurement
- * (1.8–2.7px before, 5.2–6.0px after, across 1024/1400/1920 at DPR 1 and 1.5)
- * and the screenshots that settled these numbers were taken in Chromium; this
- * file keeps the geometry honest between those runs, it does not replace them.
+ * It cannot see pixels: rasterisation, hover colour blending and the focus ring
+ * against the actual header surface only exist in a real render, and those are
+ * verified by the screenshots and geometry measurements in `output/`.
  */
 
 interface Rule {
   selector: string;
   declarations: Map<string, string>;
 }
-
-type Corner = "top-left" | "top-right" | "bottom-right" | "bottom-left";
-
-/** `corner-shape` and `border-radius` share the CSS 1–4 value expansion order. */
-const CORNER_ORDER: readonly Corner[] = ["top-left", "top-right", "bottom-right", "bottom-left"];
 
 const stylesheet = loadAggregatedCss();
 
@@ -75,10 +64,8 @@ function requireRule(selector: string): Rule {
 }
 
 /**
- * Token lookup over the whole stylesheet, last definition wins. The squircle
- * scale is redefined inside `@supports (corner-shape:squircle)` further down,
- * and that later value is the one supporting engines (the ones that can render
- * these corners at all) actually use.
+ * Token lookup over the whole stylesheet, last definition wins. Used for the
+ * hit-area tokens, which are defined exactly once.
  */
 function token(name: string): string | undefined {
   const matches = [...stylesheet.matchAll(new RegExp(`^${name}:([^;\\n]+)`, "gm"))];
@@ -86,20 +73,27 @@ function token(name: string): string | undefined {
 }
 
 /**
+ * `--window-chrome-right` is published three times (browser 0, the desktop
+ * band, macOS 0), so the global lookup would return the macOS zero. Read it
+ * from the `.desktop-app` rule the band is actually published in.
+ */
+const desktopTokens = requireRule(".desktop-app").declarations;
+const bandWidth = desktopTokens.get("--window-chrome-right") ?? "";
+/** Makes `var(--window-chrome-right)` resolve to the desktop band, not macOS. */
+const bandOverrides = new Map([["--window-chrome-right", bandWidth]]);
+
+/**
  * Resolves a CSS length the way the stylesheet chains them: px literals,
  * unitless tokens, `var()`, and nested `calc()` / `min()` arithmetic.
- * The window-control geometry is a five-token calc chain, so a regex per form
- * would either drift or silently return NaN; this evaluates it and fails
- * closed (NaN) on anything it does not understand.
  */
 function lengthPx(value: string | undefined): number {
-  return evaluate(value ?? "", 0);
+  return evaluate(value ?? "", 0, bandOverrides);
 }
 
 /**
- * `overrides` substitutes token values during evaluation. The guard uses it to
- * re-run the token chain with a different button size and padding: if the
- * outward radius were a copied literal, it would stay put while the cap moved.
+ * `overrides` substitutes token values during evaluation, so the guard can
+ * re-run the derivation with a different hit area: if the band width were a
+ * copied literal, it would stay put while the hit area moved.
  */
 function evaluate(raw: string, depth: number, overrides: ReadonlyMap<string, string> = new Map()): number {
   if (depth > 24) return Number.NaN;
@@ -195,156 +189,146 @@ function lastTopLevelOperator(text: string, operators: readonly string[]): numbe
   return found;
 }
 
-function expandValues(value: string): string[] {
-  const parts = value.trim().split(/\s+/);
-  if (parts.length === 1) return [parts[0] as string, parts[0] as string, parts[0] as string, parts[0] as string];
-  if (parts.length === 2) return [parts[0] as string, parts[1] as string, parts[0] as string, parts[1] as string];
-  if (parts.length === 3) return [parts[0] as string, parts[1] as string, parts[2] as string, parts[1] as string];
-  return parts;
+/** RGB channels of a `#rgb` / `#rrggbb` literal, or NaN channels. */
+function hexChannels(value: string | undefined): [number, number, number] {
+  const match = /^#([0-9a-f]{6})$/i.exec((value ?? "").trim());
+  if (!match) return [Number.NaN, Number.NaN, Number.NaN];
+  const hex = match[1] as string;
+  return [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16)) as [number, number, number];
 }
 
-interface Corners {
-  radius: Record<Corner, string>;
-  shape: Record<Corner, string>;
-}
-
-function cornersOf(rule: Rule, base: Corners): Corners {
-  const radius = { ...base.radius };
-  const shape = { ...base.shape };
-  for (const corner of CORNER_ORDER) {
-    const longhand = rule.declarations.get(`border-${corner}-radius`);
-    if (longhand) radius[corner] = longhand;
-  }
-  const shapeValue = rule.declarations.get("corner-shape");
-  if (shapeValue) {
-    const values = expandValues(shapeValue);
-    CORNER_ORDER.forEach((corner, index) => {
-      shape[corner] = values[index] as string;
-    });
-  }
-  return { radius, shape };
-}
-
-const tray = requireRule(".desktop-app .window-controls");
-const button = requireRule(".icon-button");
+const bar = requireRule(".desktop-app .window-bar");
+const windowsBar = requireRule(".desktop-app:not([data-platform=darwin]) .window-bar");
+const group = requireRule(".desktop-app .window-controls");
 const control = requireRule(".window-controls .window-control");
 
-const trayPadding = lengthPx(tray.declarations.get("padding"));
-const pillRadius = lengthPx(tray.declarations.get("border-radius"));
-const controlSize = lengthPx(control.declarations.get("height"));
-/** The pill only ever reaches half the tray's height — the semicircular cap. */
-const trayHeight = controlSize + trayPadding * 2;
-const capRadius = Math.min(pillRadius, trayHeight / 2);
-/** What a concentric inner arc has to be, given the padding above. */
-const concentricRadius = capRadius - trayPadding;
-
-const baseCorners: Corners = {
-  radius: Object.fromEntries(CORNER_ORDER.map((corner) => [corner, button.declarations.get("border-radius") as string])) as Record<Corner, string>,
-  shape: Object.fromEntries(CORNER_ORDER.map((corner) => [corner, button.declarations.get("corner-shape") as string])) as Record<Corner, string>,
-};
-
-const minimize = cornersOf(requireRule(".window-controls .window-control:nth-child(1)"), baseCorners);
-const close = cornersOf(requireRule(".window-controls .window-control:nth-child(3)"), baseCorners);
-
-/** Every rule that targets one window-control button itself (not the tray). */
-const buttonRules = rules.filter((rule) => /(^|[\s,>])\.window-control(:[^\s,{]*)?$/.test(rule.selector));
-const overridingRules = buttonRules.filter((rule) =>
-  [...rule.declarations.keys()].some(
-    (property) => /^border-(top|bottom)-(left|right)-radius$/.test(property) || property === "corner-shape" || property === "border-radius",
-  ),
-);
-
-describe("window control tray corners", () => {
-  it("derives a cap that can host a concentric inner arc", () => {
-    expect(Number.isFinite(trayPadding), "the tray needs a uniform padding").toBe(true);
-    expect(Number.isFinite(controlSize), "the window control needs an explicit height").toBe(true);
-    expect(tray.declarations.get("padding"), "the tray must consume the shared inset token").toBe(
-      "var(--window-control-tray-padding)",
+describe("window control band", () => {
+  it("tiles three 46x32 hit areas into the band", () => {
+    expect(token("--window-control-width")).toBe("46px");
+    expect(token("--window-control-height")).toBe("32px");
+    expect(token("--window-control-count")).toBe("3");
+    expect(control.declarations.get("width"), "the control must consume the hit-area width token").toBe(
+      "var(--window-control-width)",
     );
-    expect(control.declarations.get("width"), "the control must consume the shared size token").toBe(
-      "var(--window-control-size)",
+    expect(control.declarations.get("height"), "the control must consume the hit-area height token").toBe(
+      "var(--window-control-height)",
     );
-    expect(control.declarations.get("height"), "the control must consume the shared size token").toBe(
-      "var(--window-control-size)",
+    expect(lengthPx(control.declarations.get("width"))).toBe(46);
+    expect(lengthPx(control.declarations.get("height"))).toBe(32);
+  });
+
+  it("derives the band width from the hit area instead of a literal", () => {
+    expect(bandWidth, "the band width must be the hit area times the button count").toBe(
+      "calc(var(--window-control-width) * var(--window-control-count))",
     );
+    expect(lengthPx(bandWidth), "3 x 46 today").toBe(138);
+
+    // Re-run with a 40px hit area: a copied 138 would not move.
+    const perturbed = new Map([["--window-control-width", "40px"]]);
+    expect(evaluate(bandWidth, 0, perturbed)).toBeCloseTo(120, 5);
+  });
+
+  it("hugs the window's right edge and shares the header's icon centre line", () => {
+    expect(bar.declarations.get("width"), "the bar must own exactly the band's footprint").toBe(
+      "var(--window-chrome-right)",
+    );
+    expect(bar.declarations.get("height"), "the band rides the header row's height").toBe("var(--window-chrome-top)");
+    expect(bar.declarations.get("justify-content"), "the band is right-aligned").toBe("flex-end");
     expect(
-      lengthPx(token("--window-control-tray-height")),
-      "the tray-height token must be size + 2 × padding",
-    ).toBeCloseTo(trayHeight, 5);
-    expect(capRadius, "the tray's end must be a semicircular cap, not a smaller radius").toBeCloseTo(trayHeight / 2, 5);
-    expect(lengthPx(token("--window-control-cap-radius")), "the cap token must agree with the resolved cap").toBeCloseTo(capRadius, 5);
-    expect(concentricRadius, "the padded button must still leave room inside the cap").toBeGreaterThan(0);
+      bar.declarations.get("align-items"),
+      "centered in the 66px row, so the tiles line up with the header icons on the left",
+    ).toBe("center");
+    expect(windowsBar.declarations.has("align-items"), "the Windows bar must not override the centre line").toBe(false);
+    expect(lengthPx(bar.declarations.get("padding-right") ?? "0"), "no trailing inset").toBe(0);
+    expect(windowsBar.declarations.get("padding-right"), "the Windows bar must not inset the band").toBe("0");
   });
 
-  it("ships exactly the derived radius, wired through the token", () => {
-    // 22 − 6 = 16 today; the rule references the token rather than copying the
-    // number, so changing the padding or the button height moves the arc too.
-    const outward = [
-      ["minimize", minimize.radius["top-left"]],
-      ["minimize", minimize.radius["bottom-left"]],
-      ["close", close.radius["top-right"]],
-      ["close", close.radius["bottom-right"]],
-    ] as const;
-    for (const [name, value] of outward) {
-      expect(value, `${name} must reference the derived radius token`).toBe("var(--window-control-outer-radius)");
-    }
-    expect(
-      lengthPx(token("--window-control-outer-radius")),
-      "the outward token must resolve to cap − padding",
-    ).toBeCloseTo(concentricRadius, 5);
-
-    // Re-run the chain with a larger button and a wider inset. A copied
-    // literal would not move; this asserts the relationship, not today's 16px.
-    const perturbed = new Map([
-      ["--window-control-size", "40px"],
-      ["--window-control-tray-padding", "10px"],
-    ]);
-    const perturbedCap = evaluate(token("--window-control-cap-radius") ?? "", 0, perturbed);
-    const perturbedOuter = evaluate(token("--window-control-outer-radius") ?? "", 0, perturbed);
-    expect(perturbedCap - 10, "the cap must track the perturbed tray height").toBeCloseTo(perturbedOuter, 5);
-    expect(perturbedOuter, "the outward radius must equal half the perturbed button").toBeCloseTo(20, 5);
+  it("draws no container and no gap between the buttons", () => {
+    expect(lengthPx(group.declarations.get("gap")), "the hit areas must touch").toBe(0);
+    expect(lengthPx(group.declarations.get("padding")), "the band has no inset").toBe(0);
+    expect(group.declarations.get("background"), "at rest the band paints nothing").toBe("none");
+    expect(lengthPx(group.declarations.get("border-radius")), "a container corner would read as a stray slab").toBe(0);
+    expect(group.declarations.has("corner-shape"), "no container, so no container curvature").toBe(false);
   });
 
-  it("keeps the inward corners on the design system's squircle", () => {
-    expect(token("--corner-shape"), "the design system's default corner shape").toBe("squircle");
-    const baseRadius = lengthPx(baseCorners.radius["top-left"]);
-    expect(baseRadius, "the base button radius must resolve to the squircle-compensated tier").toBeGreaterThan(0);
+  it("keeps every caption button a square tile", () => {
+    expect(lengthPx(control.declarations.get("border-radius")), "Windows caption buttons are square").toBe(0);
 
-    for (const corner of ["top-right", "bottom-right"] as const) {
-      expect(lengthPx(minimize.radius[corner]), `minimize/${corner} must stay at the base radius`).toBeCloseTo(baseRadius, 5);
-      expect(minimize.shape[corner], `minimize/${corner} must keep --corner-shape`).toBe("var(--corner-shape)");
-    }
-    for (const corner of ["top-left", "bottom-left"] as const) {
-      expect(lengthPx(close.radius[corner]), `close/${corner} must stay at the base radius`).toBeCloseTo(baseRadius, 5);
-      expect(close.shape[corner], `close/${corner} must keep --corner-shape`).toBe("var(--corner-shape)");
-    }
-    // The inward arc is visibly rounder than the outward one it faces; if these
-    // ever meet, the compensation has been undone.
-    expect(baseRadius).toBeLessThan(concentricRadius);
+    // No rule may put a per-corner radius or a corner-shape back on a control.
+    const overrides = rules
+      .filter((rule) => /(^|[\s,>])\.window-control(:[^\s,{]*)?$/.test(rule.selector))
+      .filter((rule) =>
+        [...rule.declarations.keys()].some(
+          (property) => /^border-(top|bottom)-(left|right)-radius$/.test(property) || property === "corner-shape",
+        ),
+      );
+    expect(overrides.map((rule) => rule.selector), "no control may override radius or corner shape").toEqual([]);
   });
 
-  it("gives the outward corners the tray's own curvature, on the outward side only", () => {
-    expect(token("--window-control-cap-corner-shape"), "the cap curvature token").toBe("superellipse(1)");
-    expect(tray.declarations.get("corner-shape"), "the tray must paint that same curvature").toBe(
-      "var(--window-control-cap-corner-shape)",
+  it("keeps the header row flush with the band's left edge", () => {
+    for (const selector of [".desktop-app .column-header", ".desktop-app .reader-toolbar", ".desktop-app .agent-workspace-header"]) {
+      const rule = requireRule(selector);
+      const margin = rule.declarations.get("margin-right");
+      expect(margin, `${selector} must derive its clearance from the band`).toBe(
+        "calc(var(--window-chrome-right) - 56px)",
+      );
+      // Header right edge = window right − 56px rail − margin = band's left edge.
+      expect(lengthPx(margin), `${selector} must land on the band's left edge`).toBe(82);
+    }
+  });
+
+  it("fills the close button with Windows red on hover and a darker red on press", () => {
+    const closeHover = requireRule(".window-bar .window-control-close:hover:not(:disabled)");
+    const closeActive = requireRule(".window-bar .window-control-close:active:not(:disabled)");
+    const neutralHover = requireRule(".window-bar .window-control:hover:not(:disabled)");
+
+    expect(closeHover.declarations.get("background")).toBe("#c42b1c");
+    expect(closeHover.declarations.get("color"), "the glyph must invert on the red fill").toBe("#fff");
+    expect(closeHover.declarations.get("border-color"), "no border box around the fill").toBe("#0000");
+    expect(closeActive.declarations.get("background")).toBe("#a32415");
+    expect(closeActive.declarations.get("color")).toBe("#fff");
+
+    const hover = hexChannels(closeHover.declarations.get("background"));
+    const active = hexChannels(closeActive.declarations.get("background"));
+    expect(active.every(Number.isFinite), "the pressed fill must be a hex literal").toBe(true);
+    expect(active[0] + active[1] + active[2], "pressed must be darker than hover").toBeLessThan(
+      hover[0] + hover[1] + hover[2],
     );
-    expect(minimize.shape["top-left"]).toBe("var(--window-control-cap-corner-shape)");
-    expect(minimize.shape["bottom-left"]).toBe("var(--window-control-cap-corner-shape)");
-    expect(close.shape["top-right"]).toBe("var(--window-control-cap-corner-shape)");
-    expect(close.shape["bottom-right"]).toBe("var(--window-control-cap-corner-shape)");
+
+    // The neutral pair stays neutral: red means one thing only.
+    expect(neutralHover.declarations.get("background")).toBe("var(--hover)");
+    expect(neutralHover.declarations.get("color")).toBe("var(--text)");
   });
 
-  it("leaves every other window control alone", () => {
-    expect(
-      overridingRules.map((rule) => rule.selector).sort(),
-      "only the first and last buttons may override radius or corner shape",
-    ).toEqual([".window-controls .window-control:nth-child(1)", ".window-controls .window-control:nth-child(3)"]);
+  it("keeps a pressed caption button at full size", () => {
+    const hover = requireRule(".window-bar .window-control:hover:not(:disabled)");
+    const active = requireRule(".window-bar .window-control:active:not(:disabled)");
+    expect(hover.declarations.get("transform"), "a hover must not shift the tile").toBe("none");
+    expect(active.declarations.get("transform"), "the base icon button shrinks to .88 under the pointer").toBe("none");
+  });
 
-    for (const rule of overridingRules) {
-      expect(
-        [...rule.declarations.keys()],
-        `${rule.selector} must change single corners, not the whole box`,
-      ).not.toContain("border-radius");
+  it("pulls the focus ring inside the button so the window edge cannot clip it", () => {
+    const focus = requireRule(".window-bar .window-control:focus-visible");
+    expect(focus.declarations.get("outline-offset"), "an inset ring is the whole point here").toBe("-2px");
+    expect(lengthPx(focus.declarations.get("outline-offset"))).toBeLessThan(0);
+
+    const closeFocus = requireRule(".window-bar .window-control-close:focus-visible");
+    expect(closeFocus.declarations.get("outline-color")).toBe("var(--danger)");
+    const closeHoverFocus = requireRule(".window-bar .window-control-close:hover:focus-visible");
+    expect(closeHoverFocus.declarations.get("outline-color"), "danger red would vanish on the red fill").toBe("#fff");
+  });
+
+  it("leaves no trace of the retired tray", () => {
+    for (const retired of [
+      "--window-control-size",
+      "--window-control-tray-padding",
+      "--window-control-tray-height",
+      "--window-control-cap-radius",
+      "--window-control-outer-radius",
+      "--window-control-cap-corner-shape",
+      "--chrome-tray",
+    ]) {
+      expect(token(retired), `${retired} belonged to the retired tray and must not come back`).toBeUndefined();
     }
   });
 });
