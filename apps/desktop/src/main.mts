@@ -1824,7 +1824,7 @@ async function boot(): Promise<void> {
                   }),
                 };
               })(),
-              // Caption band: 46x32 tiles flush right, centred on the header line.
+              // Caption band: full-height tiles flush right, rail-aligned width.
               columnRowCenter: searchWrap ? searchWrap.getBoundingClientRect().top + searchWrap.getBoundingClientRect().height / 2 : null,
               sidebarBrandCenter: (() => { const mark = document.querySelector(".brand-mark"); return mark ? mark.getBoundingClientRect().top + mark.getBoundingClientRect().height / 2 : null; })(),
               controls: controlsRect ? { top: controlsRect.top, left: controlsRect.left, right: controlsRect.right, width: controlsRect.width, height: controlsRect.height } : null,

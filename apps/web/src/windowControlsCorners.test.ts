@@ -5,15 +5,16 @@ import { loadAggregatedCss } from "./testUtils/loadStyles";
 /**
  * Guard: the Windows caption band must stay a Windows caption band.
  *
- * The band is not a container. It is three 46x32 hit areas tiled edge to edge
+ * The band is not a container. It is three hit areas tiled edge to edge
  * against the window's right edge: no gap, no padding, no tint, no radius, and
- * the close button's right edge is the window's own right edge. Vertically the
- * band is centred in the header row, so it shares the icon centre line of the
- * buttons and search field to its left. The band width is derived from the hit
- * area (`--window-control-width` x `--window-control-count`), and the header
- * row's `margin-right` is that same token minus the 56px rail column, which is
- * what keeps the header flush with the band's left edge instead of overlapping
- * it or leaving a seam.
+ * the close button's right edge is the window's own right edge. Each tile is
+ * as wide as the 56px rail column and as tall as the 66px header row, so the
+ * hover fill reaches the window's top edge and the rail's top edge, while the
+ * glyphs stay centred on the header icons' line. The band width is derived from
+ * the hit area (`--window-control-width` x `--window-control-count`), and the
+ * header row's `margin-right` is that same token minus the 56px rail column,
+ * which is what keeps the header flush with the band's left edge instead of
+ * overlapping it or leaving a seam.
  *
  * This file used to guard the retired tray: a 6px-padded pill with a 22px cap
  * and two `superellipse(1)` outward corners derived as cap − padding. That
@@ -79,8 +80,14 @@ function token(name: string): string | undefined {
  */
 const desktopTokens = requireRule(".desktop-app").declarations;
 const bandWidth = desktopTokens.get("--window-chrome-right") ?? "";
-/** Makes `var(--window-chrome-right)` resolve to the desktop band, not macOS. */
-const bandOverrides = new Map([["--window-chrome-right", bandWidth]]);
+/**
+ * Makes `var(--window-chrome-right)` / `var(--window-chrome-top)` resolve to
+ * the desktop band, not the macOS overrides that follow in the stylesheet.
+ */
+const bandOverrides = new Map([
+  ["--window-chrome-right", bandWidth],
+  ["--window-chrome-top", desktopTokens.get("--window-chrome-top") ?? ""],
+]);
 
 /**
  * Resolves a CSS length the way the stylesheet chains them: px literals,
@@ -203,27 +210,24 @@ const group = requireRule(".desktop-app .window-controls");
 const control = requireRule(".window-controls .window-control");
 
 describe("window control band", () => {
-  it("tiles three 46x32 hit areas into the band", () => {
-    expect(token("--window-control-width")).toBe("46px");
-    expect(token("--window-control-height")).toBe("32px");
+  it("tiles three rail-wide, full-height hit areas into the band", () => {
+    expect(token("--window-control-width")).toBe("56px");
     expect(token("--window-control-count")).toBe("3");
     expect(control.declarations.get("width"), "the control must consume the hit-area width token").toBe(
       "var(--window-control-width)",
     );
-    expect(control.declarations.get("height"), "the control must consume the hit-area height token").toBe(
-      "var(--window-control-height)",
-    );
-    expect(lengthPx(control.declarations.get("width"))).toBe(46);
-    expect(lengthPx(control.declarations.get("height"))).toBe(32);
+    expect(control.declarations.get("height"), "the tile must fill the header row").toBe("var(--window-chrome-top)");
+    expect(lengthPx(control.declarations.get("width"))).toBe(56);
+    expect(lengthPx(control.declarations.get("height"))).toBe(66);
   });
 
   it("derives the band width from the hit area instead of a literal", () => {
     expect(bandWidth, "the band width must be the hit area times the button count").toBe(
       "calc(var(--window-control-width) * var(--window-control-count))",
     );
-    expect(lengthPx(bandWidth), "3 x 46 today").toBe(138);
+    expect(lengthPx(bandWidth), "3 x 56 today").toBe(168);
 
-    // Re-run with a 40px hit area: a copied 138 would not move.
+    // Re-run with a 40px hit area: a copied 168 would not move.
     const perturbed = new Map([["--window-control-width", "40px"]]);
     expect(evaluate(bandWidth, 0, perturbed)).toBeCloseTo(120, 5);
   });
@@ -273,7 +277,7 @@ describe("window control band", () => {
         "calc(var(--window-chrome-right) - 56px)",
       );
       // Header right edge = window right − 56px rail − margin = band's left edge.
-      expect(lengthPx(margin), `${selector} must land on the band's left edge`).toBe(82);
+      expect(lengthPx(margin), `${selector} must land on the band's left edge`).toBe(112);
     }
   });
 
@@ -321,6 +325,7 @@ describe("window control band", () => {
   it("leaves no trace of the retired tray", () => {
     for (const retired of [
       "--window-control-size",
+      "--window-control-height",
       "--window-control-tray-padding",
       "--window-control-tray-height",
       "--window-control-cap-radius",

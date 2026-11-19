@@ -66,25 +66,27 @@ each tier must still reference a token.
 
 The window buttons at the top-right of Windows/Linux are not cards. They are the Windows-standard
 caption band: three hit areas against the window's right edge, adjacent with no gap, no container,
-and fully transparent at rest, vertically centred in the 66px header row so they share the icon
-centre line of the search field and buttons to their left (32px tall, so 17px from the window top).
+and fully transparent at rest. Each tile is 56px wide — the same as the 56px rail column — so the
+close glyph centres on `W − 28`, the rail icons' vertical line; each tile is as tall as the 66px
+header row, so its hover fill reaches the window's top edge and the rail's top edge, while
+`place-items:center` keeps the glyph on `y = 33`, the header icons' centre line.
 It deliberately does not use the radius tiers above:
 
 | contract | value | meaning |
 |---|---|---|
-| `--window-control-width` | `46px` | one hit area's width (Windows 11 at 100% scaling is 46×32) |
-| `--window-control-height` | `32px` | one hit area's height |
+| `--window-control-width` | `56px` | one hit area's width, equal to the rail column |
+| button height | `var(--window-chrome-top)`, i.e. `66px` | full-height tile, flush top and bottom |
 | `--window-control-count` | `3` | minimize / maximize (restore) / close |
-| `--window-chrome-right` | `calc(width × count)`, i.e. `138px` | the corner width the band owns, and the header's safe area |
-| `margin-right` | `calc(--window-chrome-right − 56px)`, i.e. `82px` | `.column-header` / `.reader-toolbar` / `.agent-workspace-header` subtract the 56px rail column so the header's right edge **coincides** with the band's left edge (zero overlap, zero seam) |
+| `--window-chrome-right` | `calc(width × count)`, i.e. `168px` | the corner width the band owns, and the header's safe area |
+| `margin-right` | `calc(--window-chrome-right − 56px)`, i.e. `112px` | `.column-header` / `.reader-toolbar` / `.agent-workspace-header` subtract the 56px rail column so the header's right edge **coincides** with the band's left edge (zero overlap, zero seam) |
 
 **Shape**: `.window-bar` has no trailing inset any more; the band ends on the window's right edge,
-so the close button's right edge is the window's right edge, and it keeps `align-items: center` so
-the tiles sit on the same centre line as the header icons. `.window-controls` carries no padding, no
-tint, no radius and no gap, every button is `border-radius: 0`, and the three 46×32 hit areas tile
-edge to edge. `--window-chrome-right` is derived from the hit area instead of restating 138, so the
-band and the header safe area move together with the hit area;
-`apps/web/src/windowControlsCorners.test.ts` re-runs the chain with a perturbed width.
+so the close button's right edge is the window's right edge, and the tiles fill the header row's
+height. `.window-controls` carries no padding, no tint, no radius and no gap, every button is
+`border-radius: 0`, and the three 56×66 hit areas tile edge to edge. `--window-chrome-right` is
+derived from the hit area instead of restating 168, so the band and the header safe area move
+together with the hit area; `apps/web/src/windowControlsCorners.test.ts` re-runs the chain with a
+perturbed width.
 
 **Colour**: transparent at rest; hover fills the whole tile with `--hover` and lifts the glyph to
 `--text`; the close button hovers to `#C42B1C` with a white glyph and presses darker at `#a32415`.

@@ -47,16 +47,16 @@ padding-left:calc(var(--window-chrome-left) + 20px)
    cluster keeps a constant relation to the expanding surface instead of
    reaching its safe inset in the first frame. Leaving full-bleed always
    animates — the cluster is still left of the window buttons while it is in
-   their band. Entering is only animated from 958px up: it starts at W/2 + 339
-   and the buttons begin at W - 138, so below that the path would cross them.
-   The sweep is clear from 955px; the threshold keeps the same 3px margin over
+   their band. Entering is only animated from 1018px up: it starts at W/2 + 339
+   and the buttons begin at W - 168, so below that the path would cross them.
+   The sweep is clear from 1015px; the threshold keeps the same 3px margin over
    that crossing point this rule has always carried, and the instant reflow is
    used instead. */
 .compose-card>.compose-header
 {
 transition:padding-right var(--compose-maximize-motion),padding-left var(--compose-maximize-motion)
 }
-@media (width<=957px)
+@media (width<=1017px)
 {
 .compose-card.is-maximized>.compose-header
 {

@@ -58,21 +58,23 @@
 ### 2.1 窗口控件带：直角命中区，贴右缘、与标题栏同一中线
 
 Windows/Linux 右上角的窗口按钮不是卡片，而是 Windows 标准的标题栏控件带：三个命中区贴住窗口右缘，
-彼此无缝、无容器、静止时完全透明，垂直方向在 66px 标题栏行内居中，与左侧搜索框和按钮共用同一条
-图标中线（32px 高 → 距窗口上缘 17px）。它刻意不使用上面的圆角档位：
+彼此无缝、无容器、静止时完全透明。命中区宽 56px，与右侧 56px 工具栏同宽，所以关闭键的图标中心
+落在 `W − 28`，与工具栏图标在同一条竖线上；命中区高等于 66px 的标题栏行，悬停底色上接窗口顶边、
+下接工具栏上缘，图标仍由 `place-items:center` 落在 `y = 33`，与左侧搜索框和按钮共用同一条图标中线。
+它刻意不使用上面的圆角档位：
 
 | 约定 | 值 | 说明 |
 |---|---|---|
-| `--window-control-width` | `46px` | 单个命中区宽度（Windows 11 在 100% 缩放下为 46×32） |
-| `--window-control-height` | `32px` | 单个命中区高度 |
+| `--window-control-width` | `56px` | 单个命中区宽度，等于右侧 rail 列宽 |
+| 按钮高度 | `var(--window-chrome-top)`，即 `66px` | 满高命中区，上下与标题栏接壤 |
 | `--window-control-count` | `3` | 最小化 / 最大化（还原）/ 关闭 |
-| `--window-chrome-right` | `calc(width × count)`，即 `138px` | 控件带占用的右上角宽度，同时是 header 的安全区 |
-| `margin-right` | `calc(--window-chrome-right − 56px)`，即 `82px` | `.column-header` / `.reader-toolbar` / `.agent-workspace-header` 用 56px 的 rail 轨道宽反推，使 header 右缘与控件带左缘**重合**（零重叠、零缝隙） |
+| `--window-chrome-right` | `calc(width × count)`，即 `168px` | 控件带占用的右上角宽度，同时是 header 的安全区 |
+| `margin-right` | `calc(--window-chrome-right − 56px)`，即 `112px` | `.column-header` / `.reader-toolbar` / `.agent-workspace-header` 用 56px 的 rail 轨道宽反推，使 header 右缘与控件带左缘**重合**（零重叠、零缝隙） |
 
 **形态**：`.window-bar` 不再有右侧内缩，控件带贴到窗口右缘结束，关闭按钮的右缘就是窗口右缘；
-垂直方向保持 `align-items: center`，与 header 图标同一条中线。
-`.window-controls` 没有 padding、底色、圆角与 gap，按钮 `border-radius: 0`，三个 46×32 命中区首尾相接。
-`--window-chrome-right` 由命中区推导而不是写死 138，命中区尺寸变化时控件带与 header 安全区一起跟随；
+三个命中区等高满铺标题栏行。
+`.window-controls` 没有 padding、底色、圆角与 gap，按钮 `border-radius: 0`，三个 56×66 命中区首尾相接。
+`--window-chrome-right` 由命中区推导而不是写死 168，命中区尺寸变化时控件带与 header 安全区一起跟随；
 `apps/web/src/windowControlsCorners.test.ts` 会用扰动后的宽度重算这条链。
 
 **配色**：静止透明；悬停时整块填 `--hover`、图标转 `--text`；关闭按钮悬停为 `#C42B1C` 红底白叉，
