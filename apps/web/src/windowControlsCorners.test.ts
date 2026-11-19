@@ -12,26 +12,33 @@ import { loadAggregatedCss } from "./testUtils/loadStyles";
  * which for this geometry is also exactly half the button height. Concentric
  * circles are not sufficient on their own: the buttons are squircles
  * (`superellipse(2)`), and a 16px squircle still bulges into the corner —
- * measured 2.75px of tray at the 45° apex instead of 6px. That is why the two
- * outward corners also reset to `superellipse(1)`, the curvature the tray's own
- * cap uses, while the inward corners keep the design system's `--corner-shape`.
+ * measured as little as ~1.8px of tray at the 45° apex instead of 6px. That is
+ * why the two outward corners also reset to `superellipse(1)`, the curvature the
+ * tray's own cap uses, while the inward corners keep the design system's
+ * `--corner-shape`.
  *
- * This is the static half of the guarantee, because the stylesheet is where the
- * regression would be introduced. It resolves the tokens and asserts the
- * *geometry* — which corners are special, by how much, and in which direction —
- * rather than looking for a literal. It catches:
+ * The stylesheet expresses that relationship as a token chain on `.desktop-app`:
+ * `--window-control-size` + `--window-control-tray-padding` → tray height →
+ * cap radius → `--window-control-outer-radius` (= cap − padding). The tray and
+ * the end buttons consume those tokens, so changing the padding or the button
+ * size moves both the cap and the outward arc together. This file re-derives
+ * the same chain from the stylesheet instead of hard-coding 16px, and it
+ * requires the rules to reference the tokens (a copied literal fails even when
+ * today's arithmetic happens to match). It catches:
  *   - the outward radius drifting off the concentric value when the tray
  *     padding, the pill cap or the button size changes underneath it;
- *   - the single-side `superellipse(1)` being dropped, applied to the wrong
+ *   - a literal replacing the derived token, so the next dimension change
+ *     silently leaves a gap at the apex;
+ *   - the single-side cap curvature being dropped, applied to the wrong
  *     corners, or replaced by a four-corner shorthand;
  *   - the middle button (or any other `.window-control`) growing an override;
  *   - the inward corners no longer following `--corner-shape`.
  *
  * It cannot see pixels: squircle rasterisation, antialiasing and the hover /
  * focus colours only exist in a real render. The 45°-apex measurement
- * (2.25–2.50px before, 6.00px after) and the 8x/12x screenshots that settled
- * these numbers were taken in Chromium; this file keeps the geometry honest
- * between those runs, it does not replace them.
+ * (1.8–2.7px before, 5.2–6.0px after, across 1024/1400/1920 at DPR 1 and 1.5)
+ * and the screenshots that settled these numbers were taken in Chromium; this
+ * file keeps the geometry honest between those runs, it does not replace them.
  */
 
 interface Rule {
@@ -78,25 +85,114 @@ function token(name: string): string | undefined {
   return matches.at(-1)?.[1]?.trim();
 }
 
-/** A unitless token (`--squircle-scale: 1.72`) or anything `lengthPx` can read. */
-function numberValue(value: string | undefined): number {
-  if (!value) return Number.NaN;
-  const text = value.trim();
-  if (/^-?\d+(?:\.\d+)?$/.test(text)) return Number.parseFloat(text);
-  return lengthPx(text);
+/**
+ * Resolves a CSS length the way the stylesheet chains them: px literals,
+ * unitless tokens, `var()`, and nested `calc()` / `min()` arithmetic.
+ * The window-control geometry is a five-token calc chain, so a regex per form
+ * would either drift or silently return NaN; this evaluates it and fails
+ * closed (NaN) on anything it does not understand.
+ */
+function lengthPx(value: string | undefined): number {
+  return evaluate(value ?? "", 0);
 }
 
-/** Resolves the length forms this stylesheet uses for radii, in px. */
-function lengthPx(value: string | undefined): number {
-  if (!value) return Number.NaN;
-  const text = value.trim();
-  const literal = /^(-?\d+(?:\.\d+)?)px$/.exec(text);
-  if (literal) return Number.parseFloat(literal[1] as string);
-  const scaled = /^calc\(\s*(-?\d+(?:\.\d+)?)px\s*\*\s*var\((--[\w-]+)\)\s*\)$/.exec(text);
-  if (scaled) return Number.parseFloat(scaled[1] as string) * numberValue(token(scaled[2] as string));
-  const reference = /^var\((--[\w-]+)\)$/.exec(text);
-  if (reference) return lengthPx(token(reference[1] as string));
+/**
+ * `overrides` substitutes token values during evaluation. The guard uses it to
+ * re-run the token chain with a different button size and padding: if the
+ * outward radius were a copied literal, it would stay put while the cap moved.
+ */
+function evaluate(raw: string, depth: number, overrides: ReadonlyMap<string, string> = new Map()): number {
+  if (depth > 24) return Number.NaN;
+  const text = raw.trim();
+  if (!text) return Number.NaN;
+
+  const calc = unwrapFunction(text, "calc");
+  if (calc !== undefined) return evaluate(calc, depth + 1, overrides);
+
+  const min = unwrapFunction(text, "min");
+  if (min !== undefined) {
+    const args = splitTopLevel(min, ",").map((argument) => evaluate(argument, depth + 1, overrides));
+    return args.every(Number.isFinite) ? Math.min(...args) : Number.NaN;
+  }
+
+  const reference = unwrapFunction(text, "var");
+  if (reference !== undefined) {
+    const name = splitTopLevel(reference, ",")[0]?.trim() ?? "";
+    return evaluate(overrides.get(name) ?? token(name) ?? "", depth + 1, overrides);
+  }
+
+  const px = /^(-?\d+(?:\.\d+)?)px$/.exec(text);
+  if (px) return Number.parseFloat(px[1] as string);
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) return Number.parseFloat(text);
+
+  // Additive binds looser than multiplicative; split at the last top-level
+  // operator so `a - b - c` evaluates as `(a - b) - c`.
+  for (const operators of [["+", "-"], ["*", "/"]] as const) {
+    const index = lastTopLevelOperator(text, operators);
+    if (index < 0) continue;
+    const left = evaluate(text.slice(0, index), depth + 1, overrides);
+    const right = evaluate(text.slice(index + 1), depth + 1, overrides);
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return Number.NaN;
+    switch (text[index]) {
+      case "+":
+        return left + right;
+      case "-":
+        return left - right;
+      case "*":
+        return left * right;
+      default:
+        return right === 0 ? Number.NaN : left / right;
+    }
+  }
   return Number.NaN;
+}
+
+/** Returns the inside of `name(...)` when it wraps the whole string. */
+function unwrapFunction(text: string, name: string): string | undefined {
+  if (!text.startsWith(`${name}(`) || !text.endsWith(")")) return undefined;
+  let depth = 0;
+  for (let index = name.length; index < text.length; index += 1) {
+    if (text[index] === "(") depth += 1;
+    else if (text[index] === ")") {
+      depth -= 1;
+      if (depth === 0 && index !== text.length - 1) return undefined;
+    }
+  }
+  return depth === 0 ? text.slice(name.length + 1, -1) : undefined;
+}
+
+function splitTopLevel(text: string, separator: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    else if (character === separator && depth === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+
+function lastTopLevelOperator(text: string, operators: readonly string[]): number {
+  let depth = 0;
+  let found = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] as string;
+    if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    else if (depth === 0 && operators.includes(character)) {
+      const previous = text.slice(0, index).trimEnd();
+      // A leading sign (`-6px`) or one after another operator is unary.
+      if (previous === "" || /[+\-*/,(]$/.test(previous)) continue;
+      found = index;
+    }
+  }
+  return found;
 }
 
 function expandValues(value: string): string[] {
@@ -131,12 +227,13 @@ function cornersOf(rule: Rule, base: Corners): Corners {
 
 const tray = requireRule(".desktop-app .window-controls");
 const button = requireRule(".icon-button");
+const control = requireRule(".window-controls .window-control");
 
 const trayPadding = lengthPx(tray.declarations.get("padding"));
 const pillRadius = lengthPx(tray.declarations.get("border-radius"));
-const buttonHeight = lengthPx(button.declarations.get("height"));
+const controlSize = lengthPx(control.declarations.get("height"));
 /** The pill only ever reaches half the tray's height — the semicircular cap. */
-const trayHeight = buttonHeight + trayPadding * 2;
+const trayHeight = controlSize + trayPadding * 2;
 const capRadius = Math.min(pillRadius, trayHeight / 2);
 /** What a concentric inner arc has to be, given the padding above. */
 const concentricRadius = capRadius - trayPadding;
@@ -160,18 +257,52 @@ const overridingRules = buttonRules.filter((rule) =>
 describe("window control tray corners", () => {
   it("derives a cap that can host a concentric inner arc", () => {
     expect(Number.isFinite(trayPadding), "the tray needs a uniform padding").toBe(true);
-    expect(Number.isFinite(buttonHeight), "the button needs an explicit height").toBe(true);
+    expect(Number.isFinite(controlSize), "the window control needs an explicit height").toBe(true);
+    expect(tray.declarations.get("padding"), "the tray must consume the shared inset token").toBe(
+      "var(--window-control-tray-padding)",
+    );
+    expect(control.declarations.get("width"), "the control must consume the shared size token").toBe(
+      "var(--window-control-size)",
+    );
+    expect(control.declarations.get("height"), "the control must consume the shared size token").toBe(
+      "var(--window-control-size)",
+    );
+    expect(
+      lengthPx(token("--window-control-tray-height")),
+      "the tray-height token must be size + 2 × padding",
+    ).toBeCloseTo(trayHeight, 5);
     expect(capRadius, "the tray's end must be a semicircular cap, not a smaller radius").toBeCloseTo(trayHeight / 2, 5);
+    expect(lengthPx(token("--window-control-cap-radius")), "the cap token must agree with the resolved cap").toBeCloseTo(capRadius, 5);
     expect(concentricRadius, "the padded button must still leave room inside the cap").toBeGreaterThan(0);
   });
 
-  it("ships exactly the radius that is concentric with that cap", () => {
-    // 22 − 6 = 16 today; derived, so changing the padding or the button height
-    // shows up here instead of silently leaving a 3px gap at the apex.
-    expect(lengthPx(minimize.radius["top-left"])).toBeCloseTo(concentricRadius, 5);
-    expect(lengthPx(minimize.radius["bottom-left"])).toBeCloseTo(concentricRadius, 5);
-    expect(lengthPx(close.radius["top-right"])).toBeCloseTo(concentricRadius, 5);
-    expect(lengthPx(close.radius["bottom-right"])).toBeCloseTo(concentricRadius, 5);
+  it("ships exactly the derived radius, wired through the token", () => {
+    // 22 − 6 = 16 today; the rule references the token rather than copying the
+    // number, so changing the padding or the button height moves the arc too.
+    const outward = [
+      ["minimize", minimize.radius["top-left"]],
+      ["minimize", minimize.radius["bottom-left"]],
+      ["close", close.radius["top-right"]],
+      ["close", close.radius["bottom-right"]],
+    ] as const;
+    for (const [name, value] of outward) {
+      expect(value, `${name} must reference the derived radius token`).toBe("var(--window-control-outer-radius)");
+    }
+    expect(
+      lengthPx(token("--window-control-outer-radius")),
+      "the outward token must resolve to cap − padding",
+    ).toBeCloseTo(concentricRadius, 5);
+
+    // Re-run the chain with a larger button and a wider inset. A copied
+    // literal would not move; this asserts the relationship, not today's 16px.
+    const perturbed = new Map([
+      ["--window-control-size", "40px"],
+      ["--window-control-tray-padding", "10px"],
+    ]);
+    const perturbedCap = evaluate(token("--window-control-cap-radius") ?? "", 0, perturbed);
+    const perturbedOuter = evaluate(token("--window-control-outer-radius") ?? "", 0, perturbed);
+    expect(perturbedCap - 10, "the cap must track the perturbed tray height").toBeCloseTo(perturbedOuter, 5);
+    expect(perturbedOuter, "the outward radius must equal half the perturbed button").toBeCloseTo(20, 5);
   });
 
   it("keeps the inward corners on the design system's squircle", () => {
@@ -193,10 +324,14 @@ describe("window control tray corners", () => {
   });
 
   it("gives the outward corners the tray's own curvature, on the outward side only", () => {
-    expect(minimize.shape["top-left"]).toBe("superellipse(1)");
-    expect(minimize.shape["bottom-left"]).toBe("superellipse(1)");
-    expect(close.shape["top-right"]).toBe("superellipse(1)");
-    expect(close.shape["bottom-right"]).toBe("superellipse(1)");
+    expect(token("--window-control-cap-corner-shape"), "the cap curvature token").toBe("superellipse(1)");
+    expect(tray.declarations.get("corner-shape"), "the tray must paint that same curvature").toBe(
+      "var(--window-control-cap-corner-shape)",
+    );
+    expect(minimize.shape["top-left"]).toBe("var(--window-control-cap-corner-shape)");
+    expect(minimize.shape["bottom-left"]).toBe("var(--window-control-cap-corner-shape)");
+    expect(close.shape["top-right"]).toBe("var(--window-control-cap-corner-shape)");
+    expect(close.shape["bottom-right"]).toBe("var(--window-control-cap-corner-shape)");
   });
 
   it("leaves every other window control alone", () => {
