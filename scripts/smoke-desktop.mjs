@@ -400,8 +400,8 @@ try {
   const windowWidth = renderer.desktopWindowBarLayout?.windowWidth;
   if (headerRight != null && windowWidth != null) {
     assert.ok(
-      Math.abs(headerRight - (windowWidth - 138)) < 1,
-      `The header row must stop 138px short of the window's right edge so the control band owns that corner (header right ${headerRight}px vs window ${windowWidth}px).`,
+      Math.abs(headerRight - (windowWidth - 168)) < 1,
+      `The header row must stop 168px short of the window's right edge so the control band owns that corner (header right ${headerRight}px vs window ${windowWidth}px).`,
     );
   }
   assert.ok(
@@ -427,8 +427,12 @@ try {
     const barHeight = controls.barHeight ?? 66;
     const centre = band.top + band.height / 2;
     assert.ok(
-      Math.abs(band.top - (barHeight - 32) / 2) < 1,
-      `The control band must be vertically centred in the ${barHeight}px header row (top ${band.top}px).`,
+      Math.abs(band.top) < 0.5,
+      `The control band must fill the header row from the window's top edge (top ${band.top}px).`,
+    );
+    assert.ok(
+      Math.abs(band.height - barHeight) < 0.5,
+      `The control band must be as tall as the ${barHeight}px header row (height ${band.height}px).`,
     );
     assert.ok(
       Math.abs(centre - (controls.columnRowCenter ?? -1)) < 1,
@@ -442,13 +446,12 @@ try {
       Math.abs(closeRight - (windowWidth ?? -1)) < 0.5,
       `The close button's right edge must be the window's right edge (close right ${closeRight}px vs window ${windowWidth}px).`,
     );
-    assert.equal(band.width, 138, "The band must be exactly three 46px hit areas wide.");
-    assert.equal(band.height, 32, "The band must be exactly one 32px hit area tall.");
+    assert.equal(band.width, 168, "The band must be exactly three rail-wide (56px) hit areas.");
     assert.equal(buttons.length, 3, "The Windows caption band must draw exactly three buttons.");
     for (const [index, button] of buttons.entries()) {
       assert.ok(
-        Math.abs(button.width - 46) < 0.5 && Math.abs(button.height - 32) < 0.5,
-        `Window control ${index + 1} must be a 46x32 hit area (got ${button.width}x${button.height}).`,
+        Math.abs(button.width - 56) < 0.5 && Math.abs(button.height - barHeight) < 0.5,
+        `Window control ${index + 1} must be a 56x${barHeight} hit area (got ${button.width}x${button.height}).`,
       );
       assert.equal(button.borderRadius, "0px", `Window control ${index + 1} must be square, not a rounded chip.`);
     }

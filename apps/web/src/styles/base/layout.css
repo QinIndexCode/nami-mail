@@ -205,19 +205,20 @@ display:grid;
    safe-area tokens every surface must keep clear of: the header row reserves it
    as a grid track, dialogs cap their height against it, and a surface that goes
    full-bleed insets its own controls by it. Defined once here, consumed through
-   the tokens instead of restating 138/66 at each call site. */
+   the tokens instead of restating 168/66 at each call site. */
 .desktop-app
 {
 --window-chrome-top:66px;
 /* Windows draws its caption buttons flush into the window's top-right corner:
-   three 46x32 hit areas, no gap, no container, no inset. The close button's
-   right edge therefore IS the window's right edge. The band width is derived
-   from the hit area rather than restating 3 x 46, and the header row keeps the
-   relationship it always had — its right edge lands exactly on the band's left
-   edge via margin-right (band − 56px rail). windowControlsCorners.test.ts
-   re-derives this chain from the stylesheet. */
---window-control-width:46px;
---window-control-height:32px;
+   three hit areas that fill the 66px header row top to bottom, no gap, no
+   container, no inset. The close button's right edge therefore IS the window's
+   right edge, and each tile is as wide as the 56px rail column so the close
+   glyph centres on the same vertical line as the rail icons below it. The band
+   width is derived from the hit area rather than restating 3 x 56, and the
+   header row keeps the relationship it always had — its right edge lands
+   exactly on the band's left edge via margin-right (band − 56px rail).
+   windowControlsCorners.test.ts re-derives this chain from the stylesheet. */
+--window-control-width:56px;
 --window-control-count:3;
 --window-chrome-right:calc(var(--window-control-width) * var(--window-control-count))
 }
@@ -261,9 +262,10 @@ pointer-events:auto;
    with no background, so the overlay blends into the header surface. The band
    is flush with the window's right edge with no trailing inset: the buttons
    tile the bar's full width and the close button ends on the window's own
-   corner. Vertically it keeps the base `align-items:center`, so the 46x32
-   tiles share the header row's icon centre line instead of sitting on the top
-   edge. macOS keeps its static 42px bar above (traffic lights row), untouched. */
+   corner. Each tile spans the row's full height and keeps its glyph on the
+   header's icon centre line, so the band reads as part of the bar rather than
+   a floating chip. macOS keeps its static 42px bar above (traffic lights row),
+   untouched. */
 .desktop-app:not([data-platform=darwin]) .window-bar
 {
 padding-right:0;
@@ -455,7 +457,10 @@ border-radius:0
 .window-controls .window-control
 {
 width:var(--window-control-width);
-height:var(--window-control-height);
+/* Full header height: the hover fill reaches the window's top edge and the
+   rail's top edge below, while the icon still centres on y=33 like the
+   header buttons to its left. */
+height:var(--window-chrome-top);
 border-radius:0
 }
 /* `.icon-button:hover` lives in features/mail.css, imported after this file, so
