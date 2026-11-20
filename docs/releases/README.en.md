@@ -4,6 +4,7 @@
 
 This directory contains reviewable, reusable GitHub Release bodies. Every release note should serve real users rather than copy build logs, CI output, or internal environment variables.
 
+- [v0.7.0](v0.7.0.en.md) brings remote-image blocking by default, encrypted application snapshots, Markdown compose, and end-to-end BCC to the release line (the database gate rises to v5 and cannot be downgraded to 0.6.0).
 - [v0.6.0](v0.6.0.en.md) is the milestone release of whole-database encryption, the unified task layer, and in-place attachment preview (not downgradeable; 0.5.1 users can update in-app).
 - [v0.5.1](v0.5.1.en.md) is the critical patch release resolving Windows in-app updater process detachment, working directory drift, and in-place upgrade arguments.
 - [v0.5.0](v0.5.0.en.md) is the milestone release covering full-stack local calendar, multimodal models, design system UI overhaul, and streaming hardening.
