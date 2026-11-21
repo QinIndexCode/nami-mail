@@ -1,5 +1,5 @@
 # Privacy and Local Data
-<!-- shipped-as: v0.6.0 -->
+<!-- shipped-as: v0.7.0 -->
 
 [简体中文](PRIVACY.zh-CN.md) | [English](PRIVACY.en.md)
 
@@ -34,7 +34,7 @@ For the Windows desktop app, Electron `safeStorage` protects the master key with
 
 As of 0.6.0 the database file itself is encrypted with SQLite3MultipleCiphers (ChaCha20-Poly1305 by default), opened with a `PRAGMA key` derived from the DPAPI-unsealed master key; the application-layer encryption above remains in place to bound how decrypted data flows. Whole-database encryption is not full-disk encryption and cannot defend against an administrator, a malicious process able to call DPAPI as the same Windows user, or an already unlocked and running app; without a recoverable backup the database content is unrecoverable if the master key is lost. Portable application backups include the password-protected data key; see [Backup and restore](BACKUP.en.md).
 
-This page describes the encryption boundary of the **v0.6.0 release**. 0.6.0 migrates the schema from v2 to v4 and enables the whole-database encryption described above: an existing plaintext database is upgraded on first launch by `ensureDatabaseEncrypted` through checkpoint → a copied `PRAGMA rekey` → verification → an atomic swap, with multiple recovery paths if interrupted (verified adoption, quarantine of an unreadable copy, clean restart while the main database is intact). **After upgrading you cannot roll back to 0.5.1 or earlier.**
+This page describes the encryption boundary of the **v0.7.0 release**. 0.6.0 migrated the schema from v2 to v4 and enabled the whole-database encryption described above: an existing plaintext database is upgraded on first launch by `ensureDatabaseEncrypted` through checkpoint → a copied `PRAGMA rekey` → verification → an atomic swap, with multiple recovery paths if interrupted (verified adoption, quarantine of an unreadable copy, clean restart while the main database is intact). 0.7.0 raises the schema gate to v5 (failed-item acknowledgement, recovery attempts, and the auto-reply work queue); **after upgrading and completing the first launch you cannot roll back to 0.6.0 or earlier.**
 
 ## Local and UI Protections
 

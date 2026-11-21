@@ -1,5 +1,5 @@
 # Nami Mail
-<!-- shipped-as: v0.6.0 -->
+<!-- shipped-as: v0.7.0 -->
 
 <p align="center">
   <a href="README.en.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
@@ -38,20 +38,20 @@ Nami Mail is a local-first, multi-account desktop mail client for Windows. It br
 
 > The password field is only for long-lived credentials required by the provider: Gmail and iCloud normally require an app password, QQ and NetEase require a client authorization code, and a self-hosted mailbox can require its mailbox password. Credentials are never sent to a service other than Nami Mail and the selected mail provider; they are used only for a direct provider connection. OAuth refresh tokens are also encrypted and stored locally only.
 
-<!-- whats-new: v0.6.0 -->
-## What's New in 0.6.0
+<!-- whats-new: v0.7.0 -->
+## What's New in 0.7.0
 
-0.6.0 is a milestone release: whole-database encryption, a unified task layer, and in-place attachment preview. **After upgrading to 0.6.0 and completing its first launch, you cannot roll back to an older version** (schema migration + encryption driver switch).
+0.7.0 hands you explicit control over your data and your line of sight: remote mail images are blocked by default, encrypted snapshots restore only after isolated validation, and Markdown compose ships with live preview. **This update raises the database gate to v5 — after the first launch you cannot roll back to 0.6.0 or older.**
 
-- **Encryption at rest**: the mail database and sensitive caches are encrypted on disk, with the master key protected by Windows DPAPI for the current user; a file copy no longer reveals mail content. The first launch converts the database automatically, with multiple recovery paths if interrupted.
-- **Unified task layer**: batch move, flag, archive, undo, send, and snooze become persistent tasks — effective on click and safe across restarts; old tasks stop writing to the wrong message after a provider mailbox rebuild.
-- **Send returns immediately**: clicking send responds instantly, delivery finishes in the background, and the Sent folder shows the message right away without duplicates.
-- **Attachment preview (13 kinds)**: PDF, images, audio/video, Markdown, Office, and archives read in place; remote images and avatars go through a same-origin proxy.
-- **External CLI / MCP that explains itself**: permission failures carry their own fix, and `namimail status` shows identity, tier, and expiry in one command.
+- **Data and privacy**: password-encrypted application snapshots export and restore on another machine, validated in isolation and activated only on a confirmed restart; unfinished remote work is paused meanwhile.
+- **Remote images blocked by default**: load them per message, trust a sender, or revoke at any time, and the server re-checks every authorization.
+- **Markdown compose with live preview**: GFM formatting, a formatting toolbar with shortcuts, and a live side-by-side split when maximized; messages compile to standard `multipart/alternative`.
+- **BCC carried separately end to end**: mailto, compose, drafts, Agent confirmation, and SMTP keep BCC intact; retries select only the rejected addresses.
+- **Failed tasks and auto-reply you can reconcile**: review and reapply failed items one by one, and a durable auto-reply queue that reports real delivery outcomes instead of "queued means sent".
 
-> **Already running 0.5.1?** You can update in-app — the first real automatic upgrade since the updater fix. The first launch runs the encryption conversion; give it a moment, and back up `%APPDATA%\Nami Mail` first if you want a safety net. **Still on 0.4.3 or 0.5.0?** Those builds cannot update in-app; install 0.5.1 or 0.6.0 manually first.
+> **Already running 0.6.0?** You can update in-app. **Still on 0.5.0 or older?** Those builds cannot update in-app; install 0.6.0 manually first. The first launch upgrades the database to v5, which 0.6.0 can no longer open — back up `%APPDATA%\Nami Mail` first if you want a safety net.
 
-See the [release notes](docs/releases/v0.6.0.en.md) and [changelog](CHANGELOG.en.md) for details.
+See the [release notes](docs/releases/v0.7.0.en.md) and [changelog](CHANGELOG.en.md) for details.
 
 ## Get Started
 
