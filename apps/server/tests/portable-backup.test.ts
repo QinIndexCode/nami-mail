@@ -51,7 +51,7 @@ describe("portable application backup", () => {
     expect(preview.counts).toMatchObject({ accounts: 1, messages: 1, contacts: 1, calendar_events: 1 });
     expect(fs.readFileSync(f.originalDatabasePath, "utf8")).toBe("existing data must remain");
     expect(resolveBackupStorage(f.originalDatabasePath, f.targetKey).databasePath).toBe(f.originalDatabasePath);
-    f.target.activate(preview.id);
+    await f.target.activate(preview.id);
     const restored = resolveBackupStorage(f.originalDatabasePath, f.targetKey);
     expect(restored.masterKey.equals(f.sourceKey)).toBe(true);
     const db = openBackupDatabase(restored.databasePath, restored.masterKey, false);
@@ -74,6 +74,54 @@ describe("portable application backup", () => {
       expect(resolveBackupStorage(f.originalDatabasePath, f.targetKey).databasePath).toBe(f.originalDatabasePath);
     }
     expect(fs.readdirSync(path.join(f.directory, "restored-data"))).toEqual([]);
+  });
+  it("serializes activation and discard so no startup pointer can outlive its directory", async () => {
+    const f = fixture();
+    const archive = await collect(f.source.export(password));
+
+    // Discard begins first and yields inside the directory removal; activation
+    // arrives while that removal is still in flight. Without the mutex the
+    // pointer is written in the gap and then its directory is deleted beneath
+    // it, so the next startup would refuse to open the application.
+    const first = await f.target.preview(Readable.from([archive]), password);
+    const [discardResult, activateResult] = await Promise.allSettled([
+      f.target.discard(first.id),
+      f.target.activate(first.id),
+    ]);
+    expect(discardResult.status).toBe("fulfilled");
+    expect(activateResult.status).toBe("rejected");
+    const afterDiscard = resolveBackupStorage(f.originalDatabasePath, f.targetKey);
+    expect(afterDiscard.databasePath).toBe(f.originalDatabasePath);
+    afterDiscard.masterKey.fill(0);
+
+    // The other order: activation wins, and discard must refuse rather than
+    // delete the directory the pointer just adopted.
+    const second = await f.target.preview(Readable.from([archive]), password);
+    const [activateFirst, discardSecond] = await Promise.allSettled([
+      f.target.activate(second.id),
+      f.target.discard(second.id),
+    ]);
+    expect(activateFirst.status).toBe("fulfilled");
+    expect(discardSecond.status).toBe("rejected");
+    const restored = resolveBackupStorage(f.originalDatabasePath, f.targetKey);
+    expect(restored.databasePath).toBe(path.join(f.directory, "restored-data", second.id, "database.sqlite"));
+    restored.masterKey.fill(0);
+  });
+  it("keeps the restore queue running after a rejected action", async () => {
+    const f = fixture();
+    const archive = await collect(f.source.export(password));
+    const active = await f.target.preview(Readable.from([archive]), password);
+    await f.target.activate(active.id);
+    const spare = await f.target.preview(Readable.from([archive]), password);
+
+    // Both are queued before either runs. The first is refused because its
+    // directory is the activated one; that rejection must not strand the action
+    // queued behind it.
+    const rejected = f.target.discard(active.id);
+    const proceeds = f.target.discard(spare.id);
+    await expect(rejected).rejects.toThrow(/activated restore cannot be discarded/u);
+    await expect(proceeds).resolves.toBeUndefined();
+    expect(fs.existsSync(path.join(f.directory, "restored-data", spare.id))).toBe(false);
   });
   it("rejects authenticated unsafe file paths and incomplete file declarations", async () => {
     const f = fixture();

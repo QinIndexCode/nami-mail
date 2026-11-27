@@ -10,7 +10,7 @@ import { createSnoozeRunner, type SnoozeRunnerDeps } from "./kinds/snooze.js";
 import { createUndoRunner, failPendingUndoItems } from "./kinds/undo.js";
 import { createTaskRegistry } from "./registry.js";
 import { startTaskScheduler } from "./scheduler.js";
-import { clearConfirmedFlagsMarkers, frozenFlagsMessageIds, revertRefusedFlagsTargets } from "./settlement.js";
+import { clearConfirmedFlagsMarkers, frozenFlagsMessageIds, latchUndeliveredFlagsItems, revertRefusedFlagsTargets } from "./settlement.js";
 import { openTaskPayload, reportTaskProgress, taskRow, terminalTaskRows } from "./store.js";
 import type { TaskHooks, TaskRegistry, TaskRow, TaskScheduler, TaskStarter } from "./types.js";
 
@@ -208,18 +208,15 @@ function runPermanentFailureObligations(db: DatabaseHandle, now: () => number, t
     return latched;
   }
   if (task.kind === "flags") {
-    // Read, not taken from the row the hook was handed: that row is the
-    // *claim-time* snapshot plus a terminal status (`scheduler.ts:107-118`),
-    // and `reportTaskProgress` is an unclamped `failed = failed + ?`, so a
-    // stale `updated` would be written into the ledger for good. The
-    // difference is unreachable today -- the flags runner's one report is
-    // followed immediately by its return, so no path both reports and gives
-    // up -- and this read is a guardrail rather than a fix (contract §10.10
-    // ④). `?? task` because a row that vanished under the hook is not a
-    // reason to skip the arithmetic.
-    const owed = unreportedUnits(taskRow(db, task.id) ?? task);
-    if (owed) reportTaskProgress(db, task.id, { failed: owed }, now());
-    return owed;
+    // A given-up attempt may have sent some idempotent STOREs without recording
+    // their outcomes. Settle the unaccounted work and its item marks together,
+    // computing the remainder from the persisted row for safe replay.
+    return db.transaction(() => {
+      const latchedItems = latchUndeliveredFlagsItems(db, task.id);
+      const owed = unreportedUnits(taskRow(db, task.id) ?? task);
+      if (owed) reportTaskProgress(db, task.id, { failed: owed }, now());
+      return owed + latchedItems;
+    })();
   }
   return 0;
 }

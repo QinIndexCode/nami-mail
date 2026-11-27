@@ -40,7 +40,25 @@ function verifyRestoredFiles(db: DatabaseHandle, key: Buffer, directory: string,
 }
 export class PortableBackupService {
   private busy = false;
+  /**
+   * Serializes the two operations that act on a restore directory after a preview:
+   * `activate` moves the startup pointer onto the directory and `discard` deletes
+   * it. Run them concurrently and the deletion can land between "the pointer still
+   * names the original database" and the pointer write, leaving a pointer at a
+   * directory that no longer exists -- which blocks the next startup, because
+   * `resolveBackupStorage` refuses to fall back silently.
+   *
+   * The chain is kept resolved on both outcomes so one rejected action cannot skip
+   * the next; each action's own outcome is still returned to its caller.
+   */
+  private restoreActions: Promise<unknown> = Promise.resolve();
   constructor(private readonly options: { db: DatabaseHandle; masterKey: Buffer; hostKey: Buffer; originalDatabasePath: string; backgroundDirectory: string; outboundDirectory: string }) {}
+
+  private serializeRestoreAction<T>(action: () => T | Promise<T>): Promise<T> {
+    const result = this.restoreActions.then(action);
+    this.restoreActions = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   async *export(password: string): AsyncGenerator<Buffer> {
     if (this.busy) throw new BackupError("Another backup operation is running.");
@@ -138,22 +156,26 @@ export class PortableBackupService {
     }
   }
 
-  activate(id: string): void {
-    const directory = restoreDirectory(this.options.originalDatabasePath, restoreIdSchema.parse(id));
-    const data = JSON.parse(decryptTextEnvelope(fs.readFileSync(path.join(directory, "preview.enc"), "utf8"), this.options.hostKey, `restore-preview:${id}`)) as { metadata: Metadata };
-    const metadata = metadataSchema.parse(data.metadata);
-    const key = Buffer.from(metadata.masterKey, "base64url");
-    try {
-      const db = openBackupDatabase(path.join(directory, "database.sqlite"), key); db.close();
-      activateBackupStorage(this.options.originalDatabasePath, this.options.hostKey, id, key);
-    } finally { key.fill(0); }
+  async activate(id: string): Promise<void> {
+    await this.serializeRestoreAction(() => {
+      const directory = restoreDirectory(this.options.originalDatabasePath, restoreIdSchema.parse(id));
+      const data = JSON.parse(decryptTextEnvelope(fs.readFileSync(path.join(directory, "preview.enc"), "utf8"), this.options.hostKey, `restore-preview:${id}`)) as { metadata: Metadata };
+      const metadata = metadataSchema.parse(data.metadata);
+      const key = Buffer.from(metadata.masterKey, "base64url");
+      try {
+        const db = openBackupDatabase(path.join(directory, "database.sqlite"), key); db.close();
+        activateBackupStorage(this.options.originalDatabasePath, this.options.hostKey, id, key);
+      } finally { key.fill(0); }
+    });
   }
   async discard(id: string): Promise<void> {
-    const directory = restoreDirectory(this.options.originalDatabasePath, id);
-    const active = resolveBackupStorage(this.options.originalDatabasePath, this.options.hostKey);
-    try {
-      if (path.dirname(active.databasePath) === directory) throw new BackupError("An activated restore cannot be discarded.");
-      await fsp.rm(directory, { recursive: true, force: true });
-    } finally { active.masterKey.fill(0); }
+    await this.serializeRestoreAction(async () => {
+      const directory = restoreDirectory(this.options.originalDatabasePath, id);
+      const active = resolveBackupStorage(this.options.originalDatabasePath, this.options.hostKey);
+      try {
+        if (path.dirname(active.databasePath) === directory) throw new BackupError("An activated restore cannot be discarded.");
+        await fsp.rm(directory, { recursive: true, force: true });
+      } finally { active.masterKey.fill(0); }
+    });
   }
 }

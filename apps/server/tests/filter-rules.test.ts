@@ -47,6 +47,10 @@ describe("filter rules", () => {
   const lock = { release: vi.fn() };
   const client = {
     usable: true,
+    // What the selected mailbox reports as its `UIDVALIDITY`. Left `undefined`
+    // everywhere else, which the generation guard reads as "this transport does
+    // not answer" rather than as a mismatch.
+    mailbox: undefined as { uidValidity?: bigint } | undefined,
     connect: vi.fn(async () => undefined),
     getMailboxLock: vi.fn(async () => lock),
     messageFlagsAdd: vi.fn(async () => undefined),
@@ -96,6 +100,7 @@ describe("filter rules", () => {
   beforeEach(() => {
     db = openDatabase(":memory:");
     vi.clearAllMocks();
+    client.mailbox = undefined;
     client.getMailboxLock.mockImplementation(async () => lock);
     client.messageMove.mockResolvedValue({ uidMap: new Map([[42, 100]]) });
     imapClientForAccount.mockReturnValue(client);
@@ -281,6 +286,52 @@ describe("filter rules", () => {
     const row = db.prepare("SELECT mailbox, uid FROM messages WHERE id = ?").get("message-1") as { mailbox: string; uid: number };
     expect(row.mailbox).toBe("[Gmail]/All Mail");
     expect(row.uid).toBe(100);
+  });
+
+  it("refuses a rule write when the cached UID belongs to a rebuilt mailbox", async () => {
+    insertMessage("message-1");
+    db.prepare("UPDATE folders SET uid_validity = '123' WHERE account_id = 'account-1' AND path = 'INBOX'").run();
+    // The provider rebuilt the folder: the same number now belongs to a different
+    // message, so flagging the cached UID would mark the wrong mail.
+    client.mailbox = { uidValidity: 456n };
+    createFilterRule(db, {
+      name: "Flag digest",
+      conditions: [{ kind: "from", value: "newsletter" }],
+      actions: [{ kind: "add_flag" }],
+    });
+
+    const result = await applyFilterRulesToNewMessages(db, masterKey, "account-1", [{ id: "message-1" }], undefined, undefined);
+
+    expect(result).toEqual({ matched: 0, failed: 1 });
+    expect(client.messageFlagsAdd).not.toHaveBeenCalled();
+    const row = db.prepare("SELECT flags_json, pending_flags_push FROM messages WHERE id = ?").get("message-1") as
+      { flags_json: string; pending_flags_push: number | null };
+    expect(JSON.parse(row.flags_json)).not.toContain("\\Flagged");
+    expect(row.pending_flags_push).toBeNull();
+  });
+
+  it("refuses a rule write when a sync advances the cache during connect", async () => {
+    insertMessage("message-1");
+    db.prepare("UPDATE folders SET uid_validity = '123' WHERE account_id = 'account-1' AND path = 'INBOX'").run();
+    // The patch snapshot was taken at generation 123. A sync then finishes while
+    // the command is connecting: it rewrites the cache to 456 and the provider
+    // reports 456 too. Judging by a fresh cache read would see 456 == 456 and
+    // STORE the UID the snapshot took under the old generation.
+    client.connect.mockImplementationOnce(async () => {
+      db.prepare("UPDATE folders SET uid_validity = '456' WHERE account_id = 'account-1' AND path = 'INBOX'").run();
+      client.mailbox = { uidValidity: 456n };
+      return undefined;
+    });
+    createFilterRule(db, {
+      name: "Flag digest",
+      conditions: [{ kind: "from", value: "newsletter" }],
+      actions: [{ kind: "add_flag" }],
+    });
+
+    const result = await applyFilterRulesToNewMessages(db, masterKey, "account-1", [{ id: "message-1" }], undefined, undefined);
+
+    expect(result).toEqual({ matched: 0, failed: 1 });
+    expect(client.messageFlagsAdd).not.toHaveBeenCalled();
   });
 
   it("reports a failed action without rejecting the batch", async () => {

@@ -32,7 +32,7 @@ import { prepareSubmission } from "../src/outbox.js";
 import { writePendingSentRow } from "../src/pending-sent.js";
 import { acceptFlagsTask } from "../src/tasks/kinds/flags.js";
 import { clearOrphanedFlagsMarkers } from "../src/tasks/settlement.js";
-import { openTaskPayload, recordTask, settleTask, taskRow } from "../src/tasks/store.js";
+import { openTaskPayload, recordTask, settleTask, taskItems, taskRow } from "../src/tasks/store.js";
 import type { TaskSpec } from "../src/tasks/types.js";
 import { createTaskHooks, replayTaskSettlementObligations } from "../src/tasks/wiring.js";
 
@@ -154,6 +154,30 @@ describe("task obligation replay", () => {
     expect(repaired).toBeGreaterThan(0);
     expect(flagState(db, "msg-1")).toMatchObject({ flags_json: baseline, pending_flags_push: 0, pending_flags_base_json: null });
     expect(taskRow(db, taskId)).toMatchObject({ total: 1, updated: 0, failed: 1 });
+  });
+
+  it("rolls back flags item outcomes when the permanent failure count cannot be written", () => {
+    const world = fixture(2);
+    db = world.db;
+    const taskId = acceptFlags(db, world.ids);
+    settleTask(db, taskId, "failed", { message: "provider refused" }, FIXED_NOW);
+    db.exec(`
+      CREATE TEMP TRIGGER refuse_failure_count BEFORE UPDATE OF failed ON tasks
+      BEGIN SELECT RAISE(ABORT, 'failure count write refused'); END
+    `);
+
+    const hooks = createTaskHooks({ db, now: () => FIXED_NOW });
+    const task = taskRow(db, taskId)!;
+    expect(() => hooks.onTaskPermanentFailure!(task, openTaskPayload(MASTER_KEY, task)))
+      .toThrow("failure count write refused");
+    expect(taskItems(db, taskId).map((item) => item.failed)).toEqual([0, 0]);
+    expect(taskRow(db, taskId)).toMatchObject({ status: "failed", failed: 0 });
+
+    db.exec("DROP TRIGGER refuse_failure_count");
+    replay(db);
+    expect(taskItems(db, taskId).map((item) => item.failed)).toEqual([1, 1]);
+    expect(taskRow(db, taskId)).toMatchObject({ status: "failed", failed: 2 });
+    expect(replay(db)).toBe(0);
   });
 
   it("must run before the orphan-marker sweep: after it, the sweep finds nothing to undo", () => {

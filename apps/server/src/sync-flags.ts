@@ -21,6 +21,7 @@ export type { MessageFlagsPatch };
 import { messageAccountId, type PendingPushRow } from "./message-queries.js";
 import { withAccountWriteLocks } from "./sync-locks.js";
 import { accountById } from "./account-store.js";
+import { refuseRebuiltMailbox } from "./mailbox-generation.js";
 
 
 export async function updateMessageFlags(
@@ -62,6 +63,13 @@ export async function updateMessageFlags(
       await client.connect();
       const lock = await client.getMailboxLock(message.mailbox);
       try {
+        // Judge the write by the generation captured in the same statement as the
+        // message row, not by a fresh cache read. Sync does not take the account
+        // write slot, so it can advance `folders` during `connect()` or the
+        // mailbox select; reading the cache here would then agree with the
+        // provider about the new generation while `message.uid` still came from
+        // the old one.
+        refuseRebuiltMailbox(db, message.account_id, message.mailbox, client, message.snapshot_generation);
         if (add.length) {
           const added = await client.messageFlagsAdd(message.uid, add, { uid: true });
           if (added === false) throw new Error("邮件服务器未确认状态更新，请稍后重试。");
@@ -97,14 +105,23 @@ export async function updateMessageFlags(
   });
 }
 
-/** Columns a flag patch needs, in both the single and the batch path. */
+/** Columns a flag patch needs, in both the single and the batch path.
+ *
+ * The folder join freezes the generation the UID belonged to in the same
+ * statement as the row. A later cache read is not equivalent: sync can rewrite
+ * `folders` while the command is connecting, and then both sides would describe
+ * the new generation while `uid` still came from the old one. */
 const FLAG_PATCH_ROW_SQL =
-  "SELECT id, account_id, mailbox, uid, flags_json, remote_id_lookup, pending_move_destination, pending_move_state FROM messages";
+  `SELECT m.id, m.account_id, m.mailbox, m.uid, m.flags_json, m.remote_id_lookup,
+          m.pending_move_destination, m.pending_move_state,
+          f.uid_validity AS snapshot_generation
+     FROM messages m
+     LEFT JOIN folders f ON f.account_id = m.account_id AND f.path = m.mailbox`;
 
 /** One message's next flags, derived from a snapshot read while the account
  * write slot was held. */
 type PreparedFlagMessage = {
-  message: PendingPushRow & { id: string };
+  message: PendingPushRow & { id: string; snapshot_generation: string | null };
   nextFlags: string[];
   add: string[];
   remove: string[];
@@ -136,8 +153,8 @@ type FlagPatchPlan = {
 function planFlagPatch(db: DatabaseHandle, messageIds: readonly string[], patch: MessageFlagsPatch): FlagPatchPlan {
   const placeholders = messageIds.map(() => "?").join(", ");
   const rows = db
-    .prepare(`${FLAG_PATCH_ROW_SQL} WHERE id IN (${placeholders})`)
-    .all(...messageIds) as Array<{ id: string } & PendingPushRow>;
+    .prepare(`${FLAG_PATCH_ROW_SQL} WHERE m.id IN (${placeholders})`)
+    .all(...messageIds) as Array<{ id: string; snapshot_generation: string | null } & PendingPushRow>;
   const messages: PreparedFlagMessage[] = [];
   const blocked = new Map<string, string>();
   for (const message of rows) {

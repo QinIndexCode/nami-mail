@@ -335,8 +335,14 @@ export type TaskRunner<P = unknown> = (args: {
    * These are the one place increments are correct: the row's own runner is its
    * only writer, so there is nobody to race. Derived quantities elsewhere in the
    * system are still never nudged (see the contract's I3).
+   *
+   * `settleItems` is the per-item half of the same outcome (a flags slice's
+   * delivered/dropped rows). It runs synchronously inside the scheduler's
+   * liveness check, immediately before the counters, so an attempt the scheduler
+   * already abandoned cannot write item rows that its dropped counters no longer
+   * describe -- and a late attempt cannot erase the retry's item outcomes.
    */
-  report: (delta: { updated?: number; failed?: number }) => void;
+  report: (delta: { updated?: number; failed?: number }, settleItems?: () => void) => void;
   /**
    * Aborted when the scheduler stops waiting for this attempt -- it exceeded
    * `TASK_RUN_TIMEOUT_MS`, or the process is shutting down.

@@ -42,8 +42,10 @@ import {
 } from "../src/tasks/kinds/flags.js";
 import { jobSnapshot } from "../src/tasks/jobs.js";
 import { createTaskRegistry } from "../src/tasks/registry.js";
-import { startTaskScheduler } from "../src/tasks/scheduler.js";
+import { TASK_RUN_TIMEOUT_MS, startTaskScheduler } from "../src/tasks/scheduler.js";
+import { createTaskHooks } from "../src/tasks/wiring.js";
 import { openTaskPayload, recordTask, reportTaskProgress, taskItems, taskRow } from "../src/tasks/store.js";
+import { retryTaskItems, taskRecoveryDetails } from "../src/tasks/recovery.js";
 import { sealPayload } from "../src/tasks/envelope.js";
 import type { TaskRow, TaskSpec } from "../src/tasks/types.js";
 
@@ -121,7 +123,7 @@ const client = {
   // "this transport does not answer" rather than as a mismatch.
   mailbox: undefined as { uidValidity?: bigint } | undefined,
   connect,
-  getMailboxLock: vi.fn(async () => lock),
+  getMailboxLock: vi.fn(async (_mailbox: string) => lock),
   messageFlagsAdd,
   messageFlagsRemove,
   logout,
@@ -278,6 +280,30 @@ async function drain(db: DatabaseHandle, taskId: string): Promise<Array<{ id: st
   return settled;
 }
 
+/**
+ * Like `drain`, but with the production settlement hooks: the flags half is what
+ * latches a given-up slice's items, and that is the state the late-attempt test
+ * must try (and fail) to overwrite.
+ */
+async function drainWithSettlementObligations(db: DatabaseHandle, taskId: string): Promise<void> {
+  const registry = createTaskRegistry();
+  const delegate: { start: (id: string) => void } = { start: () => undefined };
+  registry.register("flags", createFlagsRunner({ db, masterKey: MASTER_KEY, scheduler: delegate }));
+  const scheduler = startTaskScheduler({
+    db,
+    masterKey: MASTER_KEY,
+    registry,
+    hooks: createTaskHooks({ db }),
+    dueTickMs: 60_000,
+    retryBaseMs: 1,
+    retryMaxMs: 1,
+  });
+  delegate.start = (id) => scheduler.start(id);
+  scheduler.start(taskId);
+  await scheduler.drain();
+  await scheduler.stop();
+}
+
 let db: DatabaseHandle;
 
 beforeEach(() => {
@@ -286,6 +312,8 @@ beforeEach(() => {
   removeCalls = [];
   providerAnswer = "confirm";
   client.mailbox = undefined;
+  logout.mockImplementation(async () => undefined);
+  client.getMailboxLock.mockImplementation(async () => lock);
   imapClientForAccount.mockImplementation(async () => client);
 });
 
@@ -674,6 +702,109 @@ describe("task flags runner: what a failed push leaves where the user can read i
       error_code: null,
       error_message: "邮件服务器未确认状态更新，请稍后重试。",
     });
+  });
+});
+
+describe("task flags runner: per-item outcomes for recovery", () => {
+  it("latches only the refused entries so recovery re-addresses exactly those", async () => {
+    const world = fixture(1);
+    db = world.db;
+    db.prepare("INSERT INTO folders (account_id, path, name, special_use, uid_validity) VALUES (?, ?, ?, ?, ?)")
+      .run(ACCOUNT, "Archive", "Archive", "\\Archive", "123");
+    insertMessage(db, "msg-2", 5, []);
+    db.prepare("UPDATE messages SET mailbox = 'Archive', remote_id_lookup = 'stable-msg-2' WHERE id = 'msg-2'").run();
+
+    // INBOX kept generation 10; Archive was rebuilt (cache 123, provider 456).
+    const taskId = recordTask(db, MASTER_KEY, {
+      accountId: ACCOUNT,
+      kind: "flags",
+      total: 2,
+      items: [
+        { messageId: "msg-1", changed: true },
+        { messageId: "msg-2", changed: true },
+      ],
+      payload: {
+        accountId: ACCOUNT,
+        entries: [
+          { id: "msg-1", mailbox: MAILBOX, uid: 1, uidValidity: "10", add: [SEEN], remove: [] },
+          { id: "msg-2", mailbox: "Archive", uid: 5, uidValidity: "123", add: [SEEN], remove: [] },
+        ],
+      } satisfies FrozenFlagsPayload,
+    });
+    db.prepare("UPDATE folders SET uid_validity = '10' WHERE account_id = ? AND path = ?").run(ACCOUNT, MAILBOX);
+    client.getMailboxLock.mockImplementation(async (mailbox: string) => {
+      client.mailbox = { uidValidity: mailbox === MAILBOX ? 10n : 456n };
+      return lock;
+    });
+
+    await drain(db, taskId);
+
+    // One delivered, one refused: the totals alone cannot say which.
+    expect(taskRow(db, taskId)).toMatchObject({ status: "completed", total: 2, updated: 1, failed: 1 });
+    expect(addCalls).toEqual([[1]]);
+    expect(taskItems(db, taskId).map((item) => [item.message_id, item.failed])).toEqual([
+      ["msg-1", 0],
+      ["msg-2", 1],
+    ]);
+
+    const details = taskRecoveryDetails(db, MASTER_KEY, taskId)!;
+    const byId = new Map(details.items.map((item) => [item.id, item]));
+    expect(byId.get("msg-1")).toMatchObject({ eligible: false, reason: "applied" });
+    // The stable provider id is not position evidence: the refused message kept
+    // its folder, UID and generation, so it must stay retryable.
+    expect(byId.get("msg-2")).toMatchObject({ eligible: true, reason: "ready" });
+
+    const result = retryTaskItems(
+      { db, masterKey: MASTER_KEY, scheduler: { start: () => undefined } },
+      taskId,
+      ["msg-1", "msg-2"],
+    );
+    expect(result).toMatchObject({ retried: 1, skipped: 1 });
+    expect(result.taskIds).toHaveLength(1);
+  });
+
+  it("does not let a timed-out attempt overwrite the retry's per-item outcomes", async () => {
+    vi.useFakeTimers();
+    try {
+      const world = fixture(1);
+      db = world.db;
+      const taskId = recordTask(db, MASTER_KEY, {
+        accountId: ACCOUNT,
+        kind: "flags",
+        total: 1,
+        maxAttempts: 2,
+        items: [{ messageId: "msg-1", changed: true }],
+        payload: {
+          accountId: ACCOUNT,
+          entries: [{ id: "msg-1", mailbox: MAILBOX, uid: 1, uidValidity: null, add: [SEEN], remove: [] }],
+        } satisfies FrozenFlagsPayload,
+      });
+      let releaseFirst!: () => void;
+      // Attempt one stores, then hangs in logout. Attempt two fails, so the
+      // settlement hooks latch the slice as failed before attempt one returns.
+      logout.mockImplementationOnce(() => new Promise<undefined>((resolve) => { releaseFirst = () => resolve(undefined); }));
+      messageFlagsAdd
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(Object.assign(new Error("socket closed"), { code: "ECONNRESET" }));
+
+      const pending = drainWithSettlementObligations(db, taskId);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(TASK_RUN_TIMEOUT_MS + 10);
+      await pending;
+
+      expect(taskRow(db, taskId)).toMatchObject({ status: "failed", attempt_count: 2, failed: 1 });
+      expect(taskItems(db, taskId).map((item) => item.failed)).toEqual([1]);
+
+      // The abandoned attempt now leaves logout and tries to report "delivered".
+      // Its counters are fenced by the scheduler; its per-item write must be
+      // fenced with them, not land on its own.
+      releaseFirst();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(taskRow(db, taskId)).toMatchObject({ status: "failed", failed: 1 });
+      expect(taskItems(db, taskId).map((item) => item.failed)).toEqual([1]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

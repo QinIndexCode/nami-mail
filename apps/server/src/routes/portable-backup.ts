@@ -31,7 +31,7 @@ export function registerPortableBackupRoutes(app: FastifyInstance, context: Runt
     const parsed = restoreIdSchema.safeParse(request.params.id);
     const confirmed = z.object({ confirm: z.literal(true) }).strict().safeParse(request.body);
     if (!parsed.success || !confirmed.success) return reply.code(400).send({ ok: false, code: ROUTE_ERROR_CODES.invalid_argument, message: "Confirm a validated restore preview." });
-    try { context.portableBackup.activate(parsed.data); return { ok: true, restartRequired: true }; }
+    try { await context.portableBackup.activate(parsed.data); return { ok: true, restartRequired: true }; }
     catch { return reply.code(409).send({ ok: false, code: ROUTE_ERROR_CODES.conflict, message: "The restore preview is unavailable. Upload and verify the backup again." }); }
   });
   app.delete<{ Params: { id: string } }>("/api/app-backups/:id", async (request, reply) => {

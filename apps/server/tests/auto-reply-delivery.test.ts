@@ -78,6 +78,103 @@ describe("durable auto-reply processing and delivery", () => {
     expect(world.decision(world.ids[1])).toBe("ignored");
   });
 
+  it("counts an already sent reply from a build that did not track submissions", async () => {
+    const world = fixture(2);
+    updateAppSettings(world.db, { autoReply: { dailyLimitPerAccount: 1 } });
+    const now = new Date().toISOString();
+    world.db.prepare(`
+      INSERT INTO auto_reply_processed (message_id, account_id, decision, thread_key, occurred_at, updated_at)
+      VALUES (?, 'account', 'sent', 'previous-thread', ?, ?)
+    `).run(world.ids[0]!, now, now);
+
+    await world.engine.notifyInboxMessages("account", [world.ids[1]!]);
+
+    expect(world.decision(world.ids[1]!)).toBe("ignored");
+    expect(world.started).toHaveLength(0);
+  });
+
+  it("does not let an unresolved delivery from an earlier day consume today's quota", async () => {
+    const world = fixture(2);
+    updateAppSettings(world.db, { autoReply: { dailyLimitPerAccount: 1 } });
+    const { submission } = prepareSubmission(world.db, world.key, {
+      accountId: "account",
+      accountEmail: "me@example.test",
+      request: { to: ["ada@example.test"], subject: "Old reply", text: "Old reply", attachmentTokens: [] },
+    });
+    markSubmissionUnknownDelivery(world.db, world.key, submission.id, "connection_failed", "Synthetic interruption");
+    const twentyDaysAgo = new Date(Date.now() - 20 * 86_400_000).toISOString();
+    trackAutoReplyDelivery(world.db, {
+      messageId: world.ids[0]!,
+      accountId: "account",
+      threadKey: "old-thread",
+      submissionId: submission.id,
+      requestId: "old-request",
+      confirmationId: "old-confirmation",
+    }, twentyDaysAgo);
+
+    await world.engine.notifyInboxMessages("account", [world.ids[1]!]);
+
+    // The old thread stays reserved for duplicate prevention, but it must not
+    // spend the new day's only slot.
+    expect(world.decision(world.ids[0]!)).toBe("pending");
+    expect(world.decision(world.ids[1]!)).toBe("pending");
+    expect(world.started).toHaveLength(1);
+  });
+
+  it("keeps a cross-day reply that can still be sent in today's budget", async () => {
+    const world = fixture(2);
+    updateAppSettings(world.db, { autoReply: { dailyLimitPerAccount: 1 } });
+    const { submission } = prepareSubmission(world.db, world.key, {
+      accountId: "account",
+      accountEmail: "me@example.test",
+      request: { to: ["ada@example.test"], subject: "Yesterday reply", text: "Yesterday reply", attachmentTokens: [] },
+    });
+    // Still `pending`: the recovery loop will submit it today, so it must keep
+    // holding a slot instead of being released just because it was tracked
+    // yesterday.
+    trackAutoReplyDelivery(world.db, {
+      messageId: world.ids[0]!,
+      accountId: "account",
+      threadKey: "old-thread",
+      submissionId: submission.id,
+      requestId: "old-request",
+      confirmationId: "old-confirmation",
+    }, new Date(Date.now() - 86_400_000).toISOString());
+
+    await world.engine.notifyInboxMessages("account", [world.ids[1]!]);
+
+    expect(world.decision(world.ids[1]!)).toBe("ignored");
+    expect(world.started).toHaveLength(0);
+  });
+
+  it("counts sendable cross-day replies so a backlog cannot exceed the daily cap", async () => {
+    const world = fixture(4);
+    updateAppSettings(world.db, { autoReply: { dailyLimitPerAccount: 3 } });
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+    for (const [index, id] of world.ids.slice(0, 2).entries()) {
+      const { submission } = prepareSubmission(world.db, world.key, {
+        accountId: "account",
+        accountEmail: "me@example.test",
+        request: { to: ["ada@example.test"], subject: `Backlog ${index}`, text: `Backlog ${index}`, attachmentTokens: [] },
+      });
+      trackAutoReplyDelivery(world.db, {
+        messageId: id,
+        accountId: "account",
+        threadKey: `old-thread-${index}`,
+        submissionId: submission.id,
+        requestId: `old-request-${index}`,
+        confirmationId: `old-confirmation-${index}`,
+      }, yesterday);
+    }
+
+    await world.engine.notifyInboxMessages("account", world.ids.slice(2));
+
+    // Cap 3, two still-sendable cross-day replies, so only one new reply fits.
+    expect(world.started).toHaveLength(1);
+    expect(world.decision(world.ids[2]!)).toBe("pending");
+    expect(world.decision(world.ids[3]!)).toBe("ignored");
+  });
+
   it("preserves unknown delivery across restart and emits success once only after confirmation", async () => {
     const world = fixture();
     await world.engine.notifyInboxMessages("account", world.ids);

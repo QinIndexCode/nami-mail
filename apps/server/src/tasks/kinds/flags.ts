@@ -14,6 +14,7 @@ import type { ServerEventBus } from "../../events.js";
 import { kickAccountSync } from "../kick-sync.js";
 import { memberTaskId } from "../job-ids.js";
 import { TaskAbortError } from "../scheduler.js";
+import { recordFlagsPushOutcomes } from "../settlement.js";
 import { commitTask, type CommitTaskDeps, type TaskHandle } from "../store.js";
 import type { TaskRunner } from "../types.js";
 
@@ -376,8 +377,14 @@ export function createFlagsRunner(deps: FlagsTaskDeps): TaskRunner<FlagsTaskPayl
       try {
         // The signal goes to the push so a timeout closes the socket instead of
         // leaving the STORE running under a released account slot.
-        const { pushed, dropped, generationChanged } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries }, signal);
-        report({ updated: pushed, failed: dropped });
+        const { pushed, dropped, generationChanged, droppedIds } = await pushFlagsRemote(flagsPushDeps(deps), { accountId: task.account_id, entries }, signal);
+        // The totals say how many entries did not land; these ids say which ones.
+        // Recovery reads the persisted per-item outcome, so a completed slice with
+        // one refused mailbox must not offer its delivered entries again. The
+        // write rides on `report`'s liveness guard: an attempt the scheduler
+        // already abandoned (it timed out, the slot was released, and a retry owns
+        // the row) must not settle item rows at all.
+        report({ updated: pushed, failed: dropped }, () => recordFlagsPushOutcomes(deps.db, task.id, droppedIds));
         // The dropped entries whose mailbox was rebuilt: a pass is what re-learns
         // the folder (and hands the local state back through the settlement hook),
         // so it is kicked rather than left to the next scheduled one.

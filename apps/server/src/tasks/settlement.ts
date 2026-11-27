@@ -220,6 +220,72 @@ export function frozenFlagsMessageIds(payload: unknown): string[] {
 }
 
 /**
+ * Persists which of a `flags` task's items were not delivered.
+ *
+ * `task_items.failed` is the per-item outcome the recovery panel reads: a
+ * completed task can deliver part of its slice (one mailbox was rebuilt, one
+ * message left the cache), and the task's `updated`/`failed` totals alone cannot
+ * say which ids those were. The runner latches the dropped ids when an attempt
+ * completes; a task the scheduler gives up on latches every item it still owes.
+ * An earlier attempt may already have delivered some mailbox groups before it
+ * failed, but flags STOREs are idempotent, so retrying the whole slice is safe;
+ * the disposition is "undelivered", not a claim that nothing reached the server.
+ * Passing no ids performs that whole-task latch; passing ids only latches those,
+ * which keeps the two obvious and idempotent (`failed = 0` guards both).
+ *
+ * Returns how many rows this call changed, for the replay's repair count.
+ */
+export function latchUndeliveredFlagsItems(
+  db: DatabaseHandle,
+  taskId: string,
+  messageIds?: readonly string[],
+): number {
+  if (messageIds) {
+    const unique = [...new Set(messageIds)];
+    if (!unique.length) return 0;
+    let latched = 0;
+    // Chunked for the same reason every other id list here is: the driver's
+    // host-parameter ceiling is real, and a future caller is not bounded by the
+    // acceptance's per-task entry limit.
+    const chunkSize = 10_000;
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const chunk = unique.slice(offset, offset + chunkSize);
+      latched += db
+        .prepare(`
+          UPDATE task_items SET failed = 1
+          WHERE task_id = ? AND changed = 1 AND failed = 0
+            AND message_id IN (${chunk.map(() => "?").join(", ")})
+        `)
+        .run(taskId, ...chunk).changes;
+    }
+    return latched;
+  }
+  return db
+    .prepare("UPDATE task_items SET failed = 1 WHERE task_id = ? AND changed = 1 AND failed = 0")
+    .run(taskId).changes;
+}
+
+/**
+ * Settles one completed `flags` attempt: every changed item gets its outcome,
+ * delivered (`failed = 0`) or dropped (`failed = 1`).
+ *
+ * Writing the delivered side too, not only raising `failed`, keeps the persisted
+ * result authoritative. If the attempt is retried after the settlement step
+ * fails, the second attempt can deliver an entry the first one dropped, and the
+ * stale failure must not survive.
+ */
+export function recordFlagsPushOutcomes(
+  db: DatabaseHandle,
+  taskId: string,
+  droppedIds: readonly string[],
+): void {
+  db.transaction(() => {
+    db.prepare("UPDATE task_items SET failed = 0 WHERE task_id = ? AND changed = 1").run(taskId);
+    latchUndeliveredFlagsItems(db, taskId, droppedIds);
+  })();
+}
+
+/**
  * Puts back the local target of every message a push never delivered, and the
  * unread delta that went with it. Returns how many were given back.
  *
