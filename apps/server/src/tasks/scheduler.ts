@@ -218,13 +218,19 @@ export function startTaskScheduler(deps: SchedulerDeps): TaskScheduler {
             payload: payload as unknown,
             items: taskItems(db, row.id),
             signal: controller.signal,
-            report: (delta) => {
+            report: (delta, settleItems) => {
               // An abandoned attempt's counts are not this row's: the row may
               // already be running again under a newer attempt, and the legacy
               // failure this guards against is a batch job reporting more
-              // messages than it selected.
+              // messages than it selected. The per-item half is guarded with the
+              // same flag and written in one transaction with the counters, so a
+              // late attempt can neither leave item rows behind nor overwrite a
+              // later attempt's outcomes.
               if (!live) return;
-              reportTaskProgress(db, row.id, delta, now());
+              db.transaction(() => {
+                settleItems?.();
+                reportTaskProgress(db, row.id, delta, now());
+              })();
               notifyProgress(row.id);
             },
           });

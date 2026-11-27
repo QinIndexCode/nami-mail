@@ -31,6 +31,16 @@ describe("user task recovery", () => {
     expect(openTaskPayload<{ entries: Array<{ add: string[] }> }>(f.key, child)?.entries[0]?.add).toEqual(["\\Seen"]);
     expect(retryTaskItems(f.deps, original!.id, ["message"]).retried).toBe(0);
   });
+  it("falls back to the position check for a completed slice with a pre-outcome failed count", () => {
+    const f = fixture();
+    const [original] = acceptFlagsTask(f.deps, { messageIds: ["message"], patch: { seen: true } }).handles;
+    // Upgrade-era shape: the task completed with a failed count (the legacy batch
+    // ledger knew an item did not land) but no per-item latch exists. It must not
+    // be reported as applied just because no item says "failed".
+    f.db.prepare("UPDATE tasks SET status='completed', completed_at=?, updated=0, failed=1 WHERE id=?")
+      .run(Date.now(), original!.id);
+    expect(taskRecoveryDetails(f.db, f.key, original!.id)?.items[0]).toMatchObject({ eligible: true, reason: "ready" });
+  });
   it("refuses superseded actions and changed UID generations", () => {
     const f = fixture(); const [original] = acceptFlagsTask(f.deps, { messageIds: ["message"], patch: { seen: true } }).handles;
     settleTask(f.db, original!.id, "failed", null);

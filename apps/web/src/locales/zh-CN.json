@@ -2847,6 +2847,7 @@
     "recovery.reason.retried": "已经重新提交，请查看新任务。",
     "recovery.reason.superseded": "已有后续操作，原操作不再重试。",
     "recovery.reason.delivered": "邮件已到目标文件夹。",
+    "recovery.reason.applied": "此操作已生效，无需重试。",
     "recovery.reason.syncRequired": "身份或位置需核对，请先同步后重新操作。",
     "data.count.accounts": "账户",
     "data.count.messages": "邮件",

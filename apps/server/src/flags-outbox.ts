@@ -243,7 +243,7 @@ export async function pushFlagsRemote(
    * releases the account slot on timeout, and an abandoned push that kept the
    * socket alive would still be writing when the next task on that account runs. */
   signal?: AbortSignal,
-): Promise<{ pushed: number; dropped: number; generationChanged: boolean }> {
+): Promise<{ pushed: number; dropped: number; generationChanged: boolean; droppedIds: string[] }> {
   const account = accountById(deps.db, payload.accountId);
   if (!account) throw new Error("Account not found.");
   // Nothing has been sent yet, so this is the cheapest place to stop an attempt
@@ -253,6 +253,10 @@ export async function pushFlagsRemote(
   const positions = currentPositions(deps.db, payload.entries.map((entry) => entry.id));
   let dropped = 0;
   let generationChanged = false;
+  // Per-entry outcomes, not just the totals: the task layer persists them so the
+  // recovery panel can name the exact messages a push did not deliver. A total
+  // cannot tell a delivered entry from a dropped one after the task settles.
+  const droppedIds: string[] = [];
   const client = await imapClientForAccount(account, deps.masterKey, deps.accessTokenProvider);
   // Registered before `connect()`, because the timeout can fire during it. A
   // signal that flipped between the check above and here is caught by the
@@ -267,6 +271,7 @@ export async function pushFlagsRemote(
       const position = positions.get(entry.id);
       if (!position) {
         dropped += 1;
+        droppedIds.push(entry.id);
         continue;
       }
       const group = byMailbox.get(position.mailbox) ?? [];
@@ -307,6 +312,7 @@ export async function pushFlagsRemote(
           if (uidGenerationAllowsWrite(entry.evidence, live, cached)) permitted.push(entry);
           else {
             dropped += 1;
+            droppedIds.push(entry.id);
             generationChanged = true;
           }
         }
@@ -335,7 +341,7 @@ export async function pushFlagsRemote(
         lock.release();
       }
     }
-    return { pushed: payload.entries.length - dropped, dropped, generationChanged };
+    return { pushed: payload.entries.length - dropped, dropped, generationChanged, droppedIds };
   } finally {
     // Detached first: after this point the attempt has no more work to cancel,
     // and leaving the listener on a long-lived signal would close a client the

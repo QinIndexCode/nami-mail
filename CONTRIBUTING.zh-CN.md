@@ -13,7 +13,7 @@
 
 ## 本地开发
 
-项目要求 Node.js 24.21.0 或更高版本（与根 `package.json` 的 `engines.node` 一致；桌面端运行时为 Electron 45）。在项目根目录执行：
+开发环境使用 Node.js 24.21.0（与 CI 一致；桌面端运行时为 Electron 45）。根 `package.json` 的 `engines.node` 仍是 `>=24.21.0`，但锁文件中的 `jsdom`/`w3c-xmlserializer` 要求 `^22.22.2 || ^24.15.0 || >=26.0.0`，Node 25.x 安装会报 `EBADENGINE`，请勿使用 25.x。在项目根目录执行：
 
 ```powershell
 npm.cmd ci

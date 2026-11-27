@@ -26,6 +26,12 @@ export function taskRecoveryDetails(db: DatabaseHandle, key: Buffer, id: string,
   const params = [id, ...(selectedIds ?? [])];
   const total = db.prepare(`SELECT COUNT(*) FROM task_items WHERE task_id=?${selected}`).pluck().get(...params) as number;
   const page = db.prepare(`SELECT * FROM task_items WHERE task_id=?${selected} ORDER BY rowid LIMIT 100 OFFSET ?`).all(...params, offset) as TaskItemRow[];
+  // A flags task completed before per-item outcomes were persisted can carry a
+  // failed count with no latched item at all. Those rows cannot say which id
+  // failed, so treat the slice as unfinished and fall back to the position
+  // check; reporting it as "applied" would hide the failure.
+  const legacyUnlatchedFlagsOutcome = task.kind === "flags" && task.status === "completed" && task.failed > 0
+    && db.prepare("SELECT 1 FROM task_items WHERE task_id=? AND failed=1 LIMIT 1").get(id) === undefined;
   const items: RecoveryItem[] = page.map((item) => {
     const row = db.prepare(`SELECT m.*,f.uid_validity AS live_generation FROM messages m
       LEFT JOIN folders f ON f.account_id=m.account_id AND f.path=m.mailbox WHERE m.id=?`).get(item.message_id) as (MessageStorageRow & { live_generation: string | null }) | undefined;
@@ -34,13 +40,25 @@ export function taskRecoveryDetails(db: DatabaseHandle, key: Buffer, id: string,
     const mailbox = entry?.mailbox ?? item.origin_mailbox;
     const uid = entry?.uid ?? item.origin_uid;
     const generation = entry?.uidValidity ?? item.origin_uid_validity;
+    // Which items still need the write. A completed flags task may have delivered
+    // part of its slice and latched the rest (the runner persists those ids); a
+    // task that did not complete, or one whose failed count predates that
+    // latch, is unfinished. Anything else is done, and offering it again would
+    // re-address a message whose write already landed.
+    const undelivered = item.failed === 1
+      || (task.kind === "flags" && (task.status !== "completed" || legacyUnlatchedFlagsOutcome));
     if (!row || row.account_id !== task.account_id) reason = "missing";
     else if (db.prepare("SELECT 1 FROM task_recovery_attempts WHERE task_id=? AND message_id=?").get(id, item.message_id)) reason = "retried";
     else if (db.prepare(`SELECT 1 FROM task_items i JOIN tasks t ON t.id=i.task_id
       WHERE i.message_id=? AND t.rowid>(SELECT rowid FROM tasks WHERE id=?) AND t.kind IN ('flags','move') LIMIT 1`).get(item.message_id, id)) reason = "superseded";
     else if (task.kind === "move" && row.mailbox === item.destination_mailbox) reason = "delivered";
+    else if (task.kind === "flags" && !undelivered) reason = "applied";
+    // `remote_id_lookup` is the provider's stable message identity, not evidence
+    // that the cached `(mailbox, uid, generation)` moved, so it is deliberately
+    // absent here: a message that kept its position is retryable whether or not
+    // the provider gave it a stable id.
     else if (!generation || row.live_generation !== generation || row.mailbox !== mailbox || row.uid !== uid
-      || row.pending_move_state || row.pending_move_destination || row.remote_id_lookup) reason = "syncRequired";
+      || row.pending_move_state || row.pending_move_destination) reason = "syncRequired";
     return { id: item.message_id, subject: row ? messagePayloadForRow(row, key).subject : "", eligible: reason === "ready", reason };
   });
   return { id, kind: task.kind, status: task.status, total, items, nextOffset: offset + 100 < total ? offset + 100 : null };

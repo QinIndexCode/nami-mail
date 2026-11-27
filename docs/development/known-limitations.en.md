@@ -108,9 +108,9 @@ Verified against commit `508727e` (2026-11-03, the baseline of that review). The
 
 **Current state.** Automatic updates only query the public GitHub Releases latest **stable** version (an `x.y.z` tag), skip draft and prerelease entries, and download only when the version is newer; there is no beta / stable channel selection. Rollback has no built-in channel: running an older installer is recognised as a downgrade and cancelled by default, requiring explicit confirmation to continue.
 
-**Impact.** You cannot try a beta without changing configuration, and you cannot "roll back one version" from inside the app after a problematic update. The practical rollback is reinstalling an older version and explicitly confirming the downgrade.
+**Impact.** You cannot try a beta without changing configuration, and you cannot "roll back one version" from inside the app after a problematic update. **A program downgrade is not a data rollback**: the first 0.7.0 start upgrades the database to v5, and 0.6.0 and earlier refuse to open a v5 database. Reinstalling the old version only rolls back the program, not the data.
 
-**How it is handled.** This is a deliberate release trade-off: a single channel keeps publishing and trust-root handling simple and gives every user the same signed chain. Use a local build to try unreleased work; do not publish it as an update channel. See [Windows install and update guide](../INSTALLING.en.md) and [Releasing](../RELEASING.en.md) for the behaviour details.
+**How it is handled.** This is a deliberate release trade-off: a single channel keeps publishing and trust-root handling simple and gives every user the same signed chain. Back up the whole `%APPDATA%\Nami Mail` directory before upgrading; to return to the old data state, restore that backup and then run the old version, rather than only reinstalling it. Use a local build to try unreleased work; do not publish it as an update channel. See [Windows install and update guide](../INSTALLING.en.md) and [Releasing](../RELEASING.en.md) for the behaviour details.
 
 ## 11. Error logs: bounded files, no user-facing error history
 

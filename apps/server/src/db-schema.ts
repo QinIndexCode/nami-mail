@@ -273,8 +273,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 -- Auto-reply decision ledger. One row per message the auto-reply pipeline has
 -- already decided (sent / ignored / pending / failed), so repeated sync passes
--- can never re-process or re-send a message. The per-account daily cap is
--- derived from rows whose decision = 'sent'. The thread_key column anchors conversation
+-- can never re-process or re-send a message. The per-account daily cap counts
+-- rows whose decision = 'sent' on that day plus same-day 'pending' rows that
+-- already own a delivery; an older unresolved delivery must not reserve a slot.
+-- The thread_key column anchors conversation
 -- de-duplication: a follow-up that belongs to an already-auto-replied thread
 -- is skipped without another confirmation round.
 CREATE TABLE IF NOT EXISTS auto_reply_processed (

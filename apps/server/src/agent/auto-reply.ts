@@ -27,7 +27,7 @@ import type { AutoReplyEvaluationInput, AutoReplyEvaluationResult } from "./auto
 import { parsedFlags, replySubject, scopeReasonText } from "./auto-reply-format.js";
 export { replySubject } from "./auto-reply-format.js";
 import { AutoReplyWorkQueue } from "./auto-reply-work.js";
-import { trackAutoReplyDelivery, reconcileAutoReplyDeliveries, resumableAutoReplyDeliveries, retainAcceptedAutoReply } from "./auto-reply-delivery.js";
+import { autoReplyUsageToday, trackAutoReplyDelivery, reconcileAutoReplyDeliveries, resumableAutoReplyDeliveries, retainAcceptedAutoReply } from "./auto-reply-delivery.js";
 
 const CONFIRMATION_TTL_MS = 5 * 60 * 1_000;
 
@@ -310,7 +310,7 @@ export class AutoReplyEngine {
   // ── internal ─────────────────────────────────────────────────────────────
 
   private async processMessage(accountId: string, messageId: string, config: AutoReplyConfig): Promise<void> {
-    if (this.sentToday(accountId) >= config.dailyLimitPerAccount) {
+    if (autoReplyUsageToday(this.options.db, accountId, this.clock().slice(0, 10)) >= config.dailyLimitPerAccount) {
       this.recordLedger(messageId, accountId, "ignored", "message-only");
       this.rememberIgnored(accountId, messageId, "每日自动回复上限已达，本轮不再发送。");
       this.recordDecision(accountId, messageId, "message-only", "daily-cap", { subject: undefined });
@@ -708,16 +708,6 @@ export class AutoReplyEngine {
     ).get(accountId, mailbox) as { special_use: string | null } | undefined;
     this.folderSpecialUseCache.set(key, row?.special_use ?? null);
     return row?.special_use ?? null;
-  }
-
-  private sentToday(accountId: string): number {
-    const today = this.clock().slice(0, 10);
-    const row = this.options.db.prepare(`
-      SELECT COUNT(*) AS count FROM auto_reply_processed
-      WHERE account_id = ? AND ((decision = 'sent' AND occurred_at >= ?)
-        OR (decision = 'pending' AND EXISTS(SELECT 1 FROM auto_reply_deliveries d WHERE d.message_id=auto_reply_processed.message_id)))
-    `).get(accountId, today) as { count: number };
-    return row.count;
   }
 
   /** Pending submissions reserve the thread until their delivery is resolved. */

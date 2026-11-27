@@ -2847,6 +2847,7 @@
     "recovery.reason.retried": "Already resubmitted. Check the new task.",
     "recovery.reason.superseded": "A later action superseded this operation.",
     "recovery.reason.delivered": "Already in the destination folder.",
+    "recovery.reason.applied": "This change was already applied; no retry is needed.",
     "recovery.reason.syncRequired": "Identity or location needs verification. Sync before operating again.",
     "data.count.accounts": "Accounts",
     "data.count.messages": "Messages",
