@@ -8,6 +8,8 @@ Auto-reply is an opt-in, per-account feature of Nami Mail. After a sync pass, ne
 
 - After **enabling auto-reply**, pick which accounts to monitor — an empty list means the feature never runs.
 - The **daily reply limit** caps how many auto-replies each account may send per day (default 30, range 0–500).
+- **The day boundary is UTC**: "per day" means UTC 00:00 to the next UTC 00:00, not local midnight. The delivery ledger stores `occurred_at` / `submitted_at` as ISO-8601 UTC strings and the quota compares their date prefixes, so every timezone shares the same reset point and no conversion of historical rows is needed; each account is counted independently.
+- **What counts against today's budget**: replies already sent today; `pending` / `submitting` reservations that can still send (including a backlog from a previous day that the recovery loop will submit today); and replies submitted today that reconciliation has not resolved yet. An older `unknown_delivery` releases its slot because the engine never resends it automatically; an unknown delivery created today still counts because it may already have been sent.
 
 ## Reply Modes and Dual Models
 
@@ -43,4 +45,4 @@ Settings includes a zero-side-effect auto-reply sandbox: enter a test message or
 - template mode is fully offline and never sends message content to any third party.
 - Auto-reply only processes newly synced inbox mail; it never reads historical mail and never changes provider-side auto-reply or vacation settings.
 
-- New inbox candidates enter a durable queue in the sync transaction. Processing continues after each 40-message batch and resumes after restart. Approved replies retain a durable submission association: queuing means accepted, not sent. Background reconciliation records actual results; failed deliveries do not remain successful, and unknown delivery stays unresolved without automatic resending. Queued/unknown deliveries reserve the daily budget and thread to prevent duplicates.
+- New inbox candidates enter a durable queue in the sync transaction. Processing continues after each 40-message batch and resumes after restart. Approved replies retain a durable submission association: queuing means accepted, not sent. Background reconciliation records actual results; failed deliveries do not remain successful, and unknown delivery stays unresolved without automatic resending. Queued deliveries reserve the daily budget and thread; unknown deliveries always keep their thread reserved to prevent duplicates, but only an unknown delivery from the current UTC day occupies the daily budget — older ones release it.
