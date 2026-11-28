@@ -13,7 +13,7 @@ Thank you for helping improve Nami Mail. This project handles real email, accoun
 
 ## Local Development
 
-Development uses Node.js 24.21.0 (the CI version; the desktop runtime is Electron 45). The root `package.json` still declares `engines.node` as `>=24.21.0`, but the locked `jsdom`/`w3c-xmlserializer` require `^22.22.2 || ^24.15.0 || >=26.0.0`, so installing under Node 25.x emits `EBADENGINE`; do not use 25.x. Run the following from the repository root:
+Development uses Node.js 24.21.0 (the CI version; the desktop runtime is Electron 45). The root `package.json` still declares `engines.node` as `>=24.21.0`, but the locked `jsdom`/`w3c-xmlserializer` require `^22.22.2 || ^24.15.0 || >=26.0.0` and `vitest` requires `^22.12.0 || ^24.0.0 || >=26.0.0`, so installing under Node 25.x emits `EBADENGINE`; do not use 25.x. Run the following from the repository root:
 
 ```powershell
 npm.cmd ci
